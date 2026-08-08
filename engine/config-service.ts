@@ -667,10 +667,9 @@ const loadConfig = Effect.gen(function* () {
   // empty value (STABLECOIN_MINTS=) is present, not absent, so it disables the
   // allowlist (empty set). Entries are pubkey-validated below, fail-closed.
   const stablecoinMintsRaw = yield* Config.string("STABLECOIN_MINTS").pipe(
-    Effect.orElseSucceed(
-      () =>
-        "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v,Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB,2b1kV6DkPAnxd5ixfnxCpjxmKwqjjaYmCZfHsFu24GXo",
-    ),
+    // Default = USDG (Paxos Global Dollar), the canonical stablecoin on
+    // Robinhood Chain (verified 2026-07).
+    Effect.orElseSucceed(() => "0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168"),
   );
   const depegAbsoluteUsd = yield* validatedNumber("DEPEG_ABSOLUTE_USD", 0.001, 0.02);
   const depegRelativePct = yield* validatedNumber("DEPEG_RELATIVE_PCT", 0.001, 0.02);
@@ -1275,13 +1274,7 @@ const loadConfig = Effect.gen(function* () {
     .split(",")
     .map((s) => s.trim())
     .filter(Boolean);
-  const invalidPools = watchlistPools.filter((pool) => {
-    try {
-      return isAddress(pool);
-    } catch {
-      return true;
-    }
-  });
+  const invalidPools = watchlistPools.filter((pool) => !isAddress(pool));
   if (invalidPools.length > 0) {
     return yield* Effect.die(
       new ConfigError({
@@ -1298,13 +1291,7 @@ const loadConfig = Effect.gen(function* () {
     .split(",")
     .map((s) => s.trim())
     .filter(Boolean);
-  const invalidStablecoinMints = stablecoinMintsList.filter((mint) => {
-    try {
-      return isAddress(mint);
-    } catch {
-      return true;
-    }
-  });
+  const invalidStablecoinMints = stablecoinMintsList.filter((mint) => !isAddress(mint));
   if (invalidStablecoinMints.length > 0) {
     return yield* Effect.die(
       new ConfigError({

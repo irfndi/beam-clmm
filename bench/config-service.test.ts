@@ -19,8 +19,8 @@ describe("ConfigService upper-bound clamping", () => {
     vi.unstubAllEnvs();
   });
 
-  it("clamps SOL_PRICE_USD above 10000", async () => {
-    vi.stubEnv("SOL_PRICE_USD", "50000");
+  it("clamps NATIVE_PRICE_USD above 10000", async () => {
+    vi.stubEnv("NATIVE_PRICE_USD", "50000");
     const cfg = await loadConfig();
     expect(cfg.nativePriceUsd).toBe(10_000);
   });
@@ -32,7 +32,7 @@ describe("ConfigService upper-bound clamping", () => {
   });
 
   it("preserves in-range values", async () => {
-    vi.stubEnv("SOL_PRICE_USD", "200");
+    vi.stubEnv("NATIVE_PRICE_USD", "200");
     vi.stubEnv("MAX_PER_POOL_ALLOCATION_PCT", "0.5");
     const cfg = await loadConfig();
     expect(cfg.nativePriceUsd).toBe(200);
@@ -85,15 +85,9 @@ describe("ConfigService STABLECOIN_MINTS", () => {
     vi.unstubAllEnvs();
   });
 
-  it("defaults to the three verified stablecoin mints when unset", async () => {
+  it("defaults to the verified USDG stablecoin mint when unset", async () => {
     const cfg = await loadConfig();
-    expect(cfg.stablecoinMints).toEqual(
-      new Set([
-        "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
-        "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB",
-        "2b1kV6DkPAnxd5ixfnxCpjxmKwqjjaYmCZfHsFu24GXo",
-      ]),
-    );
+    expect(cfg.stablecoinMints).toEqual(new Set(["0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168"]));
   });
 
   it("yields an empty set when explicitly disabled with an empty string", async () => {
