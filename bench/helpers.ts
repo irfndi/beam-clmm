@@ -94,7 +94,6 @@ export function makePosition(overrides: Partial<PositionRecord> = {}): PositionR
 export function defaultAppConfig(overrides: Partial<AppConfig> = {}): AppConfig {
   return {
     walletPrivateKey: "",
-    heliusApiKey: "",
     rpcUrl: "",
     rpcFallbackUrl: "",
     paperTrading: true,
@@ -158,9 +157,7 @@ export function defaultAppConfig(overrides: Partial<AppConfig> = {}): AppConfig 
     githubRepo: "",
     feedbackOptOut: false,
     paperModeExitLive: false,
-    meteoraPoolsUrl:
       "https://dlmm.datapi.meteora.ag/pools?page=1&page_size=1000&filter_by=is_blacklisted=false&sort_by=tvl:desc",
-    meteoraDatapiBaseUrl: "https://dlmm.datapi.meteora.ag",
     stablecoinMints: new Set(),
     depegAbsoluteUsd: 0.02,
     depegRelativePct: 0.02,

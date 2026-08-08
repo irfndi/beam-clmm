@@ -10,7 +10,7 @@ import {
   findRunningEngineProcess,
 } from "../cli/lockfile.js";
 
-const tmpDir = path.join(os.tmpdir(), `prism-lockfile-test-${Date.now()}`);
+const tmpDir = path.join(os.tmpdir(), `beam-lockfile-test-${Date.now()}`);
 
 function lockPath(name: string): string {
   return path.join(tmpDir, `${name}.lock`);

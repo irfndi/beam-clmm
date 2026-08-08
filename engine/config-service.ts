@@ -1260,16 +1260,6 @@ const loadConfig = Effect.gen(function* () {
   const paperModeExitLive = yield* Config.boolean("PAPER_MODE_EXIT_LIVE").pipe(
     Effect.orElseSucceed(() => false),
   );
-  const meteoraPoolsUrlRaw = yield* Config.string("METEORA_POOLS_URL").pipe(
-    Effect.orElseSucceed(() => ""),
-  );
-  const meteoraPoolsUrl =
-    meteoraPoolsUrlRaw ||
-    "https://dlmm.datapi.meteora.ag/pools?page=1&page_size=1000&filter_by=is_blacklisted=false&sort_by=tvl:desc";
-  const meteoraDatapiBaseUrl = yield* Config.string("METEORA_DATA_API_URL").pipe(
-    Effect.orElseSucceed(() => "https://dlmm.datapi.meteora.ag"),
-  );
-
   const watchlistPools = watchlistPoolsRaw
     .split(",")
     .map((s) => s.trim())
@@ -1371,8 +1361,6 @@ const loadConfig = Effect.gen(function* () {
     githubRepo,
     feedbackOptOut,
     paperModeExitLive,
-    meteoraPoolsUrl,
-    meteoraDatapiBaseUrl,
     stablecoinMints,
     depegAbsoluteUsd,
     depegRelativePct,

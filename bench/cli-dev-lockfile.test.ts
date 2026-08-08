@@ -11,7 +11,7 @@ import {
 } from "../cli/lockfile.js";
 
 function makeTmpDir(): string {
-  return fs.mkdtempSync(path.join(os.tmpdir(), "prism-lockfile-"));
+  return fs.mkdtempSync(path.join(os.tmpdir(), "beam-lockfile-"));
 }
 
 function lockfilePath(dir: string): string {
@@ -121,19 +121,19 @@ describe("cli/lockfile", () => {
 
   it("findRunningEngineProcess detects the bundled CLI dev process (issue #184)", () => {
     // Given a ps snapshot where the agent runs from the release bundle
-    // (`bun /root/.prism/dist/cli/index.mjs dev` — the systemd pattern), the
+    // (`bun /root/.beam/dist/cli/index.mjs dev` — the systemd pattern), the
     // source-path matchers alone miss it.
     const spawner = () => ({
       // ps -eo pid,args prints a header line, which the matcher skips.
       stdout: [
         "PID ARGS",
         `${process.pid} some-unrelated-command`,
-        `${process.pid + 1} bun /root/.prism/dist/cli/index.mjs dev`,
+        `${process.pid + 1} bun /root/.beam/dist/cli/index.mjs dev`,
         `${process.pid + 2} bun install`,
       ].join("\n"),
     });
     const found = findRunningEngineProcess(spawner);
-    expect(found).toEqual({ pid: process.pid + 1, command: `bun /root/.prism/dist/cli/index.mjs dev` });
+    expect(found).toEqual({ pid: process.pid + 1, command: `bun /root/.beam/dist/cli/index.mjs dev` });
   });
 
   it("findRunningEngineProcess ignores index.mjs runs without a dev argument", () => {
@@ -142,7 +142,7 @@ describe("cli/lockfile", () => {
     const spawner = () => ({
       stdout: [
         "PID ARGS",
-        `${process.pid + 1} bun /root/.prism/dist/index.mjs`,
+        `${process.pid + 1} bun /root/.beam/dist/index.mjs`,
         `${process.pid + 2} bun tools/index.mjs build`,
       ].join("\n"),
     });
@@ -151,7 +151,7 @@ describe("cli/lockfile", () => {
 
   it("findRunningEngineProcess does not false-positive unrelated index.mjs dev runs (issue #184 review)", () => {
     // Given an unrelated project's entry and a `dev` substring that is not a
-    // standalone argument — neither may be reported as the Prism agent.
+    // standalone argument — neither may be reported as the Beam agent.
     const spawner = () => ({
       stdout: [
         "PID ARGS",
@@ -164,7 +164,7 @@ describe("cli/lockfile", () => {
     expect(findRunningEngineProcess(spawner)).toBeNull();
   });
 
-  it("findRunningEngineProcess ignores cli-suffixed directories that are not Prism (issue #184 follow-up)", () => {
+  it("findRunningEngineProcess ignores cli-suffixed directories that are not Beam (issue #184 follow-up)", () => {
     // Given paths whose directory segment merely ENDS in `cli` — the bare
     // substring `cli/index.mjs` would match these; the path-anchored
     // pattern must not.
@@ -182,8 +182,8 @@ describe("cli/lockfile", () => {
     const spawner = () => ({
       stdout: [
         "PID ARGS",
-        `${process.pid + 1} bun /repo/prism-liquidity-agent/cli/index.ts dev`,
-        `${process.pid + 2} bun /repo/prism-liquidity-agent/cli/index.ts status`,
+        `${process.pid + 1} bun /repo/beam-clmm/cli/index.ts dev`,
+        `${process.pid + 2} bun /repo/beam-clmm/cli/index.ts status`,
       ].join("\n"),
     });
     const found = findRunningEngineProcess(spawner);

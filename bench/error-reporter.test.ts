@@ -35,8 +35,8 @@ function makeReporter(overrides?: Partial<ErrorReporterConfig>): ErrorReporter {
 
 // ─── Setup / Teardown ────────────────────────────────────────────────────────
 
-const ORIGINAL_ERROR_REPORTING = process.env.PRISM_ERROR_REPORTING;
-const ORIGINAL_ERROR_ENDPOINT = process.env.PRISM_ERROR_ENDPOINT;
+const ORIGINAL_ERROR_REPORTING = process.env.BEAM_ERROR_REPORTING;
+const ORIGINAL_ERROR_ENDPOINT = process.env.BEAM_ERROR_ENDPOINT;
 
 beforeEach(() => {
   mockFetch();
@@ -45,14 +45,14 @@ beforeEach(() => {
 afterEach(() => {
   vi.restoreAllMocks();
   if (ORIGINAL_ERROR_REPORTING === undefined) {
-    delete process.env.PRISM_ERROR_REPORTING;
+    delete process.env.BEAM_ERROR_REPORTING;
   } else {
-    process.env.PRISM_ERROR_REPORTING = ORIGINAL_ERROR_REPORTING;
+    process.env.BEAM_ERROR_REPORTING = ORIGINAL_ERROR_REPORTING;
   }
   if (ORIGINAL_ERROR_ENDPOINT === undefined) {
-    delete process.env.PRISM_ERROR_ENDPOINT;
+    delete process.env.BEAM_ERROR_ENDPOINT;
   } else {
-    process.env.PRISM_ERROR_ENDPOINT = ORIGINAL_ERROR_ENDPOINT;
+    process.env.BEAM_ERROR_ENDPOINT = ORIGINAL_ERROR_ENDPOINT;
   }
 });
 
@@ -115,7 +115,7 @@ describe("sanitization", () => {
 
   it("does NOT redact short base58 strings (e.g. pool addresses, 32-44 chars)", () => {
     const r = makeReporter();
-    // Solana pool addresses are typically 32-44 base58 chars
+    // Pool/token addresses are typically short enough to keep visible
     const poolAddr = "Abcd1234Abcd1234Abcd1234Abcd1234Abcd1234";
     expect(poolAddr.length).toBeLessThan(64);
     const err = new Error(`Pool ${poolAddr} error`);
@@ -163,10 +163,17 @@ describe("classification", () => {
     void r.dispose();
   });
 
-  it("classifies Helius errors", () => {
+  it("classifies RPC errors", () => {
     const r = makeReporter();
-    r.report(new Error("Helius API key invalid"));
-    expect(r.getPending()[0]?.category).toBe("Helius_Error");
+    r.report(new Error("rpc error: connection refused"));
+    expect(r.getPending()[0]?.category).toBe("RPC_Error");
+    void r.dispose();
+  });
+
+  it("classifies EVM revert errors", () => {
+    const r = makeReporter();
+    r.report(new Error("execution reverted: STF"));
+    expect(r.getPending()[0]?.category).toBe("RPC_Error");
     void r.dispose();
   });
 
@@ -251,7 +258,7 @@ describe("buffering", () => {
 // ─── No-op mode ──────────────────────────────────────────────────────────────
 
 describe("no-op mode", () => {
-  it("does nothing when PRISM_ERROR_REPORTING=false (enabled: false)", () => {
+  it("does nothing when BEAM_ERROR_REPORTING=false (enabled: false)", () => {
     const r = makeReporter({ enabled: false });
     r.report(new Error("should be ignored"));
     expect(r.getPending()).toHaveLength(0);
@@ -260,8 +267,8 @@ describe("no-op mode", () => {
     void r.dispose();
   });
 
-  it("does nothing when PRISM_ERROR_REPORTING env is 'false'", () => {
-    process.env.PRISM_ERROR_REPORTING = "false";
+  it("does nothing when BEAM_ERROR_REPORTING env is 'false'", () => {
+    process.env.BEAM_ERROR_REPORTING = "false";
     // Create a reporter that reads from env (no explicit enabled override)
     const r = createErrorReporter({
       endpoint: "https://errors.test.local/report",
@@ -298,7 +305,7 @@ describe("batch payload", () => {
     expect(capturedBody).toBeDefined();
 
     const parsed = JSON.parse(capturedBody!);
-    expect(parsed).toHaveProperty("app", "prism-liquidity-agent");
+    expect(parsed).toHaveProperty("app", "beam-clmm");
     expect(parsed).toHaveProperty("version", "1.0.0-test");
     expect(parsed).toHaveProperty("reports");
     expect(parsed.reports).toBeInstanceOf(Array);

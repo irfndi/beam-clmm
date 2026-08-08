@@ -72,22 +72,22 @@ describe("update-utils", () => {
     it("maps GitHub release to ReleaseInfo correctly", () => {
       const release = {
         tag_name: "v1.2.3",
-        html_url: "https://github.com/irfndi/prism-liquidity-agent/releases/tag/v1.2.3",
+        html_url: "https://github.com/irfndi/beam-clmm/releases/tag/v1.2.3",
         body: "Release notes",
         published_at: "2024-01-01T00:00:00Z",
         prerelease: false,
         assets: [
           {
-            name: "prism-v1.2.3.tar.gz",
-            browser_download_url: "https://example.com/prism-v1.2.3.tar.gz",
+            name: "beam-v1.2.3.tar.gz",
+            browser_download_url: "https://example.com/beam-v1.2.3.tar.gz",
           },
           {
-            name: "prism-v1.2.3.tar.gz.sha256",
-            browser_download_url: "https://example.com/prism-v1.2.3.tar.gz.sha256",
+            name: "beam-v1.2.3.tar.gz.sha256",
+            browser_download_url: "https://example.com/beam-v1.2.3.tar.gz.sha256",
           },
           {
-            name: "prism-v1.2.3.tar.gz.asc",
-            browser_download_url: "https://example.com/prism-v1.2.3.tar.gz.asc",
+            name: "beam-v1.2.3.tar.gz.asc",
+            browser_download_url: "https://example.com/beam-v1.2.3.tar.gz.asc",
           },
         ],
       };
@@ -95,9 +95,9 @@ describe("update-utils", () => {
       const info = githubReleaseToInfo(release, "stable");
       expect(info.version).toBe("v1.2.3");
       expect(info.channel).toBe("stable");
-      expect(info.tarballUrl).toBe("https://example.com/prism-v1.2.3.tar.gz");
-      expect(info.sha256Url).toBe("https://example.com/prism-v1.2.3.tar.gz.sha256");
-      expect(info.signatureUrl).toBe("https://example.com/prism-v1.2.3.tar.gz.asc");
+      expect(info.tarballUrl).toBe("https://example.com/beam-v1.2.3.tar.gz");
+      expect(info.sha256Url).toBe("https://example.com/beam-v1.2.3.tar.gz.sha256");
+      expect(info.signatureUrl).toBe("https://example.com/beam-v1.2.3.tar.gz.asc");
       expect(info.source).toBe("github");
     });
 
@@ -122,37 +122,37 @@ describe("update-utils", () => {
       const platformKey = getPlatformKey();
       const release = {
         tag_name: "v1.2.3",
-        html_url: "https://github.com/irfndi/prism-liquidity-agent/releases/tag/v1.2.3",
+        html_url: "https://github.com/irfndi/beam-clmm/releases/tag/v1.2.3",
         body: "Release notes",
         published_at: "2024-01-01T00:00:00Z",
         prerelease: false,
         assets: [
           {
-            name: "prism-v1.2.3.tar.gz",
-            browser_download_url: "https://example.com/prism-v1.2.3.tar.gz",
+            name: "beam-v1.2.3.tar.gz",
+            browser_download_url: "https://example.com/beam-v1.2.3.tar.gz",
           },
           {
-            name: "prism-v1.2.3.tar.gz.sha256",
-            browser_download_url: "https://example.com/prism-v1.2.3.tar.gz.sha256",
+            name: "beam-v1.2.3.tar.gz.sha256",
+            browser_download_url: "https://example.com/beam-v1.2.3.tar.gz.sha256",
           },
           {
-            name: `prism-v1.2.3-${platformKey}.tar.gz.sha256`,
-            browser_download_url: `https://example.com/prism-v1.2.3-${platformKey}.tar.gz.sha256`,
+            name: `beam-v1.2.3-${platformKey}.tar.gz.sha256`,
+            browser_download_url: `https://example.com/beam-v1.2.3-${platformKey}.tar.gz.sha256`,
           },
           {
-            name: `prism-v1.2.3-${platformKey}.tar.gz`,
-            browser_download_url: `https://example.com/prism-v1.2.3-${platformKey}.tar.gz`,
+            name: `beam-v1.2.3-${platformKey}.tar.gz`,
+            browser_download_url: `https://example.com/beam-v1.2.3-${platformKey}.tar.gz`,
           },
         ],
       };
 
       const info = githubReleaseToInfo(release, "stable");
-      expect(info.bundleUrl).toBe(`https://example.com/prism-v1.2.3-${platformKey}.tar.gz`);
+      expect(info.bundleUrl).toBe(`https://example.com/beam-v1.2.3-${platformKey}.tar.gz`);
       expect(info.bundleSha256Url).toBe(
-        `https://example.com/prism-v1.2.3-${platformKey}.tar.gz.sha256`,
+        `https://example.com/beam-v1.2.3-${platformKey}.tar.gz.sha256`,
       );
-      expect(info.tarballUrl).toBe("https://example.com/prism-v1.2.3.tar.gz");
-      expect(info.sha256Url).toBe("https://example.com/prism-v1.2.3.tar.gz.sha256");
+      expect(info.tarballUrl).toBe("https://example.com/beam-v1.2.3.tar.gz");
+      expect(info.sha256Url).toBe("https://example.com/beam-v1.2.3.tar.gz.sha256");
       expect(info.signatureUrl).toBe("");
     });
   });
@@ -163,15 +163,15 @@ describe("update-utils", () => {
       const manifest = {
         version: "1.2.3",
         channel: "stable" as const,
-        tarball_url: "https://r2.example.com/prism-v1.2.3.tar.gz",
-        sha256_url: "https://r2.example.com/prism-v1.2.3.tar.gz.sha256",
-        signature_url: "https://r2.example.com/prism-v1.2.3.tar.gz.asc",
+        tarball_url: "https://r2.example.com/beam-v1.2.3.tar.gz",
+        sha256_url: "https://r2.example.com/beam-v1.2.3.tar.gz.sha256",
+        signature_url: "https://r2.example.com/beam-v1.2.3.tar.gz.asc",
         published_at: "2024-01-01T00:00:00Z",
         min_cli_version: "1.0.0",
         bundles: {
           [platformKey]: {
-            url: "https://r2.example.com/prism-v1.2.3-darwin-arm64.tar.gz",
-            sha256_url: "https://r2.example.com/prism-v1.2.3-darwin-arm64.tar.gz.sha256",
+            url: "https://r2.example.com/beam-v1.2.3-darwin-arm64.tar.gz",
+            sha256_url: "https://r2.example.com/beam-v1.2.3-darwin-arm64.tar.gz.sha256",
           },
         },
       };
@@ -180,9 +180,9 @@ describe("update-utils", () => {
       const bundle = manifest.bundles[platformKey]!;
       expect(info.version).toBe("1.2.3");
       expect(info.channel).toBe("stable");
-      expect(info.tarballUrl).toBe("https://r2.example.com/prism-v1.2.3.tar.gz");
-      expect(info.sha256Url).toBe("https://r2.example.com/prism-v1.2.3.tar.gz.sha256");
-      expect(info.signatureUrl).toBe("https://r2.example.com/prism-v1.2.3.tar.gz.asc");
+      expect(info.tarballUrl).toBe("https://r2.example.com/beam-v1.2.3.tar.gz");
+      expect(info.sha256Url).toBe("https://r2.example.com/beam-v1.2.3.tar.gz.sha256");
+      expect(info.signatureUrl).toBe("https://r2.example.com/beam-v1.2.3.tar.gz.asc");
       expect(info.source).toBe("r2");
       expect(info.minCliVersion).toBe("1.0.0");
       expect(info.bundleUrl).toBe(bundle.url);
@@ -194,14 +194,14 @@ describe("update-utils", () => {
       const manifest = {
         version: "1.0.0",
         channel: "dev" as const,
-        tarball_url: "https://r2.example.com/prism-v1.0.0.tar.gz",
-        sha256_url: "https://r2.example.com/prism-v1.0.0.tar.gz.sha256",
+        tarball_url: "https://r2.example.com/beam-v1.0.0.tar.gz",
+        sha256_url: "https://r2.example.com/beam-v1.0.0.tar.gz.sha256",
         published_at: "2024-01-01T00:00:00Z",
         min_cli_version: "1.0.0",
         bundles: {
           [platformKey]: {
-            url: "https://r2.example.com/prism-v1.0.0-darwin-arm64.tar.gz",
-            sha256_url: "https://r2.example.com/prism-v1.0.0-darwin-arm64.tar.gz.sha256",
+            url: "https://r2.example.com/beam-v1.0.0-darwin-arm64.tar.gz",
+            sha256_url: "https://r2.example.com/beam-v1.0.0-darwin-arm64.tar.gz.sha256",
           },
         },
       };
@@ -217,8 +217,8 @@ describe("update-utils", () => {
       const manifest = {
         version: "0.0.32-canary.20260720T000000",
         channel: "canary" as const,
-        tarball_url: "https://r2.example.com/prism-canary.tar.gz",
-        sha256_url: "https://r2.example.com/prism-canary.tar.gz.sha256",
+        tarball_url: "https://r2.example.com/beam-canary.tar.gz",
+        sha256_url: "https://r2.example.com/beam-canary.tar.gz.sha256",
         published_at: "2026-07-20T00:00:00Z",
         min_cli_version: "1.0.0",
         commit: "abcdef0123456789abcdef0123456789abcdef01",
@@ -233,8 +233,8 @@ describe("update-utils", () => {
       const manifest = {
         version: "1.0.0",
         channel: "stable" as const,
-        tarball_url: "https://r2.example.com/prism-v1.0.0.tar.gz",
-        sha256_url: "https://r2.example.com/prism-v1.0.0.tar.gz.sha256",
+        tarball_url: "https://r2.example.com/beam-v1.0.0.tar.gz",
+        sha256_url: "https://r2.example.com/beam-v1.0.0.tar.gz.sha256",
         published_at: "2024-01-01T00:00:00Z",
         min_cli_version: "1.0.0",
       };

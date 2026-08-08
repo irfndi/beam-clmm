@@ -1,4 +1,4 @@
-/** Merge-preserving .env writer tests: `prism setup` must never wipe user config. */
+/** Merge-preserving .env writer tests: `beam setup` must never wipe user config. */
 import { describe, it, expect } from "vitest";
 import { mergeEnvContent, envValues, parseEnvLines } from "../cli/env-merge.js";
 
@@ -34,7 +34,7 @@ AGENTIC_MODE=true
     const values = envValues(merged);
     expect(values.get("HELIUS_API_KEY")).toBe("new-key");
     expect(values.get("ONLY_CUSTOM")).toBe("1");
-    expect(merged).toContain("Managed by `prism setup`");
+    expect(merged).toContain("Managed by `beam setup`");
   });
 
   it("never wipes a non-empty user value with an empty wizard default", () => {

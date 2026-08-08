@@ -78,7 +78,7 @@ describe("OpenClawWebhookTransport", () => {
 
       expect(response.raw).toBeTruthy();
       expect(capturedBody).toMatchObject({
-        type: "prism_prompt",
+        type: "beam_prompt",
         prompt,
       });
       expect((capturedBody as Record<string, unknown>).decision).toBeDefined();

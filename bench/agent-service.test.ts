@@ -74,8 +74,6 @@ function makeConfig(overrides: Partial<AppConfig> = {}): AppConfig {
     githubRepo: "",
     feedbackOptOut: false,
     paperModeExitLive: false,
-    meteoraPoolsUrl: "",
-    meteoraDatapiBaseUrl: "",
     rebalanceGasCostNative: 0.01,
     nativePriceUsd: 150,
     gasAwareMinDaysOfFeesPaidAhead: 3,

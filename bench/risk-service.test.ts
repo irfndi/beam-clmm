@@ -79,8 +79,6 @@ function makeConfig(overrides: Partial<AppConfig> = {}): AppConfig {
     githubRepo: "irfndi/beam-clmm",
     feedbackOptOut: false,
     paperModeExitLive: false,
-    meteoraPoolsUrl: "https://dlmm.datapi.meteora.ag",
-    meteoraDatapiBaseUrl: "https://dlmm.datapi.meteora.ag",
     rebalanceGasCostNative: 0.005,
     nativePriceUsd: 20,
     gasAwareMinDaysOfFeesPaidAhead: 3,

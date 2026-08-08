@@ -46,7 +46,7 @@ function makeAdapter(
     hasWallet: () => false,
     getWalletAddress: () => null,
     getWalletBalanceUsd: () => Effect.succeed(10_000),
-    getNativeSolBalance: () => Effect.succeed(0n),
+    getNativeBalance: () => Effect.succeed(0n),
     getPoolState: (addr: string) => {
       const pool = pools[addr];
       return pool ? Effect.succeed(pool) : Effect.fail(new Error(`unknown pool ${addr}`));
@@ -96,7 +96,7 @@ function makeAdapter(
       }),
     discoverPools: () => Effect.succeed([]),
     reportFeeCollection: () => Effect.void,
-    swapUSDCForSOL: () => Effect.void,
+    swapUSDCForNative: () => Effect.void,
     getTokenBalance: () => Effect.succeed(0n),
     getTokenPrices: () => Effect.succeed({}),
     getTokenDecimals: () => Effect.succeed(9),

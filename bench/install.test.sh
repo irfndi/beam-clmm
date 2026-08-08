@@ -78,10 +78,10 @@ assert_not_contains() {
 # ---- Helpers ----
 
 # Run install.sh under a controlled env and capture output + exit code.
-# Strips PRISM_* env vars so S1 is reproducible.
+# Strips BEAM_* env vars so S1 is reproducible.
 run_install_clean() {
   # Usage: run_install_clean [extra env=value ...]
-  local tmp; tmp="$(mktemp -d -t prism-install-test-XXXXXX)"
+  local tmp; tmp="$(mktemp -d -t beam-install-test-XXXXXX)"
   local out; out="$tmp/out.log"
   # shellcheck disable=SC2086
   env -i HOME="$tmp/home" PATH="/usr/bin:/bin" \
@@ -95,12 +95,12 @@ run_install_clean() {
 }
 
 # ---- S1: Unbound variable fix ----
-# Sourcing install.sh with PRISM_SKIP_AUTO_TARBALL unset must not crash.
+# Sourcing install.sh with BEAM_SKIP_AUTO_TARBALL unset must not crash.
 scenario_s1() {
-  bold "S1: install.sh tolerates unset PRISM_SKIP_AUTO_TARBALL under set -u"
-  local tmp; tmp="$(mktemp -d -t prism-s1-XXXXXX)"
+  bold "S1: install.sh tolerates unset BEAM_SKIP_AUTO_TARBALL under set -u"
+  local tmp; tmp="$(mktemp -d -t beam-s1-XXXXXX)"
   local out; out="$tmp/out.log"
-  # Run the install script with a clean env so PRISM_SKIP_AUTO_TARBALL is unset.
+  # Run the install script with a clean env so BEAM_SKIP_AUTO_TARBALL is unset.
   # We use `bash` so set -u propagates. We expect a non-crash on the env-var read.
   env -i HOME="$tmp/home" PATH="/usr/bin:/bin" \
     bash "$INSTALL_SH" >"$out" 2>&1
@@ -130,7 +130,7 @@ scenario_s3() {
   # We use a stub PATH that points to a directory containing a fake `bun`
   # binary that prints a too-old version. Expect a non-zero exit and an
   # error message that mentions the minimum version.
-  local tmp; tmp="$(mktemp -d -t prism-s3-XXXXXX)"
+  local tmp; tmp="$(mktemp -d -t beam-s3-XXXXXX)"
   mkdir -p "$tmp/bin"
   cat >"$tmp/bin/bun" <<'EOF'
 #!/usr/bin/env bash
@@ -174,9 +174,9 @@ EOF
   rm -rf "$tmp"
 }
 
-# ---- S4: End-of-install verification (bun --version, prism --version) ----
+# ---- S4: End-of-install verification (bun --version, beam --version) ----
 scenario_s4() {
-  bold "S4: install.sh runs bun --version and prism --version at the end"
+  bold "S4: install.sh runs bun --version and beam --version at the end"
   local body; body="$(cat "$INSTALL_SH")"
   local bun_ok=0
   case "$body" in
@@ -190,20 +190,20 @@ scenario_s4() {
     FAILED_NAMES+=("S4: bun --version in verification block")
     printf "  %s S4: bun --version in verification block\n" "$(red FAIL)"
   fi
-  local prism_ok=0
+  local beam_ok=0
   case "$body" in
-    *'VERIFY_FAILED=0'*'"$WRAPPER" --version'*) prism_ok=1 ;;
+    *'VERIFY_FAILED=0'*'"$WRAPPER" --version'*) beam_ok=1 ;;
   esac
   case "$body" in
-    *'VERIFY_FAILED=0'*'$WRAPPER --version'*) prism_ok=1 ;;
+    *'VERIFY_FAILED=0'*'$WRAPPER --version'*) beam_ok=1 ;;
   esac
-  if [ "$prism_ok" -eq 1 ]; then
+  if [ "$beam_ok" -eq 1 ]; then
     PASS=$((PASS + 1))
-    printf "  %s calls 'prism --version' inside verification block\n" "$(green PASS)"
+    printf "  %s calls 'beam --version' inside verification block\n" "$(green PASS)"
   else
     FAIL=$((FAIL + 1))
-    FAILED_NAMES+=("S4: prism --version in verification block")
-    printf "  %s S4: prism --version in verification block\n" "$(red FAIL)"
+    FAILED_NAMES+=("S4: beam --version in verification block")
+    printf "  %s S4: beam --version in verification block\n" "$(red FAIL)"
   fi
 }
 
@@ -241,10 +241,10 @@ scenario_s5() {
 }
 
 scenario_s6() {
-  bold "S6: install.sh has defensive default assignment for PRISM_SKIP_AUTO_TARBALL"
+  bold "S6: install.sh has defensive default assignment for BEAM_SKIP_AUTO_TARBALL"
   local body; body="$(cat "$INSTALL_SH")"
   case "$body" in
-    *'PRISM_SKIP_AUTO_TARBALL="${PRISM_SKIP_AUTO_TARBALL:-}"'*|*'PRISM_SKIP_AUTO_TARBALL="${PRISM_SKIP_AUTO_TARBALL:-'*)
+    *'BEAM_SKIP_AUTO_TARBALL="${BEAM_SKIP_AUTO_TARBALL:-}"'*|*'BEAM_SKIP_AUTO_TARBALL="${BEAM_SKIP_AUTO_TARBALL:-'*)
       PASS=$((PASS + 1))
       printf "  %s defensive default assignment present\n" "$(green PASS)"
       ;;
@@ -258,7 +258,7 @@ scenario_s6() {
 
 scenario_s7() {
   bold "S7: install.sh survives unset HOME under set -u (no \$HOME crash)"
-  local tmp; tmp="$(mktemp -d -t prism-s7-XXXXXX)"
+  local tmp; tmp="$(mktemp -d -t beam-s7-XXXXXX)"
   local out; out="$tmp/out.log"
   env -i PATH="/usr/bin:/bin" \
     bash "$INSTALL_SH" >"$out" 2>&1

@@ -10,7 +10,7 @@ describe("install-method", () => {
   const originalCwd = process.cwd();
 
   beforeEach(() => {
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "prism-install-method-"));
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "beam-install-method-"));
     process.chdir(tmpDir);
   });
 
@@ -20,9 +20,9 @@ describe("install-method", () => {
   });
 
   it("detects tarball install from env variable", () => {
-    process.env.PRISM_TARBALL_INSTALL = "1";
+    process.env.BEAM_TARBALL_INSTALL = "1";
     expect(detectInstallMethod()).toBe("tarball");
-    delete process.env.PRISM_TARBALL_INSTALL;
+    delete process.env.BEAM_TARBALL_INSTALL;
   });
 
   it("isSourceInstall returns true for a source tree", () => {
@@ -40,12 +40,12 @@ describe("install-method", () => {
   });
 
   it("removes release versions from legacy bundle install paths", () => {
-    expect(getVersionAgnosticInstallDir("/home/user/prism-dlmm-v0.0.30")).toBe(
-      "/home/user/prism-dlmm",
+    expect(getVersionAgnosticInstallDir("/home/user/beam-clmm-v0.0.30")).toBe(
+      "/home/user/beam-clmm",
     );
-    expect(getVersionAgnosticInstallDir("/home/user/prism-dlmm-v0.0.30-beta.1")).toBe(
-      "/home/user/prism-dlmm",
+    expect(getVersionAgnosticInstallDir("/home/user/beam-clmm-v0.0.30-beta.1")).toBe(
+      "/home/user/beam-clmm",
     );
-    expect(getVersionAgnosticInstallDir("/home/user/.prism")).toBe("/home/user/.prism");
+    expect(getVersionAgnosticInstallDir("/home/user/.beam")).toBe("/home/user/.beam");
   });
 });

@@ -11,7 +11,7 @@ import { defaultAppConfig, mockFetch } from "./helpers.js";
 import type { AppConfig } from "../engine/config-service.js";
 
 const POOL = "Pool1111111111111111111111111111111111111";
-const TEST_API_KEY = "sk-prism-alert-test-key";
+const TEST_API_KEY = "sk-beam-alert-test-key";
 
 function makeConfigLayer(overrides: Partial<AppConfig> = {}) {
   return Layer.succeed(
@@ -57,11 +57,11 @@ describe("AlertService", () => {
   let savedConfigDir: string | undefined;
 
   beforeEach(() => {
-    tmpDir = mkdtempSync(join(tmpdir(), "prism-alert-test-"));
+    tmpDir = mkdtempSync(join(tmpdir(), "beam-alert-test-"));
     dbPath = join(tmpDir, "test.db");
-    // The service resolves the API key via PRISM_CONFIG_DIR/credentials.json.
-    savedConfigDir = process.env.PRISM_CONFIG_DIR;
-    process.env.PRISM_CONFIG_DIR = tmpDir;
+    // The service resolves the API key via BEAM_CONFIG_DIR/credentials.json.
+    savedConfigDir = process.env.BEAM_CONFIG_DIR;
+    process.env.BEAM_CONFIG_DIR = tmpDir;
     writeFileSync(join(tmpDir, "credentials.json"), JSON.stringify({ apiKey: TEST_API_KEY }), {
       mode: 0o600,
     });
@@ -69,9 +69,9 @@ describe("AlertService", () => {
 
   afterEach(() => {
     if (savedConfigDir === undefined) {
-      delete process.env.PRISM_CONFIG_DIR;
+      delete process.env.BEAM_CONFIG_DIR;
     } else {
-      process.env.PRISM_CONFIG_DIR = savedConfigDir;
+      process.env.BEAM_CONFIG_DIR = savedConfigDir;
     }
     rmSync(tmpDir, { recursive: true, force: true });
   });

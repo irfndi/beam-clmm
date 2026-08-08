@@ -201,7 +201,7 @@ describe("parseDbConfigValue", () => {
 
 describe("readDbConfigOverrides + applyDbConfigOverrides", () => {
   it("reads persisted rows from the metadata table", () => {
-    const path = "/tmp/prism-db-config-test.sqlite";
+    const path = "/tmp/beam-db-config-test.sqlite";
     for (const suffix of ["", "-journal", "-wal", "-shm"]) {
       fs.rmSync(`${path}${suffix}`, { force: true });
     }
@@ -234,7 +234,7 @@ describe("readDbConfigOverrides + applyDbConfigOverrides", () => {
   });
 
   it("returns empty map when the DB predates the metadata table", () => {
-    const path = "/tmp/prism-db-config-predate.sqlite";
+    const path = "/tmp/beam-db-config-predate.sqlite";
     for (const suffix of ["", "-journal", "-wal", "-shm"]) {
       fs.rmSync(`${path}${suffix}`, { force: true });
     }

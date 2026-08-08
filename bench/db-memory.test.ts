@@ -398,7 +398,7 @@ describe("probeVecAvailability", () => {
   });
 
   it("opens only in-memory databases and never creates a file", () => {
-    const tmpDir = mkdtempSync(path.join(os.tmpdir(), "prism-probe-"));
+    const tmpDir = mkdtempSync(path.join(os.tmpdir(), "beam-probe-"));
     const previousCwd = process.cwd();
     process.chdir(tmpDir);
     try {
