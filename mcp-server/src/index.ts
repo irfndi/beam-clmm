@@ -4,7 +4,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { registerAllTools } from "./tools.js";
 
 const server = new McpServer({
-  name: "prism-mcp-server",
+  name: "beam-mcp-server",
   version: "0.0.8",
 });
 

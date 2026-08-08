@@ -31,12 +31,12 @@ interface McpTool {
 
 const tools: ReadonlyArray<McpTool> = [
   {
-    name: "prism_status",
-    description: "Get a high-level status snapshot of the Prism trading agent.",
+    name: "beam_status",
+    description: "Get a high-level status snapshot of the Beam trading agent.",
     inputSchema: { type: "object", properties: {} },
   },
   {
-    name: "prism_positions",
+    name: "beam_positions",
     description: "List open positions with deposited value, current value, and bin ranges.",
     inputSchema: {
       type: "object",
@@ -46,7 +46,7 @@ const tools: ReadonlyArray<McpTool> = [
     },
   },
   {
-    name: "prism_decisions",
+    name: "beam_decisions",
     description: "Get recent decision history from the audit log.",
     inputSchema: {
       type: "object",
@@ -57,18 +57,18 @@ const tools: ReadonlyArray<McpTool> = [
     },
   },
   {
-    name: "prism_config",
+    name: "beam_config",
     description: "Get sanitized configuration (no secrets) for the running agent.",
     inputSchema: { type: "object", properties: {} },
   },
   {
-    name: "prism_agent_policy",
+    name: "beam_agent_policy",
     description:
       "Get the current agent policy snapshot (proposal mode, hard caps, circuit breaker).",
     inputSchema: { type: "object", properties: {} },
   },
   {
-    name: "prism_pending_proposals",
+    name: "beam_pending_proposals",
     description: "List pending agent proposals that are awaiting approval in supervised mode.",
     inputSchema: {
       type: "object",
@@ -78,7 +78,7 @@ const tools: ReadonlyArray<McpTool> = [
     },
   },
   {
-    name: "prism_approve_proposals",
+    name: "beam_approve_proposals",
     description:
       "Approve one or more pending agent proposals so they can execute in supervised mode. Requires the approval token configured for the engine.",
     inputSchema: {
@@ -143,7 +143,7 @@ export class McpServer {
         tools: {},
       },
       serverInfo: {
-        name: "prism-mcp",
+        name: "beam-mcp",
         version: getCurrentVersion(),
       },
     };
@@ -161,7 +161,7 @@ export class McpServer {
     const snapshot = await Effect.runPromise(this.state.getSnapshot());
 
     switch (name) {
-      case "prism_status": {
+      case "beam_status": {
         return {
           content: [
             {
@@ -176,7 +176,7 @@ export class McpServer {
           ],
         };
       }
-      case "prism_positions": {
+      case "beam_positions": {
         const pool = arguments_.pool as string | undefined;
         const positions = pool
           ? snapshot.positions.filter((p) => p.poolAddress === pool)
@@ -190,7 +190,7 @@ export class McpServer {
           ],
         };
       }
-      case "prism_decisions": {
+      case "beam_decisions": {
         const limit = typeof arguments_.limit === "number" ? arguments_.limit : 10;
         const pool = arguments_.pool as string | undefined;
         let decisions = snapshot.recentDecisions;
@@ -206,7 +206,7 @@ export class McpServer {
           ],
         };
       }
-      case "prism_config": {
+      case "beam_config": {
         return {
           content: [
             {
@@ -216,7 +216,7 @@ export class McpServer {
           ],
         };
       }
-      case "prism_agent_policy": {
+      case "beam_agent_policy": {
         return {
           content: [
             {
@@ -226,7 +226,7 @@ export class McpServer {
           ],
         };
       }
-      case "prism_pending_proposals": {
+      case "beam_pending_proposals": {
         const pool = arguments_.pool as string | undefined;
         const proposals = pool
           ? snapshot.pendingProposals.filter((p) => p.poolAddress === pool)
@@ -240,7 +240,7 @@ export class McpServer {
           ],
         };
       }
-      case "prism_approve_proposals": {
+      case "beam_approve_proposals": {
         // Approvals are the human boundary of supervised mode: require the
         // same credential as the HTTP /approve endpoint so an MCP-capable
         // advisor cannot approve its own proposals. Fail-closed: no fallback

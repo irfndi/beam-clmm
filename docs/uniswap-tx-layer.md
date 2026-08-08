@@ -6,20 +6,20 @@ Blockscout verified ABIs, and live `eth_call`s on
 
 ## Verified addresses (mainnet)
 
-| Contract | Address |
-| --- | --- |
-| UniswapV3Factory | `0x1f7d7550b1b028f7571e69a784071f0205fd2efa` |
-| NonfungiblePositionManager (v3) | `0x73991a25c818bf1f1128deaab1492d45638de0d3` |
-| TickLens | `0x7dfd4f31be6814d2906bde155c3e1b146eac1468` |
-| QuoterV2 | `0x33e885ed0ec9bf04ecfb19341582aadcb4c8a9e7` |
-| SwapRouter02 | `0xcaf681a66d020601342297493863e78c959e5cb2` |
-| UniversalRouter (**2.1.1**, V4_SWAP=0x10) | `0x8876789976decbfcbbbe364623c63652db8c0904` |
-| Permit2 | `0x000000000022D473030F116dDEE9F6B43aC78BA3` |
-| v4 PoolManager | `0x8366a39cc670b4001a1121b8f6a443a643e40951` |
-| v4 PositionManager (**NEW interface**) | `0x58daec3116aae6d93017baaea7749052e8a04fa7` |
-| V4Quoter (new lens interface) | `0x8dc178efb8111bb0973dd9d722ebeff267c98f94` |
-| WETH9 | `0x0Bd7D308f8E1639FAb988df18A8011f41EAcAD73` (18 dec) |
-| USDG | `0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168` (6 dec) |
+| Contract                                  | Address                                               |
+| ----------------------------------------- | ----------------------------------------------------- |
+| UniswapV3Factory                          | `0x1f7d7550b1b028f7571e69a784071f0205fd2efa`          |
+| NonfungiblePositionManager (v3)           | `0x73991a25c818bf1f1128deaab1492d45638de0d3`          |
+| TickLens                                  | `0x7dfd4f31be6814d2906bde155c3e1b146eac1468`          |
+| QuoterV2                                  | `0x33e885ed0ec9bf04ecfb19341582aadcb4c8a9e7`          |
+| SwapRouter02                              | `0xcaf681a66d020601342297493863e78c959e5cb2`          |
+| UniversalRouter (**2.1.1**, V4_SWAP=0x10) | `0x8876789976decbfcbbbe364623c63652db8c0904`          |
+| Permit2                                   | `0x000000000022D473030F116dDEE9F6B43aC78BA3`          |
+| v4 PoolManager                            | `0x8366a39cc670b4001a1121b8f6a443a643e40951`          |
+| v4 PositionManager (**NEW interface**)    | `0x58daec3116aae6d93017baaea7749052e8a04fa7`          |
+| V4Quoter (new lens interface)             | `0x8dc178efb8111bb0973dd9d722ebeff267c98f94`          |
+| WETH9                                     | `0x0Bd7D308f8E1639FAb988df18A8011f41EAcAD73` (18 dec) |
+| USDG                                      | `0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168` (6 dec)  |
 
 WETH/USDG v3 pools verified: 0.01% `0x52e65B17fB6E5BA00Ed806f37Afcd2DaA50271Ca`,
 0.05% `0x69BfaF19C9f377BB306a89aEd9F6B07e2c1a8d9a`,

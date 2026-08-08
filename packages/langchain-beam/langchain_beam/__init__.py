@@ -1,13 +1,13 @@
-"""LangChain tool for Prism liquidity agent.
+"""LangChain tool for Beam liquidity agent.
 
-Provides a LangChain BaseTool that wraps the Prism CLI for use in
+Provides a LangChain BaseTool that wraps the Beam CLI for use in
 agent workflows. All commands are thin subprocess wrappers around the
-`prism` binary, matching the same patterns as the MCP server.
+`beam` binary, matching the same patterns as the MCP server.
 
 Usage:
-    from langchain_prism import PrismTool
+    from langchain_beam import BeamTool
 
-    tool = PrismTool()
+    tool = BeamTool()
     result = tool.run("status")
 """
 
@@ -23,15 +23,15 @@ from typing import Any, Optional
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel, Field
 
-__all__ = ["PrismTool", "PrismExecResult"]
+__all__ = ["BeamTool", "BeamExecResult"]
 
 DEFAULT_TIMEOUT_SECONDS = 30
 BACKTEST_TIMEOUT_SECONDS = 120
 MAX_OUTPUT_BYTES = 10 * 1024 * 1024  # 10 MB
 
 
-class PrismExecResult:
-    """Result of a prism CLI invocation."""
+class BeamExecResult:
+    """Result of a beam CLI invocation."""
 
     __slots__ = ("ok", "stdout", "stderr", "exit_code", "timed_out")
 
@@ -59,54 +59,54 @@ class PrismExecResult:
         }
 
 
-def _find_prism_binary() -> str:
-    """Locate the prism CLI binary.
+def _find_beam_binary() -> str:
+    """Locate the beam CLI binary.
 
     Resolution order (matches MCP server):
-    1. PRISM_BIN env var
-    2. ~/.local/bin/prism
-    3. ~/.bun/bin/prism
-    4. prism on PATH
+    1. BEAM_BIN env var
+    2. ~/.local/bin/beam
+    3. ~/.bun/bin/beam
+    4. beam on PATH
     """
-    env_bin = os.environ.get("PRISM_BIN")
+    env_bin = os.environ.get("BEAM_BIN")
     if env_bin:
         return env_bin
 
     home = Path.home()
     candidates = [
-        home / ".local" / "bin" / "prism",
-        home / ".bun" / "bin" / "prism",
+        home / ".local" / "bin" / "beam",
+        home / ".bun" / "bin" / "beam",
     ]
     for candidate in candidates:
         if candidate.exists():
             return str(candidate)
 
     # Fall back to PATH lookup
-    on_path = shutil.which("prism")
+    on_path = shutil.which("beam")
     if on_path:
         return on_path
 
     raise FileNotFoundError(
-        "prism CLI not found. Install Prism first: "
-        "curl -fsSL https://raw.githubusercontent.com/irfndi/prism-liquidity-agent/main/scripts/install.sh | bash"
+        "beam CLI not found. Install Beam first: "
+        "curl -fsSL https://raw.githubusercontent.com/irfndi/beam-clmm/main/scripts/install.sh | bash"
     )
 
 
-def run_prism(
+def run_beam(
     args: list[str],
     *,
     timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS,
-) -> PrismExecResult:
-    """Run a prism CLI command as a subprocess.
+) -> BeamExecResult:
+    """Run a beam CLI command as a subprocess.
 
     Args:
         args: Command arguments (e.g. ["status"], ["backtest", "--days", "7"]).
         timeout_seconds: Maximum seconds to wait before killing the process.
 
     Returns:
-        PrismExecResult with stdout, stderr, exit code, and status flags.
+        BeamExecResult with stdout, stderr, exit code, and status flags.
     """
-    binary = _find_prism_binary()
+    binary = _find_beam_binary()
     cmd = [binary] + args
 
     try:
@@ -117,7 +117,7 @@ def run_prism(
             timeout=timeout_seconds,
             env={**os.environ, "FORCE_COLOR": "0"},
         )
-        return PrismExecResult(
+        return BeamExecResult(
             ok=result.returncode == 0,
             stdout=result.stdout,
             stderr=result.stderr,
@@ -127,7 +127,7 @@ def run_prism(
     except subprocess.TimeoutExpired as exc:
         stdout = exc.stdout.decode("utf-8", errors="replace") if exc.stdout else ""
         stderr = exc.stderr.decode("utf-8", errors="replace") if exc.stderr else ""
-        return PrismExecResult(
+        return BeamExecResult(
             ok=False,
             stdout=stdout,
             stderr=stderr,
@@ -135,27 +135,27 @@ def run_prism(
             timed_out=True,
         )
     except FileNotFoundError as exc:
-        return PrismExecResult(
+        return BeamExecResult(
             ok=False,
             stdout="",
-            stderr=f"Prism binary not found: {exc}. Set PRISM_BIN env var or install prism.",
+            stderr=f"Beam binary not found: {exc}. Set BEAM_BIN env var or install beam.",
             exit_code=-1,
         )
     except Exception as exc:
-        return PrismExecResult(
+        return BeamExecResult(
             ok=False,
             stdout="",
-            stderr=f"Unexpected error running prism: {exc}",
+            stderr=f"Unexpected error running beam: {exc}",
             exit_code=-1,
         )
 
 
-class PrismToolInput(BaseModel):
-    """Input for the Prism tool."""
+class BeamToolInput(BaseModel):
+    """Input for the Beam tool."""
 
     command: str = Field(
         description=(
-            "The prism command to run. One of: "
+            "The beam command to run. One of: "
             "'status', 'positions', 'backtest', 'setup', "
             "'whoami', 'wallet', 'update', 'version'. "
             "For backtest, pass args after a space: 'backtest --days 7'."
@@ -163,22 +163,22 @@ class PrismToolInput(BaseModel):
     )
 
 
-class PrismTool(BaseTool):
-    """LangChain tool that wraps the Prism liquidity agent CLI.
+class BeamTool(BaseTool):
+    """LangChain tool that wraps the Beam liquidity agent CLI.
 
-    Provides access to Prism commands (status, positions, backtest, setup, etc.)
-    via subprocess calls. The tool finds the prism binary using the same
+    Provides access to Beam commands (status, positions, backtest, setup, etc.)
+    via subprocess calls. The tool finds the beam binary using the same
     resolution order as the MCP server.
 
     Usage:
-        tool = PrismTool()
+        tool = BeamTool()
         result = tool.run("status")
         result = tool.run("backtest --days 7 --source replay")
     """
 
-    name: str = "prism"
+    name: str = "beam"
     description: str = (
-        "Run Prism liquidity agent commands. "
+        "Run Beam liquidity agent commands. "
         "Commands: 'status' (agent status + positions), "
         "'positions' (active positions), "
         "'backtest [--days N] [--source synthetic|replay]' (run backtest), "
@@ -188,10 +188,10 @@ class PrismTool(BaseTool):
         "'update' (self-update), "
         "'version' (current version)."
     )
-    args_schema: type[BaseModel] = PrismToolInput
+    args_schema: type[BaseModel] = BeamToolInput
 
     def _run(self, command: str) -> str:
-        """Execute a prism CLI command and return its output.
+        """Execute a beam CLI command and return its output.
 
         Args:
             command: The full command string, e.g. "status" or "backtest --days 7".
@@ -206,17 +206,17 @@ class PrismTool(BaseTool):
         subcommand = args[0]
         timeout = BACKTEST_TIMEOUT_SECONDS if subcommand == "backtest" else DEFAULT_TIMEOUT_SECONDS
 
-        result = run_prism(args, timeout_seconds=timeout)
+        result = run_beam(args, timeout_seconds=timeout)
 
         if result.timed_out:
             return json.dumps({
-                "error": f"Command 'prism {subcommand}' timed out after {timeout}s",
+                "error": f"Command 'beam {subcommand}' timed out after {timeout}s",
                 "stderr": result.stderr,
             })
 
         if not result.ok:
             return json.dumps({
-                "error": f"Command 'prism {subcommand}' failed (exit {result.exit_code})",
+                "error": f"Command 'beam {subcommand}' failed (exit {result.exit_code})",
                 "stdout": result.stdout,
                 "stderr": result.stderr,
             })

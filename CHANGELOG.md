@@ -1,6 +1,6 @@
 # Changelog
 
-All notable changes to Prism are documented here.
+All notable changes to Beam are documented here.
 
 ## [0.1.11] — 2026-08-08
 
@@ -11,9 +11,9 @@ All notable changes to Prism are documented here.
 
 ### Fixed
 
-- The `execution_failures` safety pause is no longer a permanent one-way latch: each cycle auto-resolves when the failure counter is below `MAX_CONSECUTIVE_EXECUTION_FAILURES` (a fresh process starts at 0, so a restart alone clears a stale latch), and the counter decays to 0 after every quiet cycle so a transient spike clears itself mid-run; the pause re-arms only when a cycle genuinely breaches again, and `prism resume` stays an operator override (#187)
-- Unpriceable wallet tokens are dust for the orphan sweep: a token with no resolvable USD price is value-unknown ⇒ $0, so the sweep skips it and the settlement processor dust-confirms existing jobs with a distinct "settlement dust skipped (no USD price)" error instead of quoting them — the Jupiter 400 no-route retry loop is gone, and tokens re-qualify automatically once a price resolves. `prism status` reconciles the Stranded line with the dust policy: sub-dust terminal settlements are excluded (intentionally never re-queued), priceable stranded capital shows its USD value, and unpriceable terminals get a separate Unpriceable line (#188)
-- `prism update` detects a running agent after a successful update (dev lockfile or process scan, including the bundled `dist/cli/index.mjs dev` systemd pattern) and prints a prominent restart-required notice with the exact restart command, exiting non-zero (code 2, distinct from update-failure's 1) so scripts can tell "updated, restart needed" apart from "update failed" — the running agent keeps executing the old build until restarted (#189)
+- The `execution_failures` safety pause is no longer a permanent one-way latch: each cycle auto-resolves when the failure counter is below `MAX_CONSECUTIVE_EXECUTION_FAILURES` (a fresh process starts at 0, so a restart alone clears a stale latch), and the counter decays to 0 after every quiet cycle so a transient spike clears itself mid-run; the pause re-arms only when a cycle genuinely breaches again, and `beam resume` stays an operator override (#187)
+- Unpriceable wallet tokens are dust for the orphan sweep: a token with no resolvable USD price is value-unknown ⇒ $0, so the sweep skips it and the settlement processor dust-confirms existing jobs with a distinct "settlement dust skipped (no USD price)" error instead of quoting them — the Jupiter 400 no-route retry loop is gone, and tokens re-qualify automatically once a price resolves. `beam status` reconciles the Stranded line with the dust policy: sub-dust terminal settlements are excluded (intentionally never re-queued), priceable stranded capital shows its USD value, and unpriceable terminals get a separate Unpriceable line (#188)
+- `beam update` detects a running agent after a successful update (dev lockfile or process scan, including the bundled `dist/cli/index.mjs dev` systemd pattern) and prints a prominent restart-required notice with the exact restart command, exiting non-zero (code 2, distinct from update-failure's 1) so scripts can tell "updated, restart needed" apart from "update failed" — the running agent keeps executing the old build until restarted (#189)
 - Stranded settlement classification: deduplicated lookups and outage-specific wording for unreachable price feeds (#192), and no fabricated fallback prices in the stranded classification (#193)
 - Pinned the issue #191 settlement_overdue latch scenario with a regression test (#194)
 
@@ -25,8 +25,8 @@ All notable changes to Prism are documented here.
 
 ### Fixed
 
-- **Broken v0.1.9 bundles (#179)**: the release bundles externalized `effect` and shipped without node_modules, so the installed CLI resolved the runtime from bun's global cache — which held effect 3.x — and crashed at startup (`Context.Service is not a function`). All runtime dependencies (effect, @solana/web3.js, @meteora-ag/dlmm, commander, chalk, dotenv, @clack/prompts, semver, bs58, @solana/spl-token, sqlite-vec) are now bundled into the engine and CLI artifacts, making release tarballs self-contained and version-consistent. Verified in a node_modules-less directory: `--version`, `--help`, and `prism status` all boot. `@xenova/transformers` stays external (optional ONNX backend; import failure falls back to hash vectors).
-- **Update never leaves the agent unrecoverable (#179)**: `prism update` keeps ONE persistent backup of the previous install (`<installDir>.bak-<previousVersion>`) instead of deleting it after the smoke test — including the `--skip-smoke-test` path that previously installed a broken bundle with no way back. The backup is failure-safe (stale backups are only removed after the new one is in place), named after the version it contains, and persistence runs inside the rollback-protected path so a failure restores the previous install.
+- **Broken v0.1.9 bundles (#179)**: the release bundles externalized `effect` and shipped without node_modules, so the installed CLI resolved the runtime from bun's global cache — which held effect 3.x — and crashed at startup (`Context.Service is not a function`). All runtime dependencies (effect, @solana/web3.js, @meteora-ag/dlmm, commander, chalk, dotenv, @clack/prompts, semver, bs58, @solana/spl-token, sqlite-vec) are now bundled into the engine and CLI artifacts, making release tarballs self-contained and version-consistent. Verified in a node_modules-less directory: `--version`, `--help`, and `beam status` all boot. `@xenova/transformers` stays external (optional ONNX backend; import failure falls back to hash vectors).
+- **Update never leaves the agent unrecoverable (#179)**: `beam update` keeps ONE persistent backup of the previous install (`<installDir>.bak-<previousVersion>`) instead of deleting it after the smoke test — including the `--skip-smoke-test` path that previously installed a broken bundle with no way back. The backup is failure-safe (stale backups are only removed after the new one is in place), named after the version it contains, and persistence runs inside the rollback-protected path so a failure restores the previous install.
 
 ### Changed
 
@@ -37,7 +37,7 @@ All notable changes to Prism are documented here.
 ### Added
 
 - **Effect 4.0.0-beta.105 migration**: engine, CLI, bench suite, and the Cloudflare workers move to one unified Effect tree (`Context.Service` tags, `catch`/`catchCause`, `Result`, `callback`, `timeoutOrElse`, `forkChild`, Schema v4, per-build env snapshot in `ConfigLive` so vitest stubs and CLI-set env are honored) (#172)
-- **Settlement 429 recovery (#166, #169, #175)**: transient settlement failures (HTTP 408/425/429/5xx and network errors) retry with bounded backoff and never terminalize — a rate-limited rollback resumes once the outage clears. An orphan-token sweep re-queues wallet tokens with no backing position or active settlement: terminal rows are revived in place (attempts carried so backoff escalates across generations, sells the current wallet amount) while signature-carrying terminal rows spawn fresh jobs; the `settlement_overdue` safety pause auto-resolves once nothing is in flight; `prism status` reports terminal settlements with unspent balance (order-aware — a recurring stranding stays visible)
+- **Settlement 429 recovery (#166, #169, #175)**: transient settlement failures (HTTP 408/425/429/5xx and network errors) retry with bounded backoff and never terminalize — a rate-limited rollback resumes once the outage clears. An orphan-token sweep re-queues wallet tokens with no backing position or active settlement: terminal rows are revived in place (attempts carried so backoff escalates across generations, sells the current wallet amount) while signature-carrying terminal rows spawn fresh jobs; the `settlement_overdue` safety pause auto-resolves once nothing is in flight; `beam status` reports terminal settlements with unspent balance (order-aware — a recurring stranding stays visible)
 - Batch wallet-reserve gate for SOL-funded entries: per-cycle free-SOL budget (wallet SOL minus gas reserve, refreshed after every live mutation) gates each live ENTER in autonomous canary/live mode, skipping capacity-limited entries as audited `[wallet-reserve]` decisions instead of submitting doomed swaps. The `execution_failures` safety pause can no longer be armed by batch over-commitment — funding-condition ENTER failures (insufficient token balance / SOL / USDC) are treated as capacity-limited and excluded from the pause breaker and pool-failure counts (the entry-failure backoff still arms). Pools are funded in scan order, which is fee-APR rank order in market-scan mode (#170)
 - Stable dependency bump: effect 3.22.1, @meteora-ag/dlmm 1.9.14, hono 4.13.1, oxlint/oxfmt/tsdown latest (#173)
 
@@ -75,14 +75,14 @@ All notable changes to Prism are documented here.
 ### Added
 
 - Market-scan universe trading — the watchlist becomes an optional overlay: with `MARKET_SCAN_ENABLED=true` the engine continuously scans the TVL-ranked Meteora universe and trades the best pools through the full existing gate chain (safety screening, metrics, fee/IL, volume auth, risk gates). New `MARKET_SCAN_*` config block: universe pages, TVL/fee-APR/turnover/bin-step gates, top-K active set, token-safety pre-filter (#158)
-- DB-tunable config allowlist extended to the market-scan and tuning knobs (`MARKET_SCAN_*`, `DUST_EXIT_USD`, `TRAILING_STOP_CONFIRM_CYCLES`, `VOLATILITY_EXIT_STDDEV`, range-width and cooldown keys, `IDLE_REDEPLOY_*`) — changeable at runtime via `prism config set` without a restart (#159)
-- `prism doctor` gains a `config` check that fully loads the config (env + .env + DB sidecar, every numeric clamp) and FAILs on broken values before engine startup (#159)
+- DB-tunable config allowlist extended to the market-scan and tuning knobs (`MARKET_SCAN_*`, `DUST_EXIT_USD`, `TRAILING_STOP_CONFIRM_CYCLES`, `VOLATILITY_EXIT_STDDEV`, range-width and cooldown keys, `IDLE_REDEPLOY_*`) — changeable at runtime via `beam config set` without a restart (#159)
+- `beam doctor` gains a `config` check that fully loads the config (env + .env + DB sidecar, every numeric clamp) and FAILs on broken values before engine startup (#159)
 
 ### Fixed
 
 - Real on-chain position mark replaces the bin-drift heuristic — kills the trailing-stop/OOR churn that opened 340+ positions in 2.5 weeks with ~zero P&L. Fallback chain (HODL revaluation of entry legs → cost basis) never fabricates a drawdown (#157)
 - Dust entries below the $10 `ENTRY_SIZE_FLOOR_USD` are rejected; new `DUST_EXIT_USD` (default 5) deterministically exits residual dust positions and reclaims their per-pool slot; portfolio equity no longer counts idle wallet balance as unrealized gain (#157)
-- `prism setup` now MERGES into an existing `.env` instead of replacing it — re-running no longer wipes user keys, custom comments, or unknown vars (backup-only before) (#159)
+- `beam setup` now MERGES into an existing `.env` instead of replacing it — re-running no longer wipes user keys, custom comments, or unknown vars (backup-only before) (#159)
 - Market-gate token pre-filter fails open on absent token metadata (unknown holder count passes; known counts keep their threshold checks), and per-page universe fetch failures are isolated (#158)
 
 ### Changed
@@ -109,7 +109,7 @@ All notable changes to Prism are documented here.
 
 ### Fixed
 
-- `prism portfolio` / `prism status` now surface true wallet equity (#151)
+- `beam portfolio` / `beam status` now surface true wallet equity (#151)
 - Mode-aware auto-resolve for the latched daily-drawdown safety pause (#150)
 - Remediated deepsec & clawpatch security review findings (#147)
 
@@ -122,7 +122,7 @@ All notable changes to Prism are documented here.
 ### Added
 
 - Autonomous multi-token agent mode (#143)
-- Telemetry default-on: D1 summary migration, report deduplication, archive bucket, `prism telemetry` preference commands, credential-bounded error reporting
+- Telemetry default-on: D1 summary migration, report deduplication, archive bucket, `beam telemetry` preference commands, credential-bounded error reporting
 
 ### Fixed
 
@@ -163,12 +163,12 @@ All notable changes to Prism are documented here.
 
 ### Added
 
-- Canary release channel — `prism update --canary` (#120)
+- Canary release channel — `beam update --canary` (#120)
 
 ### Fixed
 
 - Gateway probe settles before close to fix Bun false-negative (#116)
-- Helius RPC URL normalization + live connectivity probes in `prism doctor` (#119)
+- Helius RPC URL normalization + live connectivity probes in `beam doctor` (#119)
 - Agent runtime transports (OpenClaw gateway, ACP, Hermes HTTP) + CLI/install/wallet bugs (#118)
 
 ### Changed
@@ -201,7 +201,7 @@ All notable changes to Prism are documented here.
 
 - Live DLMM entries now reject insufficient token balances before building a transaction.
 - SOL entries now account for wallet-funded position, bin-array, ATA and wrapped SOL instructions before submission.
-- `prism update` migrates legacy versioned install directories to stable paths and rewrites generated wrappers.
+- `beam update` migrates legacy versioned install directories to stable paths and rewrites generated wrappers.
 
 ## [0.0.30] — 2026-07-13
 
@@ -214,8 +214,8 @@ All notable changes to Prism are documented here.
 ### Fixed
 
 - Release workflow — tarball now written outside source tree to prevent "file changed as we read it" tar error (#42)
-- `prism backtest` — CLI arguments (`--days`, `--pools`, `--source`, `--db`) now correctly passed through to backtest engine
-- `prism wallet import` — added `--file <path>` and `--stdin` secure import paths; positional arg now emits a security warning
+- `beam backtest` — CLI arguments (`--days`, `--pools`, `--source`, `--db`) now correctly passed through to backtest engine
+- `beam wallet import` — added `--file <path>` and `--stdin` secure import paths; positional arg now emits a security warning
 
 ### Changed
 
@@ -227,11 +227,11 @@ All notable changes to Prism are documented here.
 
 - Position persistence to SQLite — restart no longer loses OOR counters, trailing-stop state, or position history
 - Snapshot capture & replay backtest — full pool state + bin array dumped to `pool_snapshots` every cycle, replayable offline via `bun run backtest --source replay`
-- R2-based update mechanism (`prism update`) — self-updates from Cloudflare R2 tarballs with SHA-256 verification, graceful fallback to GitHub Releases
+- R2-based update mechanism (`beam update`) — self-updates from Cloudflare R2 tarballs with SHA-256 verification, graceful fallback to GitHub Releases
 - AGENTS.md — authoritative doc reconciling stale README with reality (no MCP, sqlite-vec, Effect-TS wiring, live deployment details)
 - Embeddings fallback — hash-based embeddings by default (skips ~80MB ONNX download); `EMBEDDINGS_BACKEND=onnx` to opt in
-- Agent feedback system — GitHub Issues filing via `prism feedback` with SHA-256 dedup, Jaccard similarity merge, and per-agent rate limiting (5/hr, 10/day)
-- Install telemetry — 4 anonymous events (install, setup, dev_start, register) via D1, no PII, opt-out via `PRISM_FEEDBACK_OPT_OUT`
+- Agent feedback system — GitHub Issues filing via `beam feedback` with SHA-256 dedup, Jaccard similarity merge, and per-agent rate limiting (5/hr, 10/day)
+- Install telemetry — 4 anonymous events (install, setup, dev_start, register) via D1, no PII, opt-out via `BEAM_FEEDBACK_OPT_OUT`
 - CLI expanded from 4 commands to 14 — `register`, `login`, `setup`, `whoami`, `wallet`, `link-telegram`, `subscription`, `issue`, `support`, `dev`, `backtest`, `update`, `version`, `feedback`
 
 ### Changed
@@ -245,7 +245,7 @@ All notable changes to Prism are documented here.
 
 - Claude Agent SDK / MCP integration — no more 7-tool MCP surface, no `@anthropic-ai/sdk` calls in the hot path (`@anthropic-ai/sdk` removed from `package.json` entirely)
 - Chroma vector DB — `docker-compose.yml` deleted, `CHROMA_URL` config loaded but never consumed
-- Old CLI commands (`analyze`, `reason`, `decide`) — consolidated into 14-command `prism` CLI
+- Old CLI commands (`analyze`, `reason`, `decide`) — consolidated into 14-command `beam` CLI
 
 ## Memory TTL Policy
 

@@ -5,7 +5,7 @@
 //   cost basis when they are redeposited (see applyCompoundToCostBasis), which
 //   keeps total-PnL and trailing-stop math continuous across a compound.
 // - `entryPriceUsd` is the pool's `currentPrice` at ENTER (price of token X
-//   denominated in token Y, as served by the DLMM SDK / Meteora Data API).
+//   denominated in token Y, as served by the chain adapter).
 // - `entryAmountXUsd` / `entryAmountYUsd` are the USD values of each leg at
 //   entry. The adapter does not return actual on-chain deposit amounts, so the
 //   engine records the documented 50/50 model: each leg is half of the entry

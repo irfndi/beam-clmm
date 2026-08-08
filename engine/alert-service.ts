@@ -4,11 +4,11 @@ import { existsSync, readFileSync } from "fs";
 import { ConfigService } from "./config-service.js";
 import { AlertService, DbService, type AlertApi, type EngineAlert } from "./services.js";
 import { createLogger } from "./logger.js";
-import { getPrismUserConfigDir } from "./paths.js";
+import { getBeamUserConfigDir } from "./paths.js";
 
 const log = createLogger("alert-service");
 
-const DEFAULT_API_BASE_URL = "https://prism-api.irfndi.workers.dev";
+const DEFAULT_API_BASE_URL = "https://beam-api.irfndi.workers.dev";
 const ALERT_POST_TIMEOUT_MS = 5_000;
 
 // Cooldowns and the fee-milestone accumulator live in the SQLite metadata
@@ -17,9 +17,9 @@ const COOLDOWN_KEY_PREFIX = "alert_cooldown:";
 const FEE_TOTAL_KEY = "alert_fee_total_usd";
 const FEE_NEXT_MILESTONE_KEY = "alert_fee_next_milestone_usd";
 
-function readPrismApiKey(): string | null {
+function readBeamApiKey(): string | null {
   try {
-    const credentialsFile = join(getPrismUserConfigDir(), "credentials.json");
+    const credentialsFile = join(getBeamUserConfigDir(), "credentials.json");
     if (!existsSync(credentialsFile)) return null;
     const value: unknown = JSON.parse(readFileSync(credentialsFile, "utf-8"));
     if (typeof value !== "object" || value === null || !("apiKey" in value)) return null;
@@ -32,7 +32,7 @@ function readPrismApiKey(): string | null {
 
 function readInstallId(): string | null {
   try {
-    const installIdFile = join(getPrismUserConfigDir(), "install-id");
+    const installIdFile = join(getBeamUserConfigDir(), "install-id");
     if (!existsSync(installIdFile)) return null;
     const value = readFileSync(installIdFile, "utf-8").trim();
     return value.length >= 8 && value.length <= 128 ? value : null;
@@ -59,7 +59,7 @@ function postAlert(
   installId: string | null,
   alert: EngineAlert,
 ): Effect.Effect<void, never> {
-  const baseUrl = process.env.PRISM_API_URL ?? DEFAULT_API_BASE_URL;
+  const baseUrl = process.env.BEAM_API_URL ?? DEFAULT_API_BASE_URL;
   return Effect.tryPromise(() =>
     fetch(`${baseUrl}/v1/alerts`, {
       method: "POST",
@@ -119,10 +119,10 @@ export const AlertLive: Layer.Layer<AlertService, never, DbService | ConfigServi
         const lastSent = parseNumber(lastRaw);
         if (lastSent !== null && now - lastSent < cooldownMs) return;
 
-        const apiKey = readPrismApiKey();
+        const apiKey = readBeamApiKey();
         if (!apiKey) {
           // Unregistered install: alerts have nowhere to go. Not an error.
-          log.debug("Skipping alert — no Prism credentials registered", { type: alert.type });
+          log.debug("Skipping alert — no Beam credentials registered", { type: alert.type });
           return;
         }
 

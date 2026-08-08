@@ -690,24 +690,22 @@ export function sweepOrphanSettlements(
         backedMints.add(state.tokenY);
       }
     }
-    const prices = yield* input.adapter
-      .getTokenPrices(candidates.map(([mint]) => mint))
-      .pipe(
-        // Issue #183: a price-fetch failure must not be silent — every
-        // holding would read price 0 and be skipped as dust for the cycle
-        // (a quiet multi-cycle sweep stall is otherwise unobservable; the
-        // processor path treats the same failure as retryable).
-        Effect.catch((err) => {
-          logger.warn(
-            "Orphan sweep price fetch failed — unpriceable holdings treated as dust this cycle",
-            {
-              candidateCount: candidates.length,
-              error: err instanceof Error ? err.message : String(err),
-            },
-          );
-          return Effect.succeed<Record<string, number>>({});
-        }),
-      );
+    const prices = yield* input.adapter.getTokenPrices(candidates.map(([mint]) => mint)).pipe(
+      // Issue #183: a price-fetch failure must not be silent — every
+      // holding would read price 0 and be skipped as dust for the cycle
+      // (a quiet multi-cycle sweep stall is otherwise unobservable; the
+      // processor path treats the same failure as retryable).
+      Effect.catch((err) => {
+        logger.warn(
+          "Orphan sweep price fetch failed — unpriceable holdings treated as dust this cycle",
+          {
+            candidateCount: candidates.length,
+            error: err instanceof Error ? err.message : String(err),
+          },
+        );
+        return Effect.succeed<Record<string, number>>({});
+      }),
+    );
     // A terminal job for the mint is revived in place (upsert on id) rather
     // than replaced by a fresh row: attempts carry over so backoff escalates
     // across generations, and the settlements table stays one row per mint

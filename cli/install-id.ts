@@ -1,9 +1,9 @@
 import fs from "fs";
 import path from "path";
 import { randomUUID } from "crypto";
-import { getPrismUserConfigDir } from "../engine/paths.js";
+import { getBeamUserConfigDir } from "../engine/paths.js";
 
-const INSTALL_ID_FILE = path.join(getPrismUserConfigDir(), "install-id");
+const INSTALL_ID_FILE = path.join(getBeamUserConfigDir(), "install-id");
 
 let cachedId: string | null = null;
 

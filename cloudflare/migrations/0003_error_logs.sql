@@ -1,6 +1,6 @@
 -- Migration: Error reporting table for privacy-first telemetry
 -- Created: 2026-06-03
--- See: https://github.com/irfndi/prism-liqudity-agent/issues/29
+-- See: https://github.com/irfndi/beam-liqudity-agent/issues/29
 
 -- Error logs table (agent-side error reports)
 CREATE TABLE IF NOT EXISTS error_logs (
@@ -9,7 +9,7 @@ CREATE TABLE IF NOT EXISTS error_logs (
     error_type TEXT NOT NULL,
     message TEXT NOT NULL,
     stack_trace TEXT,
-    prism_version TEXT NOT NULL,
+    beam_version TEXT NOT NULL,
     platform TEXT,
     severity TEXT DEFAULT 'error',
     is_recoverable INTEGER DEFAULT 0,

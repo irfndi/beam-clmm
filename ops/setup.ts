@@ -6,46 +6,32 @@ const isDirectSetupExecution =
   typeof Bun !== "undefined" &&
   (Bun.main?.endsWith("ops/setup.ts") || Bun.main?.endsWith("ops/setup.js"));
 
-if (isDirectSetupExecution && process.env.PRISM_ALLOW_DIRECT !== "true") {
+if (isDirectSetupExecution && process.env.BEAM_ALLOW_DIRECT !== "true") {
   console.error("Error: Direct setup execution is not allowed.");
-  console.error('Use "prism setup" instead.');
+  console.error('Use "beam setup" instead.');
   process.exit(1);
 }
 
 async function main() {
   console.clear();
 
-  p.intro("  Prism Setup  ");
+  p.intro("  Beam Setup  ");
 
   const answers = await p.group(
     {
-      heliusKey: () =>
-        p.text({
-          message: "Helius API key (optional with a custom RPC)",
-          placeholder: "leave blank when using another RPC",
-          initialValue: process.env.HELIUS_API_KEY ?? "",
-          validate: (v) => (v && v.length <= 8 ? "Key too short" : undefined),
-        }),
-
       rpcUrl: () =>
         p.text({
-          message: "Primary Solana RPC URL (optional with Helius key)",
-          placeholder: "https://...",
-          initialValue: process.env.SOLANA_RPC_URL ?? "",
+          message: "Robinhood Chain RPC URL",
+          placeholder: "https://rpc.mainnet.chain.robinhood.com",
+          initialValue:
+            process.env.ROBINHOOD_RPC_URL ?? "https://rpc.mainnet.chain.robinhood.com",
         }),
 
       rpcFallbackUrl: () =>
         p.text({
-          message: "Fallback Solana RPC URL (optional)",
+          message: "Fallback RPC URL (optional)",
           placeholder: "https://...",
-          initialValue: process.env.SOLANA_RPC_FALLBACK_URL ?? "",
-        }),
-
-      jupiterApiKey: () =>
-        p.text({
-          message: "Jupiter API key (optional)",
-          placeholder: "leave blank to use public fallback",
-          initialValue: process.env.JUPITER_API_KEY ?? "",
+          initialValue: process.env.ROBINHOOD_RPC_FALLBACK_URL ?? "",
         }),
 
       paperTrading: () =>
@@ -77,20 +63,15 @@ async function main() {
     },
   );
 
-  const heliusKey = (answers.heliusKey as string) || "";
-  const rpcUrl =
-    (answers.rpcUrl as string) ||
-    (heliusKey ? `https://mainnet.helius-rpc.com/?api-key=${heliusKey}` : "");
+  const rpcUrl = (answers.rpcUrl as string) || "";
   if (!rpcUrl.trim()) {
-    throw new Error("A primary RPC URL or Helius API key is required");
+    throw new Error("A Robinhood Chain RPC URL is required");
   }
 
   const envContent = [
     "# RPC providers",
-    `HELIUS_API_KEY=${heliusKey}`,
-    `SOLANA_RPC_URL=${rpcUrl}`,
-    `SOLANA_RPC_FALLBACK_URL=${(answers.rpcFallbackUrl as string) || ""}`,
-    `JUPITER_API_KEY=${(answers.jupiterApiKey as string) || ""}`,
+    `ROBINHOOD_RPC_URL=${rpcUrl}`,
+    `ROBINHOOD_RPC_FALLBACK_URL=${(answers.rpcFallbackUrl as string) || ""}`,
     "",
     "# Strategy",
     `PAPER_TRADING=${String(answers.paperTrading)}`,
@@ -104,7 +85,7 @@ async function main() {
     "TRAILING_STOP_PCT=0.10",
     "",
     "# SQLite",
-    "SQLITE_DB_PATH=./prism.db",
+    "SQLITE_DB_PATH=./beam.db",
     "",
     "# Pools to watch (required for live trading; discovery is paper-only and opt-in)",
     `WATCHLIST_POOLS=${answers.watchlistPools as string}`,

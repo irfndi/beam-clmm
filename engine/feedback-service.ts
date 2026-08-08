@@ -15,7 +15,7 @@ import {
 } from "./services.js";
 import { getCurrentVersion } from "./version.js";
 import { detectInstallMethod } from "./install-method.js";
-import { getPrismUserConfigDir } from "./paths.js";
+import { getBeamUserConfigDir } from "./paths.js";
 
 const logger = createLogger("feedback");
 
@@ -26,7 +26,7 @@ const FEEDBACK_LIMITS = {
   duplicateCooldownMs: 24 * 60 * 60 * 1000,
 } as const;
 
-const DEFAULT_CLOUD_FEEDBACK_URL = "https://prism-api.irfndi.workers.dev/v1/feedback";
+const DEFAULT_CLOUD_FEEDBACK_URL = "https://beam-api.irfndi.workers.dev/v1/feedback";
 
 interface CloudFeedbackPayload {
   id: string;
@@ -74,7 +74,7 @@ function hashFeedback(summary: string, details: string | undefined, category: st
   return createHash("sha256").update(normalized).digest("hex").slice(0, 16);
 }
 
-const OPT_OUT_FILE = join(homedir(), ".config", "prism", "feedback-opt-out");
+const OPT_OUT_FILE = join(homedir(), ".config", "beam", "feedback-opt-out");
 
 function readOptOut(): Effect.Effect<boolean, never> {
   return Effect.try({
@@ -86,7 +86,7 @@ function readOptOut(): Effect.Effect<boolean, never> {
 function writeOptOut(value: boolean): Effect.Effect<void, never> {
   return Effect.try({
     try: () => {
-      mkdirSync(join(homedir(), ".config", "prism"), { recursive: true });
+      mkdirSync(join(homedir(), ".config", "beam"), { recursive: true });
       writeFileSync(OPT_OUT_FILE, value ? "true" : "false");
     },
     catch: (cause) => (cause instanceof Error ? cause : new Error(String(cause))),
@@ -98,13 +98,13 @@ function writeOptOut(value: boolean): Effect.Effect<void, never> {
 
 function buildContext(): FeedbackContext {
   const ctx: {
-    prismVersion: string;
+    beamVersion: string;
     installMethod: string;
     platform: string;
     runtime: string;
     nodeVersion?: string;
   } = {
-    prismVersion: getCurrentVersion(),
+    beamVersion: getCurrentVersion(),
     installMethod: detectInstallMethod(),
     platform: `${process.platform}-${process.arch}`,
     runtime: typeof Bun !== "undefined" ? `bun ${Bun.version}` : `node ${process.version}`,
@@ -116,7 +116,7 @@ function buildContext(): FeedbackContext {
 }
 
 function detectAgentId(): Effect.Effect<string, never> {
-  const walletPath = join(homedir(), ".config", "prism", "agent-id");
+  const walletPath = join(homedir(), ".config", "beam", "agent-id");
   return Effect.gen(function* () {
     const existing = yield* Effect.try({
       try: () => (existsSync(walletPath) ? readFileSync(walletPath, "utf-8").trim() : null),
@@ -128,7 +128,7 @@ function detectAgentId(): Effect.Effect<string, never> {
     const id = createHash("sha256").update(fingerprint).digest("hex").slice(0, 8);
     yield* Effect.try({
       try: () => {
-        const dir = join(homedir(), ".config", "prism");
+        const dir = join(homedir(), ".config", "beam");
         mkdirSync(dir, { recursive: true });
         writeFileSync(walletPath, id, { mode: 0o600 });
       },
@@ -138,11 +138,11 @@ function detectAgentId(): Effect.Effect<string, never> {
   });
 }
 
-function readPrismApiKey(): Effect.Effect<string | null, never> {
+function readBeamApiKey(): Effect.Effect<string | null, never> {
   return Effect.try({
     try: () => {
       const credentialsFile =
-        process.env.PRISM_CREDENTIALS_FILE ?? join(getPrismUserConfigDir(), "credentials.json");
+        process.env.BEAM_CREDENTIALS_FILE ?? join(getBeamUserConfigDir(), "credentials.json");
       if (!existsSync(credentialsFile)) return null;
       const value = JSON.parse(readFileSync(credentialsFile, "utf-8")) as {
         apiKey?: unknown;
@@ -202,11 +202,11 @@ export const FeedbackLive = Layer.effect(
           context,
         };
         const hash = hashFeedback(feedback.summary, feedback.details, feedback.category);
-        const apiKey = yield* readPrismApiKey();
+        const apiKey = yield* readBeamApiKey();
         if (!apiKey) {
           return {
             kind: "error" as const,
-            error: "Prism account required. Run 'prism register' first.",
+            error: "Beam account required. Run 'beam register' first.",
           } satisfies FeedbackResult;
         }
 
@@ -251,8 +251,8 @@ export const FeedbackLive = Layer.effect(
           }
         }
 
-        const cloudUrl = process.env.PRISM_API_URL
-          ? `${process.env.PRISM_API_URL}/v1/feedback`
+        const cloudUrl = process.env.BEAM_API_URL
+          ? `${process.env.BEAM_API_URL}/v1/feedback`
           : DEFAULT_CLOUD_FEEDBACK_URL;
         const reportedAt = Date.now();
         const cloudId = randomUUID();
@@ -276,7 +276,7 @@ export const FeedbackLive = Layer.effect(
         if (cloudResult && "authFailure" in cloudResult) {
           return {
             kind: "error" as const,
-            error: "Prism cloud rejected the stored credentials. Run 'prism login' again.",
+            error: "Beam cloud rejected the stored credentials. Run 'beam login' again.",
           } satisfies FeedbackResult;
         }
 
@@ -296,7 +296,7 @@ export const FeedbackLive = Layer.effect(
             hash,
           };
           yield* db.saveFeedback(entry);
-          logger.info(`Submitted feedback to Prism cloud: ${feedback.summary}`);
+          logger.info(`Submitted feedback to Beam cloud: ${feedback.summary}`);
           return { kind: "cloud" as const, id: cloudResult.id, duplicate: cloudResult.duplicate };
         }
 

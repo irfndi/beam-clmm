@@ -9,24 +9,24 @@ const execFileAsync = promisify(execFile);
 const DEFAULT_TIMEOUT_MS = 30_000;
 const MAX_BUFFER = 10 * 1024 * 1024;
 
-function findPrismBinary(): string {
-  if (process.env.PRISM_BIN) {
-    return process.env.PRISM_BIN;
+function findBeamBinary(): string {
+  if (process.env.BEAM_BIN) {
+    return process.env.BEAM_BIN;
   }
   const home = homedir();
   const candidates = [
-    join(home, ".local", "bin", "prism"),
-    join(home, ".bun", "bin", "prism"),
+    join(home, ".local", "bin", "beam"),
+    join(home, ".bun", "bin", "beam"),
   ];
   for (const candidate of candidates) {
     if (existsSync(candidate)) {
       return candidate;
     }
   }
-  return "prism";
+  return "beam";
 }
 
-export interface PrismExecResult {
+export interface BeamExecResult {
   ok: boolean;
   stdout: string;
   stderr: string;
@@ -34,11 +34,11 @@ export interface PrismExecResult {
   timedOut: boolean;
 }
 
-export async function runPrism(
+export async function runBeam(
   args: ReadonlyArray<string>,
   options: { timeoutMs?: number } = {},
-): Promise<PrismExecResult> {
-  const bin = findPrismBinary();
+): Promise<BeamExecResult> {
+  const bin = findBeamBinary();
   const timeout = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   try {
     const result = await execFileAsync(bin, [...args], {

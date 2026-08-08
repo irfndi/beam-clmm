@@ -1,20 +1,20 @@
 /**
- * Privacy-first error reporter for Prism.
+ * Privacy-first error reporter for Beam.
  *
- * - Sanitizes stack traces and messages (replaces base58-like keys, private keys, passwords)
+ * - Sanitizes stack traces and messages (replaces long private-key-looking strings, private keys, passwords)
  * - Buffers reports in memory and flushes in batches (5 reports or 60 seconds)
- * - Sends to a configurable endpoint via fetch (PRISM_ERROR_ENDPOINT env var, defaults to production API)
+ * - Sends to a configurable endpoint via fetch (BEAM_ERROR_ENDPOINT env var, defaults to production API)
  * - If the endpoint fetch fails, the batch is re-queued at the front of the pending buffer
  *   (oldest reports beyond MAX_PENDING_BUFFER are dropped to bound memory)
  * - Classifies errors by string match
- * - If PRISM_ERROR_REPORTING env var is "false", the reporter is a no-op (opt-out)
+ * - If BEAM_ERROR_REPORTING env var is "false", the reporter is a no-op (opt-out)
  * - For testability: flushAsync(), getPending(), and createErrorReporter(config) factory
  */
 
 import { existsSync, readFileSync } from "fs";
 import { Effect } from "effect";
 import { join } from "path";
-import { getPrismUserConfigDir } from "./paths.js";
+import { getBeamUserConfigDir } from "./paths.js";
 import { readTelemetryPreference } from "./telemetry-preference.js";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -24,8 +24,7 @@ export type ErrorCategory =
   | "SQLite_Vec"
   | "RPC_RateLimit"
   | "UpdateFailure"
-  | "Helius_Error"
-  | "Solana_RPC"
+  | "RPC_Error"
   | "Config_Error"
   | "Unknown";
 
@@ -67,14 +66,14 @@ export interface BatchPayload {
 
 // ─── Defaults ────────────────────────────────────────────────────────────────
 
-const DEFAULT_ERROR_ENDPOINT = "https://prism-api.irfndi.workers.dev/v1/errors/batch";
+const DEFAULT_ERROR_ENDPOINT = "https://beam-api.irfndi.workers.dev/v1/errors/batch";
 const DEFAULT_FLUSH_INTERVAL_MS = 60_000;
 const DEFAULT_BATCH_SIZE = 5;
 const MAX_PENDING_BUFFER = 1000;
-function readPrismApiKey(): Effect.Effect<string | null, never> {
+function readBeamApiKey(): Effect.Effect<string | null, never> {
   return Effect.try({
     try: () => {
-      const credentialsFile = join(getPrismUserConfigDir(), "credentials.json");
+      const credentialsFile = join(getBeamUserConfigDir(), "credentials.json");
       if (!existsSync(credentialsFile)) return null;
       const value = JSON.parse(readFileSync(credentialsFile, "utf-8")) as {
         apiKey?: unknown;
@@ -87,8 +86,8 @@ function readPrismApiKey(): Effect.Effect<string | null, never> {
 
 // ─── Sanitization patterns ───────────────────────────────────────────────────
 // Base58 chars (no 0/O/I/l): 1-9 A-H J-N P-Z a-k m-z
-// Private keys on Solana are 64 bytes → 88 base58 chars typically.
-// We target strings >= 64 chars to avoid false-positives on pool addresses.
+// Private keys (Solana base58 or EVM hex) are long; we target strings
+// >= 64 chars to avoid false-positives on addresses.
 
 const BASE58_LONG_PATTERN = /[1-9A-HJ-NP-Za-km-z]{64,}/g;
 const HEX_KEY_PATTERN = /\b0x[0-9a-fA-F]{64,}\b/g;
@@ -136,11 +135,8 @@ function classifyError(error: Error): ErrorCategory {
   if (combined.includes("rate limit") || combined.includes(" 429 ")) {
     return "RPC_RateLimit";
   }
-  if (combined.includes("helius")) {
-    return "Helius_Error";
-  }
-  if (combined.includes("solana") || combined.includes("rpc error")) {
-    return "Solana_RPC";
+  if (combined.includes("rpc error") || combined.includes("execution reverted")) {
+    return "RPC_Error";
   }
   if (combined.includes("config")) {
     return "Config_Error";
@@ -185,9 +181,9 @@ export class ErrorReporter {
   constructor(config: ErrorReporterConfig = {}) {
     const explicitEndpoint =
       config.endpoint ??
-      (typeof process !== "undefined" ? process.env.PRISM_ERROR_ENDPOINT : undefined);
+      (typeof process !== "undefined" ? process.env.BEAM_ERROR_ENDPOINT : undefined);
     const reportingEnv =
-      typeof process !== "undefined" ? process.env.PRISM_ERROR_REPORTING : undefined;
+      typeof process !== "undefined" ? process.env.BEAM_ERROR_REPORTING : undefined;
     const optOut = config.optOut ?? !readTelemetryPreference().enabled;
     const explicitEnabled = config.enabled ?? reportingEnv !== "false";
     const envDisabled = reportingEnv === "false";
@@ -195,7 +191,7 @@ export class ErrorReporter {
       explicitEndpoint ??
       (explicitEnabled && !envDisabled && !optOut ? DEFAULT_ERROR_ENDPOINT : undefined);
     this.enabled = explicitEnabled && !envDisabled && !optOut;
-    this.agentId = config.agentId ?? process.env.PRISM_AGENT_ID ?? "engine";
+    this.agentId = config.agentId ?? process.env.BEAM_AGENT_ID ?? "engine";
     this.batchSize = config.batchSize ?? DEFAULT_BATCH_SIZE;
     this.flushIntervalMs = config.flushIntervalMs ?? DEFAULT_FLUSH_INTERVAL_MS;
 
@@ -256,7 +252,7 @@ export class ErrorReporter {
     const endpoint = this.endpoint;
 
     return Effect.gen({ self: this }, function* () {
-      const apiKey = yield* readPrismApiKey();
+      const apiKey = yield* readBeamApiKey();
       if (!apiKey && endpoint === DEFAULT_ERROR_ENDPOINT) {
         // Credential-bounded: never send without an API key. Re-queue the
         // batch so reports are not lost, but avoid spamming warnings on
@@ -270,7 +266,7 @@ export class ErrorReporter {
       }
       this._missingCredentialWarned = false;
       const payload: BatchPayload = {
-        app: "prism-liquidity-agent",
+        app: "beam-clmm",
         version: this.appVersion,
         reports: batch,
       };

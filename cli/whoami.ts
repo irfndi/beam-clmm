@@ -1,5 +1,5 @@
 import { Command } from "commander";
-import { prismApiGet, readCredentials } from "./api.js";
+import { beamApiGet, readCredentials } from "./api.js";
 
 interface WhoamiResult {
   id: string;
@@ -13,18 +13,18 @@ export const whoamiCommand = new Command("whoami")
   .action(async () => {
     const creds = readCredentials();
     if (!creds) {
-      console.error("Error: Not registered. Run 'prism register' first.");
+      console.error("Error: Not registered. Run 'beam register' first.");
       process.exit(1);
     }
 
-    const result = await prismApiGet<WhoamiResult>("/v1/whoami", {
+    const result = await beamApiGet<WhoamiResult>("/v1/whoami", {
       apiKey: creds.apiKey,
     });
 
     if (!result.ok || !result.data) {
       console.error("Error: Failed to fetch user info");
       if (result.error) console.error(`  ${result.error}`);
-      console.error("Your stored credentials may be invalid. Run 'prism login <key>' to refresh.");
+      console.error("Your stored credentials may be invalid. Run 'beam login <key>' to refresh.");
       process.exit(1);
     }
 

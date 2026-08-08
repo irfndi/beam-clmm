@@ -145,7 +145,7 @@ export class AcpTransport implements AgentRuntimeTransport {
         yield* this.request("initialize", {
           protocolVersion: 1,
           clientCapabilities: {},
-          clientInfo: { name: "prism-liquidity-agent", version: getCurrentVersion() },
+          clientInfo: { name: "beam-clmm", version: getCurrentVersion() },
         });
 
         const session = yield* this.request("session/new", {
@@ -214,7 +214,7 @@ export class AcpTransport implements AgentRuntimeTransport {
   sendCheckin(checkin: AgentRuntimeCheckin): Effect.Effect<void, Error> {
     return Effect.gen({ self: this }, function* () {
       yield* this.ensureSession();
-      const prompt = `Prism check-in (${checkin.trigger}):\n\n${JSON.stringify(checkin, null, 2)}`;
+      const prompt = `Beam check-in (${checkin.trigger}):\n\n${JSON.stringify(checkin, null, 2)}`;
       // Completion is the session/prompt response (stopReason); a check-in does
       // not need the streamed reply text.
       this.sessionText = "";
@@ -271,7 +271,7 @@ export class AcpTransport implements AgentRuntimeTransport {
   }
 
   private handleMessage(msg: AcpResponse | AcpNotification | AcpRequest): void {
-    // Inbound request from the agent (carries both a method and an id). Prism is a
+    // Inbound request from the agent (carries both a method and an id). Beam is a
     // non-interactive ACP client and implements none of the client callbacks
     // (session/request_permission, fs/*, terminal/*), but it must still reply, or the
     // agent blocks indefinitely and the prompt times out.
@@ -329,7 +329,7 @@ export class AcpTransport implements AgentRuntimeTransport {
     this.write({
       jsonrpc: "2.0",
       id,
-      error: { code: -32601, message: `Method not supported by the Prism host: ${method}` },
+      error: { code: -32601, message: `Method not supported by the Beam host: ${method}` },
     });
   }
 

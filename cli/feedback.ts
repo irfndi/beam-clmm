@@ -11,7 +11,7 @@ import {
   type FeedbackSeverity,
 } from "../engine/services.js";
 import { createLogger } from "../engine/logger.js";
-import { getPrismDbPath } from "../engine/paths.js";
+import { getBeamDbPath } from "../engine/paths.js";
 
 const logger = createLogger("feedback-cli");
 
@@ -43,7 +43,7 @@ function buildProgram(): Layer.Layer<FeedbackService | ConfigService, Error, nev
   return Layer.merge(
     Layer.provide(
       FeedbackLive,
-      Layer.merge(ConfigLive, DbLive(process.env.SQLITE_DB_PATH ?? getPrismDbPath())),
+      Layer.merge(ConfigLive, DbLive(process.env.SQLITE_DB_PATH ?? getBeamDbPath())),
     ),
     ConfigLive,
   );
@@ -54,13 +54,13 @@ function formatResult(result: FeedbackResult): string {
     case "rate_limited":
       return `⚠ Rate limited: ${result.reason}`;
     case "opt_out":
-      return "ℹ Feedback is disabled. Run 'prism feedback enable' to re-enable.";
+      return "ℹ Feedback is disabled. Run 'beam feedback enable' to re-enable.";
     case "local_only":
       return `✓ Cloud unavailable; feedback stored locally (id: ${result.localId}).`;
     case "cloud":
       return result.duplicate
-        ? `✓ Feedback already exists in Prism cloud (id: ${result.id}).`
-        : `✓ Feedback submitted to Prism cloud (id: ${result.id}).`;
+        ? `✓ Feedback already exists in Beam cloud (id: ${result.id}).`
+        : `✓ Feedback submitted to Beam cloud (id: ${result.id}).`;
     case "error":
       return `✗ Failed to submit feedback: ${result.error}`;
     default:
@@ -121,19 +121,19 @@ export const feedbackCommand = new Command("feedback")
   .addHelpText(
     "after",
     `\nExamples:
-  $ prism feedback "The install process requires manual Bun install" --category friction
-  $ prism feedback "Add --yes flag to skip setup prompts" --category suggestion
-  $ prism feedback "Scan cycle is 30s on first run" --category observation
-  $ prism feedback status
-  $ prism feedback list
-  $ prism feedback disable
+  $ beam feedback "The install process requires manual Bun install" --category friction
+  $ beam feedback "Add --yes flag to skip setup prompts" --category suggestion
+  $ beam feedback "Scan cycle is 30s on first run" --category observation
+  $ beam feedback status
+  $ beam feedback list
+  $ beam feedback disable
 
 Environment:
-  PRISM_API_URL             Cloud feedback endpoint override
-  PRISM_FEEDBACK_OPT_OUT    Set to 'true' to disable automatic feedback
+  BEAM_API_URL             Cloud feedback endpoint override
+  BEAM_FEEDBACK_OPT_OUT    Set to 'true' to disable automatic feedback
 
-Feedback requires a registered Prism account. Submissions are stored in the
-Prism Cloud D1 feedback store, with local storage used only during an outage.`,
+Feedback requires a registered Beam account. Submissions are stored in the
+Beam Cloud D1 feedback store, with local storage used only during an outage.`,
   );
 
 feedbackCommand
@@ -211,7 +211,7 @@ feedbackCommand
       Effect.gen(function* () {
         const feedback = yield* FeedbackService;
         yield* feedback.setOptOut(true);
-        console.log("✓ Feedback disabled. Run 'prism feedback enable' to re-enable.");
+        console.log("✓ Feedback disabled. Run 'beam feedback enable' to re-enable.");
       }).pipe(Effect.provide(program)),
     );
   });
@@ -230,7 +230,7 @@ feedbackCommand
     );
   });
 
-// Default action: if `prism feedback "summary"` is run, behave like `submit`.
+// Default action: if `beam feedback "summary"` is run, behave like `submit`.
 feedbackCommand.action(async (summary: string, opts: SubmitOptions) => {
   if (typeof summary !== "string") {
     feedbackCommand.help();

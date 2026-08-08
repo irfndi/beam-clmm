@@ -128,7 +128,7 @@ describe("Wallet API", () => {
       expect(row.pubkey).toBe("7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU");
     });
 
-    it("rejects invalid Solana addresses", async () => {
+    it("rejects invalid EVM addresses", async () => {
       const ctx = createExecutionContext();
       const request = buildRequest(
         "POST",

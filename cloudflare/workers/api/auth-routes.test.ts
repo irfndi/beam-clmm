@@ -65,7 +65,7 @@ describe("Auth routes (login / whoami)", () => {
           "POST",
           "/v1/login",
           {},
-          { Authorization: "Bearer sk-prism-unknown-key" },
+          { Authorization: "Bearer sk-beam-unknown-key" },
         ),
         testEnv,
         createExecutionContext(),
@@ -129,7 +129,7 @@ describe("Auth routes (login / whoami)", () => {
     it("returns 401 for an unknown API key", async () => {
       const response = await worker.fetch(
         buildRequest("GET", "/v1/whoami", undefined, {
-          Authorization: "Bearer sk-prism-unknown-key",
+          Authorization: "Bearer sk-beam-unknown-key",
         }),
         testEnv,
         createExecutionContext(),

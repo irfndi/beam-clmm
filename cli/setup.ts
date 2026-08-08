@@ -1,23 +1,21 @@
 import { Command } from "commander";
 import * as p from "@clack/prompts";
 import fs from "fs";
-import { pingInstall, requireRegistered, type PrismCredentials } from "./api.js";
-import { ensurePrismConfigDir, getPrismEnvPath, getPrismDbPath } from "../engine/paths.js";
+import { pingInstall, requireRegistered, type BeamCredentials } from "./api.js";
+import { ensureBeamConfigDir, getBeamEnvPath, getBeamDbPath } from "../engine/paths.js";
 import { mergeEnvContent } from "./env-merge.js";
 
 export const setupCommand = new Command("setup")
-  .description("Configure Prism trading agent")
+  .description("Configure Beam trading agent")
   .option("--non-interactive", "Run without prompts (for agents/CI)")
-  .option("--helius-key <key>", "Optional Helius API key")
-  .option("--rpc-url <url>", "Primary Solana RPC URL")
-  .option("--rpc-fallback-url <url>", "Optional fallback Solana RPC URL")
-  .option("--jupiter-api-key <key>", "Optional Jupiter API key")
-  .option("--wallet-key-file <path>", "Path to Solana wallet keypair file (optional)")
+  .option("--rpc-url <url>", "Robinhood Chain RPC URL (default: public mainnet)")
+  .option("--rpc-fallback-url <url>", "Optional fallback RPC URL")
+  .option("--wallet-key-file <path>", "Path to EVM wallet private key file (optional)")
   .option("--watchlist <pools>", "Comma-separated pool addresses")
   .option("--paper-trading", "Enable paper trading (default: true)")
   .action(async (options) => {
     const isNonInteractive = options.nonInteractive;
-    let credentials: PrismCredentials;
+    let credentials: BeamCredentials;
     try {
       credentials = await requireRegistered(true);
     } catch (err) {
@@ -25,27 +23,18 @@ export const setupCommand = new Command("setup")
       process.exit(1);
     }
 
-    let heliusKey: string;
     let walletKey: string;
     let watchlistPools: string;
     let paperTrading: boolean;
     let rpcUrl: string;
     let rpcFallbackUrl: string;
-    let jupiterApiKey: string;
 
     if (isNonInteractive) {
-      const configuredHeliusKey = options.heliusKey || process.env.HELIUS_API_KEY || "";
-      rpcUrl = options.rpcUrl || process.env.SOLANA_RPC_URL || "";
-      if (!rpcUrl && configuredHeliusKey) {
-        rpcUrl = `https://mainnet.helius-rpc.com/?api-key=${configuredHeliusKey}`;
-      }
-      if (!rpcUrl) {
-        console.error("Error: provide --rpc-url or --helius-key in non-interactive mode");
-        process.exit(1);
-      }
-      heliusKey = configuredHeliusKey;
-      rpcFallbackUrl = options.rpcFallbackUrl || process.env.SOLANA_RPC_FALLBACK_URL || "";
-      jupiterApiKey = options.jupiterApiKey || process.env.JUPITER_API_KEY || "";
+      rpcUrl =
+        options.rpcUrl ||
+        process.env.ROBINHOOD_RPC_URL ||
+        "https://rpc.mainnet.chain.robinhood.com";
+      rpcFallbackUrl = options.rpcFallbackUrl || process.env.ROBINHOOD_RPC_FALLBACK_URL || "";
       // Read wallet key from file if provided, otherwise from env
       if (options.walletKeyFile) {
         try {
@@ -69,37 +58,23 @@ export const setupCommand = new Command("setup")
     } else {
       // Interactive mode
       console.clear();
-      p.intro("  Prism Setup  ");
+      p.intro("  Beam Setup  ");
 
       const answers = await p.group(
         {
-          heliusKey: () =>
-            p.text({
-              message: "Helius API key (optional with a custom RPC)",
-              placeholder: "leave blank when using another RPC",
-              initialValue: process.env.HELIUS_API_KEY ?? "",
-              validate: (v) => (v && v.length <= 8 ? "Key too short" : undefined),
-            }),
-
           rpcUrl: () =>
             p.text({
-              message: "Primary Solana RPC URL (optional with Helius key)",
-              placeholder: "https://...",
-              initialValue: process.env.SOLANA_RPC_URL ?? "",
+              message: "Robinhood Chain RPC URL",
+              placeholder: "https://rpc.mainnet.chain.robinhood.com",
+              initialValue:
+                process.env.ROBINHOOD_RPC_URL ?? "https://rpc.mainnet.chain.robinhood.com",
             }),
 
           rpcFallbackUrl: () =>
             p.text({
-              message: "Fallback Solana RPC URL (optional)",
+              message: "Fallback RPC URL (optional)",
               placeholder: "https://...",
-              initialValue: process.env.SOLANA_RPC_FALLBACK_URL ?? "",
-            }),
-
-          jupiterApiKey: () =>
-            p.text({
-              message: "Jupiter API key (optional, improves price API limits)",
-              placeholder: "leave blank to use public fallback",
-              initialValue: process.env.JUPITER_API_KEY ?? "",
+              initialValue: process.env.ROBINHOOD_RPC_FALLBACK_URL ?? "",
             }),
 
           walletKey: () =>
@@ -130,15 +105,10 @@ export const setupCommand = new Command("setup")
         },
       );
 
-      heliusKey = (answers.heliusKey as string) || "";
       rpcUrl = (answers.rpcUrl as string) || "";
       rpcFallbackUrl = (answers.rpcFallbackUrl as string) || "";
-      jupiterApiKey = (answers.jupiterApiKey as string) || "";
-      if (!rpcUrl.trim() && heliusKey.trim()) {
-        rpcUrl = `https://mainnet.helius-rpc.com/?api-key=${heliusKey}`;
-      }
       if (!rpcUrl.trim()) {
-        p.cancel("A primary RPC URL or Helius API key is required.");
+        p.cancel("A Robinhood Chain RPC URL is required.");
         process.exit(1);
       }
       walletKey = (answers.walletKey as string) || "";
@@ -162,10 +132,8 @@ export const setupCommand = new Command("setup")
 
     const envContent = [
       "# RPC providers",
-      `HELIUS_API_KEY=${escapeEnv(heliusKey)}`,
-      `SOLANA_RPC_URL=${escapeEnv(rpcUrl)}`,
-      `SOLANA_RPC_FALLBACK_URL=${escapeEnv(rpcFallbackUrl)}`,
-      `JUPITER_API_KEY=${escapeEnv(jupiterApiKey)}`,
+      `ROBINHOOD_RPC_URL=${escapeEnv(rpcUrl)}`,
+      `ROBINHOOD_RPC_FALLBACK_URL=${escapeEnv(rpcFallbackUrl)}`,
       "",
       "# Wallet (optional — leave empty for paper trading)",
       `WALLET_PRIVATE_KEY=${escapeEnv(walletKey)}`,
@@ -182,14 +150,14 @@ export const setupCommand = new Command("setup")
       "TRAILING_STOP_PCT=0.10",
       "",
       "# SQLite",
-      `SQLITE_DB_PATH=${escapeEnv(getPrismDbPath())}`,
+      `SQLITE_DB_PATH=${escapeEnv(getBeamDbPath())}`,
       "",
       "# Pools",
       `WATCHLIST_POOLS=${escapeEnv(watchlistPools)}`,
     ].join("\n");
 
-    ensurePrismConfigDir();
-    const envPath = getPrismEnvPath();
+    ensureBeamConfigDir();
+    const envPath = getBeamEnvPath();
     const existingEnv = fs.existsSync(envPath) ? fs.readFileSync(envPath, "utf-8") : null;
     if (existingEnv !== null) {
       const backupPath = `${envPath}.backup.${Date.now()}`;
@@ -213,8 +181,8 @@ export const setupCommand = new Command("setup")
           "✓ .env created",
           "",
           "Next steps:",
-          "  1. Run agent:     prism dev",
-          "  2. Run backtest:  prism backtest",
+          "  1. Run agent:     beam dev",
+          "  2. Run backtest:  beam backtest",
         ].join("\n"),
         "Setup complete",
       );

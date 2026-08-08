@@ -1,4 +1,4 @@
-"""AutoGPT plugin for Prism — autonomous Solana liquidity agent."""
+"""AutoGPT plugin for Beam — autonomous Solana liquidity agent."""
 from __future__ import annotations
 
 import shutil
@@ -17,27 +17,27 @@ class Message(TypedDict):
 
 
 _INSTALL_URL = (
-    "https://raw.githubusercontent.com/irfndi/prism-liquidity-agent"
+    "https://raw.githubusercontent.com/irfndi/beam-clmm"
     "/main/scripts/install.sh"
 )
 
 
-def _find_prism() -> str:
-    """Locate the ``prism`` binary on PATH."""
-    path = shutil.which("prism")
+def _find_beam() -> str:
+    """Locate the ``beam`` binary on PATH."""
+    path = shutil.which("beam")
     if path is not None:
         return path
     raise FileNotFoundError(
-        "prism CLI not found on PATH. Run the prism_install command first, "
-        "or install Prism manually: "
+        "beam CLI not found on PATH. Run the beam_install command first, "
+        "or install Beam manually: "
         f"curl -fsSL {_INSTALL_URL} | bash"
     )
 
 
-def _run_prism(*args: str, timeout: int = 120) -> str:
-    """Run a prism CLI command and return combined stdout+stderr."""
-    prism = _find_prism()
-    cmd = [prism, *args]
+def _run_beam(*args: str, timeout: int = 120) -> str:
+    """Run a beam CLI command and return combined stdout+stderr."""
+    beam = _find_beam()
+    cmd = [beam, *args]
     try:
         result = subprocess.run(
             cmd,
@@ -52,19 +52,19 @@ def _run_prism(*args: str, timeout: int = 120) -> str:
             )
         return output or "(no output)"
     except subprocess.TimeoutExpired:
-        return f"Command timed out after {timeout}s: prism {' '.join(args)}"
+        return f"Command timed out after {timeout}s: beam {' '.join(args)}"
     except FileNotFoundError as exc:
         return str(exc)
     except OSError as exc:
-        return f"Failed to execute prism: {exc}"
+        return f"Failed to execute beam: {exc}"
 
 
 # ---------------------------------------------------------------------------
 # Command callbacks
 # ---------------------------------------------------------------------------
 
-def _prism_install(**_kwargs: Any) -> str:
-    """Run the Prism one-liner install script."""
+def _beam_install(**_kwargs: Any) -> str:
+    """Run the Beam one-liner install script."""
     try:
         result = subprocess.run(
             ["bash", "-c", f"curl -fsSL {_INSTALL_URL} | bash"],
@@ -80,8 +80,8 @@ def _prism_install(**_kwargs: Any) -> str:
                 else f"Install failed (exit {result.returncode})"
             )
         return (
-            f"Prism installed successfully.\n{output}\n\n"
-            "Run 'prism --help' to verify, then use prism_setup to configure."
+            f"Beam installed successfully.\n{output}\n\n"
+            "Run 'beam --help' to verify, then use beam_setup to configure."
         )
     except subprocess.TimeoutExpired:
         return "Install timed out after 180s. Check your network connection."
@@ -89,32 +89,32 @@ def _prism_install(**_kwargs: Any) -> str:
         return f"Failed to run installer: {exc}"
 
 
-def _prism_setup(helius_key: str = "", **_kwargs: Any) -> str:
-    """Run ``prism setup`` with the provided Helius API key."""
+def _beam_setup(helius_key: str = "", **_kwargs: Any) -> str:
+    """Run ``beam setup`` with the provided Helius API key."""
     if not helius_key or not helius_key.strip():
         return (
             "Error: helius_key is required. "
             "Get a free key at https://helius.dev"
         )
-    return _run_prism(
+    return _run_beam(
         "setup", "--non-interactive", "--helius-key", helius_key.strip()
     )
 
 
-def _prism_start(**_kwargs: Any) -> str:
-    """Start Prism in paper-trading mode (``prism dev``) as a background process."""
+def _beam_start(**_kwargs: Any) -> str:
+    """Start Beam in paper-trading mode (``beam dev``) as a background process."""
     try:
-        prism = _find_prism()
+        beam = _find_beam()
         # Start in background so AutoGPT doesn't block forever
         proc = subprocess.Popen(
-            [prism, "dev"],
+            [beam, "dev"],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             start_new_session=True,
         )
         return (
-            f"Prism agent started in background (PID {proc.pid}). "
-            "Use prism_status to verify it's running."
+            f"Beam agent started in background (PID {proc.pid}). "
+            "Use beam_status to verify it's running."
         )
     except FileNotFoundError as exc:
         return str(exc)
@@ -122,17 +122,17 @@ def _prism_start(**_kwargs: Any) -> str:
         return f"Failed to start agent: {exc}"
 
 
-def _prism_status(**_kwargs: Any) -> str:
-    """Get current Prism status."""
+def _beam_status(**_kwargs: Any) -> str:
+    """Get current Beam status."""
     try:
-        prism = _find_prism()
+        beam = _find_beam()
         result = subprocess.run(
-            [prism, "--help"],
+            [beam, "--help"],
             capture_output=True,
             text=True,
             timeout=30,
         )
-        return (result.stdout + result.stderr).strip() or "prism is installed"
+        return (result.stdout + result.stderr).strip() or "beam is installed"
     except FileNotFoundError as exc:
         return str(exc)
     except subprocess.TimeoutExpired:
@@ -141,10 +141,10 @@ def _prism_status(**_kwargs: Any) -> str:
         return f"Failed to check status: {exc}"
 
 
-def _prism_stop(**_kwargs: Any) -> str:
-    """Stop the running Prism agent (best-effort)."""
+def _beam_stop(**_kwargs: Any) -> str:
+    """Stop the running Beam agent (best-effort)."""
     try:
-        # prism doesn't have a dedicated stop command; kill the background process
+        # beam doesn't have a dedicated stop command; kill the background process
         result = subprocess.run(
             ["pkill", "-f", "bun.*engine/index.ts"],
             capture_output=True,
@@ -152,25 +152,25 @@ def _prism_stop(**_kwargs: Any) -> str:
             timeout=10,
         )
         if result.returncode == 0:
-            return "Prism agent stopped."
-        # Also try killing by the prism wrapper name
+            return "Beam agent stopped."
+        # Also try killing by the beam wrapper name
         result2 = subprocess.run(
-            ["pkill", "-f", "prism dev"],
+            ["pkill", "-f", "beam dev"],
             capture_output=True,
             text=True,
             timeout=10,
         )
         if result2.returncode == 0:
-            return "Prism agent stopped."
+            return "Beam agent stopped."
         return (
-            "No running Prism agent found. "
-            "If Prism is running in another terminal, stop it manually."
+            "No running Beam agent found. "
+            "If Beam is running in another terminal, stop it manually."
         )
     except FileNotFoundError:
         # pkill not available (Windows)
         return (
             "Automatic stop is not supported on this platform. "
-            "Stop Prism manually or close the terminal running 'prism dev'."
+            "Stop Beam manually or close the terminal running 'beam dev'."
         )
     except OSError as exc:
         return f"Failed to stop agent: {exc}"
@@ -180,15 +180,15 @@ def _prism_stop(**_kwargs: Any) -> str:
 # Plugin class
 # ---------------------------------------------------------------------------
 
-class AutoGPTPrism(AutoGPTPluginTemplate):
-    """AutoGPT plugin that exposes Prism liquidity-agent commands."""
+class AutoGPTBeam(AutoGPTPluginTemplate):
+    """AutoGPT plugin that exposes Beam liquidity-agent commands."""
 
     def __init__(self) -> None:
         super().__init__()
-        self._name = "AutoGPT-Prism-Plugin"
+        self._name = "AutoGPT-Beam-Plugin"
         self._version = "0.1.0"
         self._description = (
-            "AutoGPT Prism Plugin: Manage an autonomous Solana liquidity agent."
+            "AutoGPT Beam Plugin: Manage an autonomous Solana liquidity agent."
         )
         self.load_commands = True
 
@@ -198,36 +198,36 @@ class AutoGPTPrism(AutoGPTPluginTemplate):
         return True
 
     def post_prompt(self, prompt: PromptGenerator) -> PromptGenerator:
-        """Register Prism commands with AutoGPT's prompt generator."""
+        """Register Beam commands with AutoGPT's prompt generator."""
         prompt.add_command(
-            "Install Prism liquidity agent",
-            "prism_install",
+            "Install Beam liquidity agent",
+            "beam_install",
             {},
-            _prism_install,
+            _beam_install,
         )
         prompt.add_command(
-            "Setup Prism with Helius API key",
-            "prism_setup",
+            "Setup Beam with Helius API key",
+            "beam_setup",
             {"helius_key": "<helius_api_key>"},
-            _prism_setup,
+            _beam_setup,
         )
         prompt.add_command(
-            "Start Prism in paper-trading mode",
-            "prism_start",
+            "Start Beam in paper-trading mode",
+            "beam_start",
             {},
-            _prism_start,
+            _beam_start,
         )
         prompt.add_command(
-            "Get Prism status",
-            "prism_status",
+            "Get Beam status",
+            "beam_status",
             {},
-            _prism_status,
+            _beam_status,
         )
         prompt.add_command(
-            "Stop the Prism agent",
-            "prism_stop",
+            "Stop the Beam agent",
+            "beam_stop",
             {},
-            _prism_stop,
+            _beam_stop,
         )
         return prompt
 

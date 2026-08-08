@@ -21,8 +21,8 @@ jobs:
       CI: true
       NODE_ENV: test
       ANTHROPIC_API_KEY: test-anthropic-key
-      HELIUS_API_KEY: test-helius-key
-      SOLANA_RPC_URL: https://example.com
+      ROBINHOOD_RPC_URL: https://example.com
+      
       WALLET_PRIVATE_KEY: test-private-key
       LOG_LEVEL: error
     steps:
@@ -59,11 +59,11 @@ jobs:
       # wrapper was previously excluded from every lint/format/test gate. The
       # HOME-unset run executes the wrapper to prove the PATH-based bun lookup
       # works without a home directory (systemd units, cron, minimal images).
-      - name: Smoke test scripts/prism.sh
+      - name: Smoke test scripts/beam.sh
         run: |
-          bash -n scripts/prism.sh
-          scripts/prism.sh --version
-          env -u HOME PATH="$PATH" scripts/prism.sh --version
+          bash -n scripts/beam.sh
+          scripts/beam.sh --version
+          env -u HOME PATH="$PATH" scripts/beam.sh --version
 
       # Coverage was local-only; this also enforces the istanbul thresholds
       # configured in vitest.config.ts so PRs can't silently regress them.
@@ -212,8 +212,8 @@ jobs:
         with:
           name: canary-bundle-${{ matrix.platform-key }}
           path: |
-            prism-v*.tar.gz
-            prism-v*.tar.gz.sha256
+            beam-v*.tar.gz
+            beam-v*.tar.gz.sha256
           if-no-files-found: error
 
   canary-publish:
@@ -253,7 +253,7 @@ jobs:
           mkdir -p canary-assets
           for dir in canary-assets/canary-bundle-*/; do
             if [ -d "$dir" ]; then
-              mv "$dir"prism-v* canary-assets/ 2>/dev/null || true
+              mv "$dir"beam-v* canary-assets/ 2>/dev/null || true
               rmdir "$dir" 2>/dev/null || true
             fi
           done
@@ -269,10 +269,10 @@ jobs:
         env:
           VERSION: ${{ needs.canary-prepare.outputs.canary_version }}
         run: |
-          TARBALL_NAME="prism-v${VERSION}.tar.gz"
+          TARBALL_NAME="beam-v${VERSION}.tar.gz"
           echo "Building ${TARBALL_NAME}"
-          mkdir -p /tmp/prism-release
-          tar -czf "/tmp/prism-release/${TARBALL_NAME}" \
+          mkdir -p /tmp/beam-release
+          tar -czf "/tmp/beam-release/${TARBALL_NAME}" \
             --warning=no-file-changed \
             --exclude=node_modules \
             --exclude=dist \
@@ -293,7 +293,7 @@ jobs:
             --exclude=.rtk \
             --exclude=.opencode \
             .
-          cp "/tmp/prism-release/${TARBALL_NAME}" "./${TARBALL_NAME}"
+          cp "/tmp/beam-release/${TARBALL_NAME}" "./${TARBALL_NAME}"
           sha256sum "${TARBALL_NAME}" > "${TARBALL_NAME}.sha256"
           mv "${TARBALL_NAME}" "${TARBALL_NAME}.sha256" canary-assets/
           ls -lh canary-assets/
@@ -325,7 +325,7 @@ jobs:
           for f in canary-assets/*; do
             [ -f "$f" ] || continue
             [ "$(basename "$f")" = "manifest.json" ] && continue
-            npx wrangler r2 object put "prism-backups/${BUILD_DIR}/$(basename "$f")" --file "$f" --remote
+            npx wrangler r2 object put "beam-backups/${BUILD_DIR}/$(basename "$f")" --file "$f" --remote
           done
 
       - name: Upload canary manifest pointer to R2 (atomic flip)
@@ -333,7 +333,7 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: |
-          npx wrangler r2 object put "prism-backups/releases/channel/canary.json" --file canary-assets/manifest.json --remote
+          npx wrangler r2 object put "beam-backups/releases/channel/canary.json" --file canary-assets/manifest.json --remote
 
       - name: Garbage-collect old canary builds
         continue-on-error: true
@@ -352,7 +352,7 @@ jobs:
           node -e '
             const token = process.env.CLOUDFLARE_API_TOKEN;
             const account = process.env.CLOUDFLARE_ACCOUNT_ID;
-            const bucket = "prism-backups";
+            const bucket = "beam-backups";
             const keep = process.env.BUILD_DIR;
             const re = /^[0-9]{8}T[0-9]{6}-[0-9a-f]{8}$/;
             (async () => {
@@ -413,7 +413,7 @@ jobs:
 
           while IFS= read -r key; do
             [ -n "$key" ] || continue
-            npx wrangler r2 object delete "prism-backups/${key}" --remote || FAILED=1
+            npx wrangler r2 object delete "beam-backups/${key}" --remote || FAILED=1
           done < /tmp/canary-gc-keys.txt
 
           if [ "$FAILED" -ne 0 ]; then
@@ -427,4 +427,4 @@ jobs:
           FULL_SHA: ${{ needs.canary-prepare.outputs.full_sha }}
         run: |
           echo "Canary published: ${CANARY_VERSION} (commit ${FULL_SHA})"
-          echo "Users can install with: prism update --canary"
+          echo "Users can install with: beam update --canary"

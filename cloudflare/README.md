@@ -1,8 +1,8 @@
-# Prism Cloudflare Workers
+# Beam Cloudflare Workers
 
-Cloudflare Workers subproject for the Prism Liquidity Agent platform. Hosts the API backend and Telegram bot for multi-tenant registration, authentication, wallet management, and notifications.
+Cloudflare Workers subproject for the Beam Liquidity Agent platform. Hosts the API backend and Telegram bot for multi-tenant registration, authentication, wallet management, and notifications.
 
-> **For agent harnesses (OpenClaw, Hermes, acpx):** These workers are **already deployed** in production. You do NOT need to set up or deploy them. Just use the live API at `https://prism-api.irfndi.workers.dev`. This README is for human operators and developers who need to redeploy.
+> **For agent harnesses (OpenClaw, Hermes, acpx):** These workers are **already deployed** in production. You do NOT need to set up or deploy them. Just use the live API at `https://beam-api.irfndi.workers.dev`. This README is for human operators and developers who need to redeploy.
 
 ## Architecture
 
@@ -17,7 +17,7 @@ cloudflare/
 │       └── telegram-bot.test.ts     # Bot tests (vitest-pool-workers)
 ├── infra/                           # Bun workspace package — Alchemy IaC (Effect 4 runtime)
 │   ├── alchemy.run.ts               # Alchemy composition root: both workers + D1/KV/R2/Vectorize
-│   ├── package.json                 # @prism-liquidity-agent/infra: alchemy (pinned) + effect@4 beta
+│   ├── package.json                 # @beam-clmm/infra: alchemy (pinned) + effect@4 beta
 │   └── tsconfig.json                # Strict config for the composition root
 ├── migrations/
 │   └── NNNN_*.sql                   # D1 schema migrations (users, api_keys, telegram_link_codes, …)
@@ -40,9 +40,9 @@ cloudflare/
 
 | Resource              | Value                                         | Status    |
 | --------------------- | --------------------------------------------- | --------- |
-| API Worker            | https://prism-api.irfndi.workers.dev          | ✅ Live   |
-| Telegram Bot          | https://prism-telegram-bot.irfndi.workers.dev | ✅ Live   |
-| Telegram Bot Username | @prism_agent_bot                              | ✅ Active |
+| API Worker            | https://beam-api.irfndi.workers.dev          | ✅ Live   |
+| Telegram Bot          | https://beam-telegram-bot.irfndi.workers.dev | ✅ Live   |
+| Telegram Bot Username | @beam_agent_bot                              | ✅ Active |
 | Cloudflare Account ID | `a37da71c38a2f7ab732057d87d5d0f6e`            | Active    |
 
 ## Deploying via Alchemy
@@ -64,21 +64,21 @@ The stack adopts pre-existing resources by their exact physical name on first de
 
 | Binding   | Resource | Physical name  | ID / config                                 |
 | --------- | -------- | -------------- | ------------------------------------------- |
-| `DB`      | D1       | `prism-db`     | `0657c2b3-fdea-4b33-b11b-8d0a7b27cbc8`      |
-| `CACHE`   | KV       | `prism-cache`  | `78d7fb5d3fab494dbc8f2940e524f22d`          |
-| `BACKUPS` | R2       | `prism-backups`|                                             |
-| `TELEMETRY_ARCHIVE` | R2 | `prism-telemetry` | Deduplicated error summaries — **created by the stack** if absent |
-| `MEMORY`  | Vectorize| `prism-memory` | 384 dimensions, cosine                      |
+| `DB`      | D1       | `beam-db`     | `0657c2b3-fdea-4b33-b11b-8d0a7b27cbc8`      |
+| `CACHE`   | KV       | `beam-cache`  | `78d7fb5d3fab494dbc8f2940e524f22d`          |
+| `BACKUPS` | R2       | `beam-backups`|                                             |
+| `TELEMETRY_ARCHIVE` | R2 | `beam-telemetry` | Deduplicated error summaries — **created by the stack** if absent |
+| `MEMORY`  | Vectorize| `beam-memory` | 384 dimensions, cosine                      |
 
 Physical identity comes from these names, so the `prod` stage never renames anything; the stage only scopes the Alchemy state keyspace. Data resources adopt implicitly. The two WORKERS adopt explicitly: workers carry ownership tags, and these were created by wrangler (unowned), so the deploy scripts run with `--adopt` — a one-time takeover that tags them for this stack, and a no-op on every later deploy for resources the stack already owns.
 
-`prism-telemetry` is the one exception to "adopted by name": it did not exist before this stack, so the first deploy creates it. The `alchemy destroy` guardrail below applies to it — `prism-telemetry` holds deduplicated error summaries and must never be destroyed by an accidental `alchemy destroy`.
+`beam-telemetry` is the one exception to "adopted by name": it did not exist before this stack, so the first deploy creates it. The `alchemy destroy` guardrail below applies to it — `beam-telemetry` holds deduplicated error summaries and must never be destroyed by an accidental `alchemy destroy`.
 
 ### Guardrails
 
 > **Never change a resource `name` / `title` in `alchemy.run.ts`.** The same goes for the D1 `jurisdiction` / location hint and the Vectorize `dimensions` / `metric`. All of them are creation-immutable, and editing any one breaks adoption and plans a **destructive REPLACE** (drop + recreate) of a production resource.
 >
-> The `prism-backups` R2 bucket is also written out-of-band by `release.yml` / `ci.yml` (`wrangler r2 object put`). It is declared here only so the `BACKUPS` binding exists. **Never run `alchemy destroy` against it.**
+> The `beam-backups` R2 bucket is also written out-of-band by `release.yml` / `ci.yml` (`wrangler r2 object put`). It is declared here only so the `BACKUPS` binding exists. **Never run `alchemy destroy` against it.**
 
 ### One-time bootstrap (before the first CI deploy)
 
@@ -112,8 +112,8 @@ Alchemy applies `cloudflare/migrations/*.sql` on every deploy, using the wrangle
 ### Manual local deploy
 
 ```bash
-git clone https://github.com/irfndi/prism-liquidity-agent.git
-cd prism-liquidity-agent/cloudflare
+git clone https://github.com/irfndi/beam-clmm.git
+cd beam-clmm/cloudflare
 bun install                        # workspace install: workers + infra (effect@4 beta)
 
 # Secrets resolve from env at deploy time (see above):
@@ -137,7 +137,7 @@ Telegram webhook registration is NOT managed by Alchemy. It is the same manual s
 ```bash
 # Replace YOUR_BOT_TOKEN with the @BotFather token.
 # secret_token MUST match TELEGRAM_WEBHOOK_SECRET; the worker fails closed without it.
-curl "https://api.telegram.org/botYOUR_BOT_TOKEN/setWebhook?url=https://prism-telegram-bot.irfndi.workers.dev/webhook&secret_token=YOUR_WEBHOOK_SECRET"
+curl "https://api.telegram.org/botYOUR_BOT_TOKEN/setWebhook?url=https://beam-telegram-bot.irfndi.workers.dev/webhook&secret_token=YOUR_WEBHOOK_SECRET"
 
 # Verify
 curl "https://api.telegram.org/botYOUR_BOT_TOKEN/getWebhookInfo"
@@ -188,7 +188,7 @@ NULL. Users toggle delivery with `/alerts on|off` in the bot.
 | Command     | Description                                |
 | ----------- | ------------------------------------------ |
 | `/start`    | Welcome message                            |
-| `/register` | Create new Prism account (returns API key) |
+| `/register` | Create new Beam account (returns API key) |
 | `/link`     | Instructions to link existing account      |
 | `/whoami`   | Show account info (user ID, tier)          |
 | `/status`   | Show agent status (positions, P&L)         |
@@ -206,11 +206,11 @@ replies.
 
 ## Bindings
 
-- **DB** (D1): `prism-db` — accounts, feedback, errors, installs, audit summaries, and trading metadata
-- **CACHE** (KV): `prism-cache` — rate limits, session cache
-- **BACKUPS** (R2): `prism-backups` — database backups
-- **TELEMETRY_ARCHIVE** (R2): `prism-telemetry` — latest deduplicated error summaries
-- **MEMORY** (Vectorize): `prism-memory` — embeddings (384d, cosine)
+- **DB** (D1): `beam-db` — accounts, feedback, errors, installs, audit summaries, and trading metadata
+- **CACHE** (KV): `beam-cache` — rate limits, session cache
+- **BACKUPS** (R2): `beam-backups` — database backups
+- **TELEMETRY_ARCHIVE** (R2): `beam-telemetry` — latest deduplicated error summaries
+- **MEMORY** (Vectorize): `beam-memory` — embeddings (384d, cosine)
 
 ## Observability
 
@@ -218,16 +218,16 @@ Both workers have logs enabled (`invocation_logs: true`, `persist: true`). View 
 
 ```bash
 # Live tail
-wrangler tail prism-api
-wrangler tail prism-telegram-bot
+wrangler tail beam-api
+wrangler tail beam-telegram-bot
 
 # Historical (Cloudflare dashboard)
-# https://dash.cloudflare.com → Workers & Pages → prism-api → Logs
+# https://dash.cloudflare.com → Workers & Pages → beam-api → Logs
 ```
 
 Client errors are summarized in D1 by user and normalized error fingerprint;
 the summary tracks first seen, last seen, and occurrence count. The latest
-sanitized summary for each fingerprint is mirrored to the `prism-telemetry`
+sanitized summary for each fingerprint is mirrored to the `beam-telemetry`
 R2 bucket under `telemetry/errors/`. Retries with the same report ID are
 idempotent and do not increment the occurrence count.
 
@@ -328,7 +328,7 @@ export default {
 This is a worker runtime error. Check logs:
 
 ```bash
-wrangler tail prism-api
+wrangler tail beam-api
 ```
 
 Then trigger a request. The error will appear in the tail output.
@@ -338,8 +338,8 @@ Then trigger a request. The error will appear in the tail output.
 The login endpoint requires a Bearer token in the `Authorization` header:
 
 ```bash
-curl -X POST https://prism-api.example.workers.dev/v1/login \
-  -H "Authorization: Bearer sk-prism-xxx" \
+curl -X POST https://beam-api.example.workers.dev/v1/login \
+  -H "Authorization: Bearer sk-beam-xxx" \
   -H "Content-Type: application/json"
 ```
 
@@ -350,11 +350,11 @@ curl -X POST https://prism-api.example.workers.dev/v1/login \
    curl "https://api.telegram.org/botYOUR_TOKEN/getWebhookInfo"
    ```
 2. Verify the URL is accessible (no auth, returns 200)
-3. Check worker logs: `wrangler tail prism-telegram-bot`
+3. Check worker logs: `wrangler tail beam-telegram-bot`
 
 ### KV namespace not found
 
-Bindings resolve by the physical title declared in `alchemy.run.ts` (`prism-cache`), not by an ID in a config file. Verify the namespace still exists in the account:
+Bindings resolve by the physical title declared in `alchemy.run.ts` (`beam-cache`), not by an ID in a config file. Verify the namespace still exists in the account:
 
 ```bash
 wrangler kv namespace list
@@ -367,9 +367,9 @@ Declared as literal strings in each worker's `env: {}` block in `alchemy.run.ts`
 | Variable               | Default                                                 | Description                    |
 | ---------------------- | ------------------------------------------------------- | ------------------------------ |
 | `ENVIRONMENT`          | `production`                                            | Environment name               |
-| `TELEGRAM_WEBHOOK_URL` | `https://prism-telegram-bot.irfndi.workers.dev/webhook` | Webhook URL                    |
-| `TELEGRAM_BOT_URL`     | `https://prism-telegram-bot.irfndi.workers.dev`         | Bot worker base URL (alert push) |
-| `API_BASE_URL`         | `https://prism-api.irfndi.workers.dev`                  | API URL (used by Telegram bot) |
+| `TELEGRAM_WEBHOOK_URL` | `https://beam-telegram-bot.irfndi.workers.dev/webhook` | Webhook URL                    |
+| `TELEGRAM_BOT_URL`     | `https://beam-telegram-bot.irfndi.workers.dev`         | Bot worker base URL (alert push) |
+| `API_BASE_URL`         | `https://beam-api.irfndi.workers.dev`                  | API URL (used by Telegram bot) |
 
 ## Related Documentation
 
@@ -381,6 +381,6 @@ Declared as literal strings in each worker's `env: {}` block in `alchemy.run.ts`
 
 ## Support
 
-- Feedback and issues: `prism feedback "..."` or `prism issue "..."` (stored in D1)
-- Telegram Bot: @prism_agent_bot
-- Docs: https://github.com/irfndi/prism-liquidity-agent/tree/main/docs
+- Feedback and issues: `beam feedback "..."` or `beam issue "..."` (stored in D1)
+- Telegram Bot: @beam_agent_bot
+- Docs: https://github.com/irfndi/beam-clmm/tree/main/docs

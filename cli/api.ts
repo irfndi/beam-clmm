@@ -2,15 +2,15 @@ import fs from "fs";
 import path from "path";
 import { getOrCreateInstallId } from "./install-id.js";
 import { getCurrentVersion } from "../engine/version.js";
-import { getPrismUserConfigDir } from "../engine/paths.js";
+import { getBeamUserConfigDir } from "../engine/paths.js";
 
-const DEFAULT_API_URL = "https://prism-api.irfndi.workers.dev";
+const DEFAULT_API_URL = "https://beam-api.irfndi.workers.dev";
 
 export function getApiBaseUrl(): string {
-  return process.env.PRISM_API_URL ?? DEFAULT_API_URL;
+  return process.env.BEAM_API_URL ?? DEFAULT_API_URL;
 }
 
-export const CREDENTIALS_FILE = path.join(getPrismUserConfigDir(), "credentials.json");
+export const CREDENTIALS_FILE = path.join(getBeamUserConfigDir(), "credentials.json");
 
 export interface ApiResponse<T> {
   ok: boolean;
@@ -19,13 +19,13 @@ export interface ApiResponse<T> {
   error?: string;
 }
 
-export interface PrismCredentials {
+export interface BeamCredentials {
   apiKey: string;
   userId: string;
   createdAt: string;
 }
 
-export async function prismApiPost<T = unknown>(
+export async function beamApiPost<T = unknown>(
   path: string,
   body: Record<string, unknown>,
   options: { apiKey?: string; signal?: AbortSignal } = {},
@@ -50,7 +50,7 @@ export async function prismApiPost<T = unknown>(
       return {
         ok: false,
         status: response.status,
-        error: `Prism API error: ${response.status} ${response.statusText}`,
+        error: `Beam API error: ${response.status} ${response.statusText}`,
       };
     }
     const json = (await response.json()) as T;
@@ -64,7 +64,7 @@ export async function prismApiPost<T = unknown>(
   }
 }
 
-export async function prismApiGet<T = unknown>(
+export async function beamApiGet<T = unknown>(
   path: string,
   options: { apiKey?: string } = {},
 ): Promise<ApiResponse<T>> {
@@ -81,7 +81,7 @@ export async function prismApiGet<T = unknown>(
       return {
         ok: false,
         status: response.status,
-        error: `Prism API error: ${response.status} ${response.statusText}`,
+        error: `Beam API error: ${response.status} ${response.statusText}`,
       };
     }
     const json = (await response.json()) as T;
@@ -108,20 +108,20 @@ export function readCredentials(): {
   }
 }
 
-export async function requireRegistered(validate = false): Promise<PrismCredentials> {
+export async function requireRegistered(validate = false): Promise<BeamCredentials> {
   const credentials = readCredentials();
   if (!credentials?.apiKey || !credentials.userId) {
-    throw new Error("Prism account required. Run 'prism register' first.");
+    throw new Error("Beam account required. Run 'beam register' first.");
   }
   if (validate) {
-    const result = await prismApiPost(
+    const result = await beamApiPost(
       "/v1/login",
       {},
       { apiKey: credentials.apiKey, signal: AbortSignal.timeout(5000) },
     );
     if (!result.ok) {
       throw new Error(
-        `Stored Prism credentials are invalid or unavailable. Run 'prism login <key>'.${
+        `Stored Beam credentials are invalid or unavailable. Run 'beam login <key>'.${
           result.error ? ` ${result.error}` : ""
         }`,
       );
@@ -167,7 +167,7 @@ export function pingInstall(
         signal: controller.signal,
       };
       if (credentials?.apiKey) requestOptions.apiKey = credentials.apiKey;
-      const result = await prismApiPost("/v1/installs/ping", body, requestOptions).finally(() =>
+      const result = await beamApiPost("/v1/installs/ping", body, requestOptions).finally(() =>
         clearTimeout(timeout),
       );
       return result.ok;

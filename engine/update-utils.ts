@@ -5,7 +5,7 @@ import path from "path";
 export function getVersionAgnosticInstallDir(installDir: string): string {
   const normalized = path.normalize(installDir);
   const name = path.basename(normalized);
-  const match = /^(prism(?:-dlmm|-liquidity-agent)?)-v\d+\.\d+\.\d+(?:[-+].+)?$/.exec(name);
+  const match = /^(beam-clmm)-v\d+\.\d+\.\d+(?:[-+].+)?$/.exec(name);
   const prefix = match?.[1];
   return prefix ? path.join(path.dirname(normalized), prefix) : normalized;
 }
@@ -75,7 +75,7 @@ export interface GitHubRelease {
 }
 
 export const R2_PUBLIC_URL = "https://pub-2f55c98709e74d1d900b89ec20f8f1fc.r2.dev";
-export const R2_RELEASES_BUCKET = "prism-backups";
+export const R2_RELEASES_BUCKET = "beam-backups";
 export const R2_MANIFEST_PATHS: Record<"stable" | "beta" | "dev" | "canary", string> = {
   stable: "releases/latest.json",
   beta: "releases/channel/beta.json",
@@ -95,7 +95,7 @@ export function fetchR2Manifest(
       () =>
         fetch(url, {
           headers: {
-            "User-Agent": "prism-liquidity-agent",
+            "User-Agent": "beam-clmm",
             Accept: "application/json",
           },
         }),
@@ -131,7 +131,7 @@ export function fetchGitHubRelease(
         : `https://api.github.com/repos/${repo}/releases`;
 
     const headers: Record<string, string> = {
-      "User-Agent": "prism-liquidity-agent",
+      "User-Agent": "beam-clmm",
       Accept: "application/vnd.github.v3+json",
     };
     if (token) {
@@ -192,7 +192,7 @@ export function fetchGitHubRelease(
 
       pageCount++;
       const pageHeaders: Record<string, string> = {
-        "User-Agent": "prism-liquidity-agent",
+        "User-Agent": "beam-clmm",
         Accept: "application/vnd.github.v3+json",
       };
       if (token) {
@@ -259,13 +259,13 @@ export function githubReleaseToInfo(
   const sigAsset = release.assets.find((a) => a.name.endsWith(".asc"));
   const bundleAsset = release.assets.find(
     (a) =>
-      a.name.startsWith(`prism-v${release.tag_name.replace(/^v/, "")}-${platformKey}`) &&
+      a.name.startsWith(`beam-v${release.tag_name.replace(/^v/, "")}-${platformKey}`) &&
       a.name.endsWith(".tar.gz") &&
       !a.name.endsWith(".sha256"),
   );
   const bundleSha256Asset = release.assets.find(
     (a) =>
-      a.name.startsWith(`prism-v${release.tag_name.replace(/^v/, "")}-${platformKey}`) &&
+      a.name.startsWith(`beam-v${release.tag_name.replace(/^v/, "")}-${platformKey}`) &&
       a.name.endsWith(".sha256"),
   );
 

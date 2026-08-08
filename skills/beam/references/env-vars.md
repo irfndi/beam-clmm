@@ -1,6 +1,6 @@
-# Prism Environment Variables
+# Beam Environment Variables
 
-All environment variables are optional; Prism uses conservative defaults for any
+All environment variables are optional; Beam uses conservative defaults for any
 value not set in `.env`.
 
 ## Required

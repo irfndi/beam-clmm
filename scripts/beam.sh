@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Wrapper for the prism CLI — always runs from the package install root.
-# Symlinking cli/index.ts would let prism setup / dev operate on the
+# Wrapper for the beam CLI — always runs from the package install root.
+# Symlinking cli/index.ts would let beam setup / dev operate on the
 # caller's CWD (path.resolve('.env') / no cwd override respectively).
 # This is the value of package.json's "bin" entry.
 set -euo pipefail
@@ -21,11 +21,11 @@ fi
 PACKAGE_ROOT=$(cd -- "$(dirname -- "$SOURCE")/.." && pwd)
 
 # Preserve the caller's directory so the CLI can resolve relative paths (e.g.
-# `prism wallet import ./kp.json`) against it after we cd into the package root.
-export PRISM_CALLER_CWD="$PWD"
+# `beam wallet import ./kp.json`) against it after we cd into the package root.
+export BEAM_CALLER_CWD="$PWD"
 
 cd "$PACKAGE_ROOT"
-export PRISM_INSTALL_DIR="$PACKAGE_ROOT"
+export BEAM_INSTALL_DIR="$PACKAGE_ROOT"
 
 # The Bun installer (bun.sh/install) puts bun under ~/.bun/bin but does not
 # always persist it to a shell rc, so a fresh shell or systemd unit may not have
@@ -68,7 +68,7 @@ if ! awk -v a="$BUN_VERSION_RAW" -v b="$MIN_BUN_VERSION" 'BEGIN {
   if (pa > pb) exit 0;
   exit 0;
 }'; then
-  echo "ERROR: bun $BUN_VERSION_RAW is too old; prism requires bun >= $MIN_BUN_VERSION" >&2
+  echo "ERROR: bun $BUN_VERSION_RAW is too old; beam requires bun >= $MIN_BUN_VERSION" >&2
   echo "Upgrade it with: curl -fsSL https://bun.sh/install | bash" >&2
   exit 1
 fi

@@ -83,7 +83,7 @@ const generateId = () => {
 const generateApiKey = () => {
   const randomBytes = new Uint8Array(20);
   crypto.getRandomValues(randomBytes);
-  return `sk-prism-${Array.from(randomBytes)
+  return `sk-beam-${Array.from(randomBytes)
     .map((b) => b.toString(36).padStart(2, "0"))
     .join("")}`;
 };
@@ -172,7 +172,7 @@ interface NormalizedErrorReport {
   readonly agentId: string;
   readonly errorType: string;
   readonly message: string;
-  readonly prismVersion: string;
+  readonly beamVersion: string;
   readonly stackTrace: string | null;
   readonly platform: string | null;
   readonly severity: string;
@@ -196,7 +196,7 @@ function normalizeErrorReport(
     readonly message?: string;
     readonly stackTrace?: string;
     readonly stack?: string;
-    readonly prismVersion?: string;
+    readonly beamVersion?: string;
     readonly platform?: string;
     readonly severity?: string;
     readonly isRecoverable?: number;
@@ -205,8 +205,8 @@ function normalizeErrorReport(
 ): Effect.Effect<NormalizedErrorReport, Error> {
   return Effect.gen(function* () {
     const errorType = report.errorType ?? report.category;
-    const prismVersion = report.prismVersion ?? batchVersion ?? "unknown";
-    if (!report.id || !errorType || !report.message || !prismVersion) {
+    const beamVersion = report.beamVersion ?? batchVersion ?? "unknown";
+    if (!report.id || !errorType || !report.message || !beamVersion) {
       return yield* Effect.fail(
         new TelemetryValidationError("Each report requires id, message, and error type/version"),
       );
@@ -230,7 +230,7 @@ function normalizeErrorReport(
       agentId: report.agentId ?? "engine",
       errorType,
       message: report.message,
-      prismVersion,
+      beamVersion,
       stackTrace: rawStack === null ? null : rawStack.slice(0, MAX_STACK_TRACE_LENGTH),
       platform: report.platform ?? null,
       severity: report.severity ?? "error",
@@ -319,7 +319,7 @@ function upsertErrorReports(
         db
           .prepare(
             `INSERT INTO error_logs
-              (id, user_id, agent_id, error_type, message, stack_trace, prism_version, platform, severity, is_recoverable, fingerprint, first_seen_at, last_seen_at, occurrence_count, last_report_id)
+              (id, user_id, agent_id, error_type, message, stack_trace, beam_version, platform, severity, is_recoverable, fingerprint, first_seen_at, last_seen_at, occurrence_count, last_report_id)
              SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 1, ?
              WHERE EXISTS (
                SELECT 1 FROM error_report_receipts
@@ -331,7 +331,7 @@ function upsertErrorReports(
                error_type = excluded.error_type,
                message = excluded.message,
                stack_trace = excluded.stack_trace,
-               prism_version = excluded.prism_version,
+               beam_version = excluded.beam_version,
                platform = excluded.platform,
                severity = excluded.severity,
                is_recoverable = excluded.is_recoverable,
@@ -350,7 +350,7 @@ function upsertErrorReports(
             report.errorType,
             report.message,
             report.stackTrace,
-            report.prismVersion,
+            report.beamVersion,
             report.platform,
             report.severity,
             report.isRecoverable,
@@ -1111,7 +1111,7 @@ const VALID_FEEDBACK_CATEGORIES = new Set(["friction", "suggestion", "observatio
 const VALID_FEEDBACK_SEVERITIES = new Set(["low", "medium", "high"]);
 
 interface FeedbackContextPayload {
-  prismVersion?: string;
+  beamVersion?: string;
   platform?: string;
   installMethod?: string;
   runtime?: string;
@@ -1155,7 +1155,7 @@ const storeFeedback = (
         .prepare(
           `INSERT INTO feedback (
             id, user_id, agent_id, category, severity, summary, details, related_files,
-            context_json, prism_version, platform, install_method, runtime,
+            context_json, beam_version, platform, install_method, runtime,
             hash, reported_at
           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
@@ -1169,7 +1169,7 @@ const storeFeedback = (
           input.details ?? null,
           input.relatedFiles ? JSON.stringify(input.relatedFiles) : null,
           JSON.stringify(input.context),
-          input.context.prismVersion ?? null,
+          input.context.beamVersion ?? null,
           input.context.platform ?? null,
           input.context.installMethod ?? null,
           input.context.runtime ?? null,
@@ -1418,16 +1418,16 @@ app.post("/v1/errors/report", async (c) => {
       errorType?: string;
       message?: string;
       stackTrace?: string;
-      prismVersion?: string;
+      beamVersion?: string;
       platform?: string;
       severity?: string;
       isRecoverable?: number;
     }>(c.req),
   );
 
-  if (!body.id || !body.agentId || !body.errorType || !body.message || !body.prismVersion) {
+  if (!body.id || !body.agentId || !body.errorType || !body.message || !body.beamVersion) {
     return c.json(
-      { error: "Missing required fields: id, agentId, errorType, message, prismVersion" },
+      { error: "Missing required fields: id, agentId, errorType, message, beamVersion" },
       400,
     );
   }
@@ -1483,7 +1483,7 @@ app.post("/v1/errors/batch", async (c) => {
         message?: string;
         stackTrace?: string;
         stack?: string;
-        prismVersion?: string;
+        beamVersion?: string;
         platform?: string;
         severity?: string;
         isRecoverable?: number;
@@ -1730,7 +1730,7 @@ app.post("/v1/alerts/preferences", async (c) => {
 
 // ── Fee Wallet ───────────────────────────────────────────────────────────────
 
-const SOLANA_BASE58_RE = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
+const EVM_ADDRESS_RE = /^0x[0-9a-fA-F]{40}$/;
 
 app.get("/v1/fee-wallet", async (c) => {
   const { CACHE } = c.env;
@@ -1764,8 +1764,8 @@ app.put("/v1/fee-wallet", async (c) => {
     return c.json({ error: "address is required" }, 400);
   }
 
-  if (!SOLANA_BASE58_RE.test(body.address)) {
-    return c.json({ error: "Invalid Solana address (must be base58, 32-44 chars)" }, 400);
+  if (!EVM_ADDRESS_RE.test(body.address)) {
+    return c.json({ error: "Invalid EVM address (must be 0x + 40 hex chars)" }, 400);
   }
 
   const { CACHE } = c.env;
@@ -2282,9 +2282,9 @@ app.post("/v1/wallet", async (c) => {
     return c.json({ error: "pubkey is required" }, 400);
   }
 
-  // Validate Solana base58 format (32-44 chars)
-  if (!SOLANA_BASE58_RE.test(body.pubkey)) {
-    return c.json({ error: "Invalid Solana address (must be base58, 32-44 chars)" }, 400);
+  // Validate EVM address format (0x + 40 hex chars)
+  if (!EVM_ADDRESS_RE.test(body.pubkey)) {
+    return c.json({ error: "Invalid EVM address (must be 0x + 40 hex chars)" }, 400);
   }
 
   const wallet = Effect.gen(function* () {

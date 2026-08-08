@@ -5,7 +5,7 @@ import { createLogger } from "./logger.js";
 
 /**
  * Pyth Hermes price-feed poller. A parallel, lower-latency USD oracle next to
- * the Jupiter price chain (`fetchTokenPrices`); coexistence is intentional.
+ * the primary price chain; coexistence is intentional.
  *
  * SERVICE-ONLY by design: `PythPriceLive` is merged into `buildLayer` so the
  * service is AVAILABLE, but NO decision/risk/pricing code consumes it yet.

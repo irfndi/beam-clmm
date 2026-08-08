@@ -10,7 +10,7 @@
  * Usage:
  *   bun run backtest                                          # default: synthetic, 7d
  *   bun run ops/backtest.ts --days 30 --pools <addr1,addr2>
- *   bun run ops/backtest.ts --source replay --db ./prism.db
+ *   bun run ops/backtest.ts --source replay --db ./beam.db
  */
 import { Effect } from "effect";
 import { createLogger } from "../engine/logger.js";
@@ -36,7 +36,7 @@ function parseArgs(argv: ReadonlyArray<string>): CliArgs {
     days: 7,
     pools: ["5rCf1DM8LjKTw4YqhnoLcngyZYeNnQqztScTogYHAS6"],
     source: "synthetic",
-    dbPath: "./prism.db",
+    dbPath: "./beam.db",
   };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
@@ -108,7 +108,7 @@ function generateMockHistory(poolAddress: string, days: number, startTvl: number
       address: poolAddress,
       tokenX: "So11111111111111111111111111111111111111112",
       tokenY: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
-      tokenXSymbol: "SOL",
+      tokenXSymbol: "ETH",
       tokenYSymbol: "USDC",
       tvlUsd: Math.max(tvl, 1000),
       volume24hUsd: tvl * (0.3 + Math.random() * 0.5),
@@ -538,9 +538,9 @@ const isDirectBacktestExecution =
   typeof Bun !== "undefined" &&
   (Bun.main?.endsWith("ops/backtest.ts") || Bun.main?.endsWith("ops/backtest.js"));
 if (isDirectBacktestExecution) {
-  if (process.env.PRISM_ALLOW_DIRECT !== "true") {
+  if (process.env.BEAM_ALLOW_DIRECT !== "true") {
     console.error("Error: Direct backtest execution is not allowed.");
-    console.error('Use "prism backtest" instead.');
+    console.error('Use "beam backtest" instead.');
     process.exit(1);
   }
   runBacktest(process.argv.slice(2)).catch((err) => {

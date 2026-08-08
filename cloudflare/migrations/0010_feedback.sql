@@ -10,7 +10,7 @@ CREATE TABLE IF NOT EXISTS feedback (
     details TEXT,
     related_files TEXT,
     context_json TEXT,
-    prism_version TEXT,
+    beam_version TEXT,
     platform TEXT,
     install_method TEXT,
     runtime TEXT,

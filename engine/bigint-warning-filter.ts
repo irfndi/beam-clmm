@@ -13,7 +13,7 @@ const BIGINT_BINDINGS_MARKER = "bigint: Failed to load bindings";
 // NOT the engine logger: logger.debug writes via console.log UNCONDITIONALLY
 // (AGENTS.md: the logger always emits regardless of level), so it put a timestamped
 // debug line on STDOUT before intended output and broke stdout-parsing scripts
-// (e.g. `prism --version`). Routing the note through stderr matches the warning
+// (e.g. `beam --version`). Routing the note through stderr matches the warning
 // being replaced; the audit-trail file no longer records the note — an acceptable
 // trade for a clean stdout. Exported so tests can assert on the exact channel/text.
 export const BIGINT_FALLBACK_NOTE =

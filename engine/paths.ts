@@ -4,12 +4,12 @@ import path from "path";
 import { isSourceInstall } from "./install-method.js";
 
 /**
- * Prism path resolution.
+ * Beam path resolution.
  *
  * When running from a source checkout (e.g. `bun cli/index.ts`), the active
  * project directory is derived from the entry script so the wrapper can be a
  * symlink anywhere on PATH and the engine still finds the repo's `.env`,
- * `prism.db`, and logs.
+ * `beam.db`, and logs.
  *
  * When running as a compiled binary, config and data are kept under the user's
  * home directory so the binary can be invoked from anywhere.
@@ -17,7 +17,7 @@ import { isSourceInstall } from "./install-method.js";
 
 let entryScriptOverride: string | undefined;
 
-export function setPrismEntryScriptOverride(entry: string | undefined): void {
+export function setBeamEntryScriptOverride(entry: string | undefined): void {
   entryScriptOverride = entry;
 }
 
@@ -32,8 +32,8 @@ function resolveEntryScript(): string {
 function resolveProjectRoot(): string {
   // The wrapper sets this so bundled/source installs resolve consistently
   // regardless of how the binary was invoked or where the caller's CWD is.
-  if (process.env.PRISM_INSTALL_DIR) {
-    return path.resolve(process.env.PRISM_INSTALL_DIR);
+  if (process.env.BEAM_INSTALL_DIR) {
+    return path.resolve(process.env.BEAM_INSTALL_DIR);
   }
 
   const entry = resolveEntryScript();
@@ -54,7 +54,7 @@ function resolveProjectRoot(): string {
     return path.dirname(parentDir);
   }
 
-  // Fallback: walk up from the entry script looking for a Prism source tree.
+  // Fallback: walk up from the entry script looking for a Beam source tree.
   let dir = entryDir;
   while (dir !== path.dirname(dir)) {
     if (isSourceInstall(dir)) {
@@ -75,53 +75,53 @@ function hasProjectEnv(): boolean {
 }
 
 function getDefaultConfigDir(): string {
-  return process.env.PRISM_CONFIG_DIR ?? path.join(os.homedir(), ".config", "prism");
+  return process.env.BEAM_CONFIG_DIR ?? path.join(os.homedir(), ".config", "beam");
 }
 
 function getDefaultDataDir(): string {
-  return process.env.PRISM_DATA_DIR ?? path.join(os.homedir(), ".local", "share", "prism");
+  return process.env.BEAM_DATA_DIR ?? path.join(os.homedir(), ".local", "share", "beam");
 }
 
-export function getPrismConfigDir(): string {
+export function getBeamConfigDir(): string {
   if (isRunningFromSource() && hasProjectEnv()) {
     return resolveProjectRoot();
   }
   return getDefaultConfigDir();
 }
 
-export function getPrismUserConfigDir(): string {
+export function getBeamUserConfigDir(): string {
   return getDefaultConfigDir();
 }
 
-export function getPrismDataDir(): string {
+export function getBeamDataDir(): string {
   if (isRunningFromSource() && hasProjectEnv()) {
     return resolveProjectRoot();
   }
   return getDefaultDataDir();
 }
 
-export function getPrismEnvPath(): string {
-  return path.join(getPrismConfigDir(), ".env");
+export function getBeamEnvPath(): string {
+  return path.join(getBeamConfigDir(), ".env");
 }
 
-export function getPrismDbPath(): string {
-  // Keep in sync with mcp-server/src/tools.ts::getPrismDbPath
+export function getBeamDbPath(): string {
+  // Keep in sync with mcp-server/src/tools.ts::getBeamDbPath
   if (process.env.SQLITE_DB_PATH) return process.env.SQLITE_DB_PATH;
-  return path.join(getPrismDataDir(), "prism.db");
+  return path.join(getBeamDataDir(), "beam.db");
 }
 
-export function getPrismLogsDir(): string {
-  return path.join(getPrismDataDir(), "logs");
+export function getBeamLogsDir(): string {
+  return path.join(getBeamDataDir(), "logs");
 }
 
-export function getPrismLogsPath(): string {
-  return path.join(getPrismLogsDir(), "audit-trail.jsonl");
+export function getBeamLogsPath(): string {
+  return path.join(getBeamLogsDir(), "audit-trail.jsonl");
 }
 
-export function ensurePrismDataDir(): void {
-  fs.mkdirSync(getPrismDataDir(), { recursive: true, mode: 0o700 });
+export function ensureBeamDataDir(): void {
+  fs.mkdirSync(getBeamDataDir(), { recursive: true, mode: 0o700 });
 }
 
-export function ensurePrismConfigDir(): void {
-  fs.mkdirSync(getPrismConfigDir(), { recursive: true, mode: 0o700 });
+export function ensureBeamConfigDir(): void {
+  fs.mkdirSync(getBeamConfigDir(), { recursive: true, mode: 0o700 });
 }

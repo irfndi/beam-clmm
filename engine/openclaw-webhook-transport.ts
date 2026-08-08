@@ -22,7 +22,7 @@ export interface OpenClawWebhookTransportOptions {
  * Webhook transport for OpenClaw Gateway.
  *
  * POSTs check-ins and alerts to the OpenClaw `/hooks/agent` endpoint (or any
- * configured webhook URL). This is useful when Prism and OpenClaw run on the
+ * configured webhook URL). This is useful when Beam and OpenClaw run on the
  * same machine but a persistent WebSocket is not desired, or when routing
  * through an HTTP proxy/load balancer.
  */
@@ -81,7 +81,7 @@ export class OpenClawWebhookTransport implements AgentRuntimeTransport {
       const startedAt = Date.now();
 
       const payload = {
-        type: "prism_prompt",
+        type: "beam_prompt",
         prompt,
         decision: ctx.decision,
         pool: ctx.pool,
@@ -99,7 +99,7 @@ export class OpenClawWebhookTransport implements AgentRuntimeTransport {
   }
 
   sendCheckin(checkin: AgentRuntimeCheckin): Effect.Effect<void, Error> {
-    return this.post({ ...checkin, source: "prism" }).pipe(
+    return this.post({ ...checkin, source: "beam" }).pipe(
       Effect.tap(() => Effect.sync(() => logger.debug("Check-in delivered"))),
       Effect.catch((err) => {
         logger.warn("Failed to deliver check-in", { error: String(err) });
@@ -109,7 +109,7 @@ export class OpenClawWebhookTransport implements AgentRuntimeTransport {
   }
 
   sendAlert(alert: AgentRuntimeAlert): Effect.Effect<void, Error> {
-    return this.post({ ...alert, source: "prism" }).pipe(
+    return this.post({ ...alert, source: "beam" }).pipe(
       Effect.tap(() => Effect.sync(() => logger.debug("Alert delivered"))),
       Effect.catch((err) => {
         logger.warn("Failed to deliver alert", { error: String(err) });

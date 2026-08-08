@@ -14,7 +14,7 @@ const MS_PER_DAY = 86_400_000;
 
 function getVersionInstalledAtFromFile(): number | null {
   try {
-    const filePath = join(homedir(), ".config", "prism", "version-installed-at");
+    const filePath = join(homedir(), ".config", "beam", "version-installed-at");
     const content = readFileSync(filePath, "utf-8").trim();
     const ts = Number(content);
     return Number.isFinite(ts) && ts > 0 ? ts : null;
@@ -89,7 +89,7 @@ export function checkForAutoUpdate(config: AppConfig, db: DbApi): Effect.Effect<
       log.error(
         `[FORCE UPDATE] Version ${release.version} is available and your install ` +
           `is ${daysSinceInstall} days old (threshold: ${config.forceUpdateAfterDays} days). ` +
-          `Shutting down to enforce update. Run "prism update" to apply.`,
+          `Shutting down to enforce update. Run "beam update" to apply.`,
       );
       return yield* Effect.sync(() => {
         process.exit(1);

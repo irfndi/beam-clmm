@@ -1,4 +1,4 @@
--- Migration: Initial schema for Prism platform
+-- Migration: Initial schema for Beam platform
 -- Created: 2026-06-02
 
 -- Users table

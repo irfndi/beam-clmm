@@ -405,7 +405,7 @@ describe("Telegram linking security", () => {
       );
       expect(res.status).toBe(200);
       const body = (await res.json()) as { user_id: string; api_key: string };
-      expect(body.api_key).toMatch(/^sk-prism-/);
+      expect(body.api_key).toMatch(/^sk-beam-/);
     });
 
     it("fails closed when the server has no BOT_API_SECRET configured", async () => {
@@ -490,7 +490,7 @@ describe("Telegram linking security", () => {
       );
       expect(res.status).toBe(200);
       const body = (await res.json()) as { api_key: string };
-      expect(body.api_key).toMatch(/^sk-prism-/);
+      expect(body.api_key).toMatch(/^sk-beam-/);
     });
   });
 
@@ -503,9 +503,9 @@ describe("Telegram linking security", () => {
       );
       expect(res.status).toBe(200);
       const body = (await res.json()) as { api_key: string };
-      // sk-prism- + 40 base36 chars from 20 random bytes (~160 bits).
+      // sk-beam- + 40 base36 chars from 20 random bytes (~160 bits).
       expect(body.api_key.length).toBeGreaterThanOrEqual(9 + 32);
-      expect(body.api_key).toMatch(/^sk-prism-[a-z0-9]+$/);
+      expect(body.api_key).toMatch(/^sk-beam-[a-z0-9]+$/);
     });
   });
 });

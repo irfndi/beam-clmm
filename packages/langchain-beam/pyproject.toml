@@ -3,16 +3,16 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "langchain-prism"
+name = "langchain-beam"
 version = "0.1.0"
-description = "LangChain tool for Prism liquidity agent"
+description = "LangChain tool for Beam liquidity agent"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.10"
 authors = [
-    { name = "Prism Team" },
+    { name = "Beam Team" },
 ]
-keywords = ["langchain", "prism", "solana", "defi", "liquidity", "mcp"]
+keywords = ["langchain", "beam", "solana", "defi", "liquidity", "mcp"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
@@ -34,4 +34,4 @@ dev = [
 ]
 
 [tool.hatch.build.targets.wheel]
-packages = ["langchain_prism"]
+packages = ["langchain_beam"]

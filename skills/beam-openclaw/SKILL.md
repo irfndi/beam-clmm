@@ -1,60 +1,60 @@
 ---
-name: prism-openclaw
+name: beam-openclaw
 version: "0.0.31"
 description: >
-  Operate Prism, an autonomous Solana DLMM liquidity agent for Meteora pools,
-  through the OpenClaw Gateway. Use when the user asks about "prism", "DLMM",
+  Operate Beam, an autonomous Solana DLMM liquidity agent for Meteora pools,
+  through the OpenClaw Gateway. Use when the user asks about "beam", "DLMM",
   "liquidity agent", "Meteora pools", "rebalance positions", "paper trade Solana",
-  or wants the agent to check/trade/manage Prism positions.
+  or wants the agent to check/trade/manage Beam positions.
 license: MIT
 author: irfndi
-homepage: https://github.com/irfndi/prism-liquidity-agent
-tags: [solana, defi, liquidity, meteora, dlmm, trading-agent]
-compatibility: Requires Bun 1.4+, the `prism` CLI, and a Helius RPC key.
+homepage: https://github.com/irfndi/beam-clmm
+tags: [evm, defi, liquidity, uniswap-v3, uniswap-v4, trading-agent]
+compatibility: Requires Bun 1.4+, the `beam` CLI, and a Helius RPC key.
 user-invocable: true
 metadata:
   openclaw:
     emoji: "🔺"
     requires:
-      bins: ["prism"]
+      bins: ["beam"]
     os: ["darwin", "linux"]
     capabilities:
       - mcp
       - http
 ---
 
-# Prism Liquidity Agent (OpenClaw)
+# Beam Liquidity Agent (OpenClaw)
 
-Prism is an autonomous liquidity agent for Solana Meteora DLMM pools. This skill
-lets OpenClaw query Prism, receive alerts, and remind the user to check positions.
+Beam is an autonomous liquidity agent for Solana Meteora DLMM pools. This skill
+lets OpenClaw query Beam, receive alerts, and remind the user to check positions.
 
 ## When to use
 
 - User asks about liquidity pool management on Solana.
-- User wants to start, stop, configure, or monitor the Prism trading agent.
-- User says "check my Prism positions", "any alerts from Prism?", or "should I rebalance?"
-- Prism sent an alert via the OpenClaw Gateway and the user replies for context.
+- User wants to start, stop, configure, or monitor the Beam trading agent.
+- User says "check my Beam positions", "any alerts from Beam?", or "should I rebalance?"
+- Beam sent an alert via the OpenClaw Gateway and the user replies for context.
 
 ## Quick start
 
 ```bash
 # Configure (non-interactive)
-prism setup --non-interactive --helius-key=$HELIUS_API_KEY
+beam setup --non-interactive --rpc-url=$ROBINHOOD_RPC_URL
 
 # Start with OpenClaw overlay enabled
 export AGENTIC_MODE=true
 export AGENT_RUNTIME=openclaw
 export AGENT_GATEWAY_URL=ws://127.0.0.1:18789
-prism dev
+beam dev
 ```
 
 ## Regular checks
 
-OpenClaw should remind the user every hour while Prism is running:
+OpenClaw should remind the user every hour while Beam is running:
 
 ```bash
 # Run from this skill's scripts folder
-{baseDir}/scripts/prism-checkin.sh
+{baseDir}/scripts/beam-checkin.sh
 ```
 
 This fetches a short markdown summary suitable for Telegram/Discord/Slack/WhatsApp.
@@ -63,8 +63,8 @@ This fetches a short markdown summary suitable for Telegram/Discord/Slack/WhatsA
 
 | Query | Command |
 |-------|---------|
-| Full JSON status | `prism status --json` |
-| Messaging summary | `{baseDir}/scripts/prism-checkin.sh` |
+| Full JSON status | `beam status --json` |
+| Messaging summary | `{baseDir}/scripts/beam-checkin.sh` |
 | Open positions | `curl -s http://127.0.0.1:18790/positions` |
 | Recent decisions | `curl -s http://127.0.0.1:18790/decisions` |
 
@@ -80,7 +80,7 @@ For each pool on each scan cycle:
 
 ## Alert priorities
 
-When Prism sends an alert through the Gateway, surface it according to priority:
+When Beam sends an alert through the Gateway, surface it according to priority:
 
 - `critical` — immediate notification (TVL collapse, trailing stop, stop-loss).
 - `warning` — batched or quiet notification (volume auth drop, fee/IL drop, large unrealized loss).
@@ -88,7 +88,7 @@ When Prism sends an alert through the Gateway, surface it according to priority:
 
 ## Files
 
-- [references/agent-runtime.md](../prism/references/agent-runtime.md) — Full setup guide.
-- [references/decision-rules.md](../prism/references/decision-rules.md) — Decision logic.
-- [references/env-vars.md](../prism/references/env-vars.md) — Environment variables.
-- [scripts/prism-checkin.sh](scripts/prism-checkin.sh) — Messaging-friendly summary.
+- [references/agent-runtime.md](../beam/references/agent-runtime.md) — Full setup guide.
+- [references/decision-rules.md](../beam/references/decision-rules.md) — Decision logic.
+- [references/env-vars.md](../beam/references/env-vars.md) — Environment variables.
+- [scripts/beam-checkin.sh](scripts/beam-checkin.sh) — Messaging-friendly summary.

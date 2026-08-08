@@ -39,9 +39,8 @@ export default defineConfig({
     "dotenv",
     "@clack/prompts",
     "semver",
-    "bs58",
-    "@solana/web3.js",
-    "@solana/spl-token",
-    "@meteora-ag/dlmm",
+
+
+
   ],
 });

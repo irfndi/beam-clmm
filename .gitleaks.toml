@@ -3,7 +3,7 @@
 # All entries here are confirmed FALSE POSITIVES, not real secrets:
 #   - Public Solana mint addresses (USDC/USDT/wSOL) in test fixtures and
 #     helpers look like high-entropy keys to the generic-api-key rule.
-#   - `sk-prism-xxx` curl examples in docs are explicit placeholders.
+#   - `sk-beam-xxx` curl examples in docs are explicit placeholders.
 #   - `config.<UPPER_SNAKE_CASE>` DB-config registry keys look like API-key env
 #     var names (e.g. FALLEN_ANGEL_MAX_TOP10_HOLDER_PCT) but are key NAMES in a
 #     registry, never values.
@@ -22,7 +22,7 @@ regexes = [
   'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB', # USDT
   'So11111111111111111111111111111111111111112',  # SOL/wSOL
   # Documentation curl examples use an explicit placeholder token.
-  'sk-prism-xxx',
+  'sk-beam-xxx',
 ]
 paths = [
   'engine/db-config\.ts$',

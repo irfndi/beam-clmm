@@ -60,7 +60,7 @@ run("bun run build");
 run("bunx --bun tsdown --config tsdown.cli.config.ts");
 
 // Stage the distribution layout.
-const stageDir = path.join(repoRoot, ".prism-bundle-stage");
+const stageDir = path.join(repoRoot, ".beam-bundle-stage");
 if (fs.existsSync(stageDir)) {
   fs.rmSync(stageDir, { recursive: true, force: true });
 }
@@ -75,7 +75,7 @@ if (fs.existsSync(vec0Path)) {
   fs.copyFileSync(vec0Path, path.join(libDir, `vec0.${extensionSuffix}`));
 }
 
-const tarballName = `prism-v${version}-${platformKey}.tar.gz`;
+const tarballName = `beam-v${version}-${platformKey}.tar.gz`;
 const tarballPath = path.join(repoRoot, tarballName);
 
 execFileSync("tar", ["-czf", tarballName, "-C", stageDir, "dist", "lib"], {

@@ -4,24 +4,24 @@ import { mkdtempSync, writeFileSync, rmSync, chmodSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import Database from "better-sqlite3";
-import { runPrism } from "../src/exec.js";
+import { runBeam } from "../src/exec.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { registerAllTools } from "../src/tools.js";
 
-// ─── runPrism() ──────────────────────────────────────────────────────────────
+// ─── runBeam() ──────────────────────────────────────────────────────────────
 
-describe("runPrism", () => {
+describe("runBeam", () => {
   let workDir: string;
-  let fakePrism: string;
+  let fakeBeam: string;
 
   beforeEach(() => {
-    workDir = mkdtempSync(join(tmpdir(), "prism-mcp-test-"));
-    fakePrism = join(workDir, "prism");
+    workDir = mkdtempSync(join(tmpdir(), "beam-mcp-test-"));
+    fakeBeam = join(workDir, "beam");
     writeFileSync(
-      fakePrism,
+      fakeBeam,
       `#!/usr/bin/env bash
 if [ "$1" = "--version" ]; then
-  echo "prism 0.0.3 (test stub)"
+  echo "beam 0.0.3 (test stub)"
   exit 0
 fi
 if [ "$1" = "whoami" ]; then
@@ -37,31 +37,31 @@ echo "unknown command: $1"
 exit 2
 `,
     );
-    chmodSync(fakePrism, 0o755);
+    chmodSync(fakeBeam, 0o755);
   });
 
   afterEach(() => {
     rmSync(workDir, { recursive: true, force: true });
   });
 
-  it("runs the prism binary and returns stdout on success", async () => {
-    const prevBin = process.env.PRISM_BIN;
-    process.env.PRISM_BIN = fakePrism;
+  it("runs the beam binary and returns stdout on success", async () => {
+    const prevBin = process.env.BEAM_BIN;
+    process.env.BEAM_BIN = fakeBeam;
     try {
-      const result = await runPrism(["--version"], {});
+      const result = await runBeam(["--version"], {});
       assert.equal(result.exitCode, 0);
       assert.equal(result.ok, true);
       assert.equal(result.timedOut, false);
-      assert.ok(result.stdout.includes("prism 0.0.3"));
+      assert.ok(result.stdout.includes("beam 0.0.3"));
     } finally {
-      if (prevBin === undefined) delete process.env.PRISM_BIN;
-      else process.env.PRISM_BIN = prevBin;
+      if (prevBin === undefined) delete process.env.BEAM_BIN;
+      else process.env.BEAM_BIN = prevBin;
     }
   });
 
   it("sets timedOut=true when the command exceeds the timeout", async () => {
-    const prevBin = process.env.PRISM_BIN;
-    const slowBin = join(workDir, "slow-prism");
+    const prevBin = process.env.BEAM_BIN;
+    const slowBin = join(workDir, "slow-beam");
     writeFileSync(
       slowBin,
       `#!/usr/bin/env bash
@@ -71,62 +71,62 @@ exit 0
 `,
     );
     chmodSync(slowBin, 0o755);
-    process.env.PRISM_BIN = slowBin;
+    process.env.BEAM_BIN = slowBin;
     try {
-      const result = await runPrism(["slow"], { timeoutMs: 200 });
+      const result = await runBeam(["slow"], { timeoutMs: 200 });
       assert.equal(result.ok, false);
       assert.equal(result.timedOut, true);
     } finally {
-      if (prevBin === undefined) delete process.env.PRISM_BIN;
-      else process.env.PRISM_BIN = prevBin;
+      if (prevBin === undefined) delete process.env.BEAM_BIN;
+      else process.env.BEAM_BIN = prevBin;
     }
   });
 
   it("returns ok=false with stderr on non-zero exit", async () => {
-    const prevBin = process.env.PRISM_BIN;
-    process.env.PRISM_BIN = join(workDir, "failing-prism");
+    const prevBin = process.env.BEAM_BIN;
+    process.env.BEAM_BIN = join(workDir, "failing-beam");
     writeFileSync(
-      join(workDir, "failing-prism"),
+      join(workDir, "failing-beam"),
       `#!/usr/bin/env bash
 echo "Something went wrong" >&2
 exit 1
 `,
     );
-    chmodSync(join(workDir, "failing-prism"), 0o755);
+    chmodSync(join(workDir, "failing-beam"), 0o755);
     try {
-      const result = await runPrism(["fail"], {});
+      const result = await runBeam(["fail"], {});
       assert.equal(result.ok, false);
       assert.equal(result.exitCode, 1);
       assert.ok(result.stderr.includes("Something went wrong"));
     } finally {
-      if (prevBin === undefined) delete process.env.PRISM_BIN;
-      else process.env.PRISM_BIN = prevBin;
+      if (prevBin === undefined) delete process.env.BEAM_BIN;
+      else process.env.BEAM_BIN = prevBin;
     }
   });
 
-  it("finds the binary via PRISM_BIN env var", async () => {
-    const prevBin = process.env.PRISM_BIN;
-    process.env.PRISM_BIN = fakePrism;
+  it("finds the binary via BEAM_BIN env var", async () => {
+    const prevBin = process.env.BEAM_BIN;
+    process.env.BEAM_BIN = fakeBeam;
     try {
-      const result = await runPrism(["whoami"], {});
+      const result = await runBeam(["whoami"], {});
       assert.equal(result.ok, true);
       assert.ok(result.stdout.includes("test-user-123"));
     } finally {
-      if (prevBin === undefined) delete process.env.PRISM_BIN;
-      else process.env.PRISM_BIN = prevBin;
+      if (prevBin === undefined) delete process.env.BEAM_BIN;
+      else process.env.BEAM_BIN = prevBin;
     }
   });
 
   it("returns ok=false when the binary cannot be found", async () => {
-    const prevBin = process.env.PRISM_BIN;
-    process.env.PRISM_BIN = "/nonexistent/path/to/prism";
+    const prevBin = process.env.BEAM_BIN;
+    process.env.BEAM_BIN = "/nonexistent/path/to/beam";
     try {
-      const result = await runPrism(["--version"], {});
+      const result = await runBeam(["--version"], {});
       assert.equal(result.ok, false);
       assert.notEqual(result.exitCode, 0);
     } finally {
-      if (prevBin === undefined) delete process.env.PRISM_BIN;
-      else process.env.PRISM_BIN = prevBin;
+      if (prevBin === undefined) delete process.env.BEAM_BIN;
+      else process.env.BEAM_BIN = prevBin;
     }
   });
 });
@@ -235,7 +235,7 @@ describe("DB-backed tools", () => {
   let prevDbPath: string | undefined;
 
   beforeEach(() => {
-    workDir = mkdtempSync(join(tmpdir(), "prism-mcp-dbt-"));
+    workDir = mkdtempSync(join(tmpdir(), "beam-mcp-dbt-"));
     prevDbPath = process.env.SQLITE_DB_PATH;
   });
 
@@ -245,22 +245,22 @@ describe("DB-backed tools", () => {
     rmSync(workDir, { recursive: true, force: true });
   });
 
-  it("prism_status returns running=false when DB does not exist", async () => {
+  it("beam_status returns running=false when DB does not exist", async () => {
     process.env.SQLITE_DB_PATH = join(workDir, "nonexistent.db");
-    const result = await runTool("prism_status", {});
+    const result = await runTool("beam_status", {});
     assert.equal(result.ok, true);
     const parsed = JSON.parse(result.text);
     assert.equal(parsed.running, false);
     assert.ok(parsed.message.includes("No SQLite database found"));
   });
 
-  it("prism_status returns position count and last audit when DB exists", async () => {
+  it("beam_status returns position count and last audit when DB exists", async () => {
     const dbPath = setupTestDb(workDir);
     seedPositions(dbPath);
     seedAudit(dbPath);
     process.env.SQLITE_DB_PATH = dbPath;
 
-    const result = await runTool("prism_status", {});
+    const result = await runTool("beam_status", {});
     const parsed = JSON.parse(result.text);
     assert.equal(parsed.running, true);
     assert.equal(parsed.positionCount, 1);
@@ -271,41 +271,41 @@ describe("DB-backed tools", () => {
     assert.equal(parsed.lastAudit[1].action, "REBALANCE");
   });
 
-  it("prism_positions returns empty array when DB does not exist", async () => {
+  it("beam_positions returns empty array when DB does not exist", async () => {
     process.env.SQLITE_DB_PATH = join(workDir, "nonexistent.db");
-    const result = await runTool("prism_positions", {});
+    const result = await runTool("beam_positions", {});
     assert.equal(result.ok, true);
     const parsed = JSON.parse(result.text);
     assert.deepEqual(parsed, []);
   });
 
-  it("prism_positions excludes paper-exited positions", async () => {
+  it("beam_positions excludes paper-exited positions", async () => {
     const dbPath = setupTestDb(workDir);
     seedPositions(dbPath);
     process.env.SQLITE_DB_PATH = dbPath;
 
-    const result = await runTool("prism_positions", {});
+    const result = await runTool("beam_positions", {});
     const parsed = JSON.parse(result.text);
     assert.equal(parsed.length, 1);
     assert.equal(parsed[0].pool, "PoolActive1");
   });
 
-  it("prism_status and prism_positions exclude soft-closed (closed_at) positions", async () => {
+  it("beam_status and beam_positions exclude soft-closed (closed_at) positions", async () => {
     const dbPath = setupTestDb(workDir);
     seedPositions(dbPath);
     seedAudit(dbPath);
     process.env.SQLITE_DB_PATH = dbPath;
 
-    const status = JSON.parse((await runTool("prism_status", {})).text);
+    const status = JSON.parse((await runTool("beam_status", {})).text);
     assert.equal(status.positionCount, 1);
     assert.equal(status.totalDepositedUsd, 1000);
 
-    const positions = JSON.parse((await runTool("prism_positions", {})).text);
+    const positions = JSON.parse((await runTool("beam_positions", {})).text);
     assert.equal(positions.length, 1);
     assert.ok(!positions.some((p: { pool: string }) => p.pool === "PoolClosed"));
   });
 
-  it("prism_status still works against a pre-v16 schema without closed_at", async () => {
+  it("beam_status still works against a pre-v16 schema without closed_at", async () => {
     const dbPath = join(workDir, "old.db");
     const db = new Database(dbPath);
     db.exec(`
@@ -337,19 +337,19 @@ describe("DB-backed tools", () => {
     db.close();
     process.env.SQLITE_DB_PATH = dbPath;
 
-    const result = await runTool("prism_status", {});
+    const result = await runTool("beam_status", {});
     const parsed = JSON.parse(result.text);
     assert.equal(result.ok, true);
     assert.equal(parsed.positionCount, 1);
     assert.equal(parsed.totalDepositedUsd, 250);
   });
 
-  it("prism_positions includes range and out-of-range count", async () => {
+  it("beam_positions includes range and out-of-range count", async () => {
     const dbPath = setupTestDb(workDir);
     seedPositions(dbPath);
     process.env.SQLITE_DB_PATH = dbPath;
 
-    const result = await runTool("prism_positions", {});
+    const result = await runTool("beam_positions", {});
     const parsed = JSON.parse(result.text);
     assert.deepEqual(parsed[0].range, { lower: 4980, upper: 5020, active: 5000 });
     assert.equal(parsed[0].tokens, "SOL/USDC");

@@ -96,7 +96,7 @@ export class HermesApiTransport implements AgentRuntimeTransport {
   }
 
   sendCheckin(checkin: AgentRuntimeCheckin): Effect.Effect<void, Error> {
-    const content = `Prism check-in (${checkin.trigger}):\n\n${stringifySafe(checkin, 2)}`;
+    const content = `Beam check-in (${checkin.trigger}):\n\n${stringifySafe(checkin, 2)}`;
     return this.chatCompletion(content).pipe(
       Effect.tap(() => Effect.sync(() => logger.debug("Check-in delivered"))),
       Effect.catch((err) => {
@@ -107,7 +107,7 @@ export class HermesApiTransport implements AgentRuntimeTransport {
   }
 
   sendAlert(alert: AgentRuntimeAlert): Effect.Effect<void, Error> {
-    const content = `Prism alert [${alert.severity}/${alert.category}] ${alert.tokenPair} (${alert.pool}): ${alert.message}`;
+    const content = `Beam alert [${alert.severity}/${alert.category}] ${alert.tokenPair} (${alert.pool}): ${alert.message}`;
     return this.chatCompletion(content).pipe(
       Effect.tap(() => Effect.sync(() => logger.debug("Alert delivered"))),
       Effect.catch((err) => {

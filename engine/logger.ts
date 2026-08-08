@@ -1,6 +1,6 @@
 import fs from "fs";
 import path from "path";
-import { getPrismLogsPath } from "./paths.js";
+import { getBeamLogsPath } from "./paths.js";
 
 export type LogLevel = "debug" | "info" | "warn" | "error";
 
@@ -12,7 +12,7 @@ export interface LogEntry {
   data?: unknown;
 }
 
-const AUDIT_PATH = getPrismLogsPath();
+const AUDIT_PATH = getBeamLogsPath();
 let auditStream: fs.WriteStream | null = null;
 
 function getAuditStream(): fs.WriteStream {

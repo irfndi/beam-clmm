@@ -1,5 +1,5 @@
 import { Command } from "commander";
-import { pingInstall, requireRegistered, type PrismCredentials } from "./api.js";
+import { pingInstall, requireRegistered, type BeamCredentials } from "./api.js";
 import { acquireLock, releaseLock, LOCKFILE_PATH } from "./lockfile.js";
 import { runEngine } from "../engine/run-engine.js";
 
@@ -11,8 +11,8 @@ interface DevCommandOptions {
 // API is unreachable so offline work keeps running.
 export async function reportDevStartTelemetry(userId: string): Promise<void> {
   if (!(await pingInstall("dev_start", { userId }))) {
-    console.warn("⚠️  Prism telemetry is unavailable; continuing without telemetry.");
-    console.warn("Run 'prism doctor' to diagnose the account and API connection.");
+    console.warn("⚠️  Beam telemetry is unavailable; continuing without telemetry.");
+    console.warn("Run 'beam doctor' to diagnose the account and API connection.");
   }
 }
 
@@ -24,7 +24,7 @@ export const devCommand = new Command("dev")
     false,
   )
   .action(async (options: DevCommandOptions) => {
-    let creds: PrismCredentials;
+    let creds: BeamCredentials;
     try {
       creds = await requireRegistered(true);
     } catch (err) {
@@ -37,7 +37,7 @@ export const devCommand = new Command("dev")
     const lock = acquireLock();
     if (!lock.acquired) {
       console.error(
-        `prism dev is already running (PID ${lock.pid}). Run 'kill ${lock.pid}' or remove ${LOCKFILE_PATH} to force.`,
+        `beam dev is already running (PID ${lock.pid}). Run 'kill ${lock.pid}' or remove ${LOCKFILE_PATH} to force.`,
       );
       process.exit(1);
     }
@@ -52,7 +52,7 @@ export const devCommand = new Command("dev")
       // EXITs in paper mode; the explicit --exit-live flag is the only opt-in.
       delete process.env.PAPER_MODE_EXIT_LIVE;
     }
-    process.env.PRISM_ALLOW_DIRECT = "true";
+    process.env.BEAM_ALLOW_DIRECT = "true";
 
     function cleanup(code?: number): void {
       releaseLock();
@@ -76,7 +76,7 @@ export const devCommand = new Command("dev")
     // guarantee the lockfile is released once the process actually ends.
     process.on("exit", () => cleanup());
 
-    console.log("Starting Prism trading agent...");
+    console.log("Starting Beam trading agent...");
     await runEngine();
     // runEngine blocks until the engine exits; the following line is only
     // reached if it returns without a fatal error.

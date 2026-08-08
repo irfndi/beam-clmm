@@ -129,7 +129,7 @@ function sendMessage(
   );
 }
 
-function callPrismApi(
+function callBeamApi(
   baseUrl: string,
   path: string,
   body: Record<string, unknown>,
@@ -172,7 +172,7 @@ function callPrismApi(
       );
       return {
         ok: false,
-        error: `Prism API error: ${apiError ?? statusText}`,
+        error: `Beam API error: ${apiError ?? statusText}`,
       };
     }
     const data = yield* Effect.tryPromise(() => response.json()).pipe(
@@ -200,9 +200,9 @@ function handleStart(
   return sendMessage(
     botToken,
     chatId,
-    `Welcome to Prism, ${escapeHtml(firstName)}!\n\n` +
+    `Welcome to Beam, ${escapeHtml(firstName)}!\n\n` +
       `To get started, register with:\n` +
-      `<code>prism register</code>\n\n` +
+      `<code>beam register</code>\n\n` +
       `Or link your existing account with /link`,
   );
 }
@@ -213,7 +213,7 @@ function handleLink(botToken: string, chatId: number): Effect.Effect<void, never
     botToken,
     chatId,
     `To link your Telegram account:\n\n` +
-      `1. Run <code>prism link-telegram</code> on your machine\n` +
+      `1. Run <code>beam link-telegram</code> on your machine\n` +
       `2. Send the 6-character code here\n\n` +
       `The code expires in 10 minutes.`,
   );
@@ -230,7 +230,7 @@ function handleRegister(
   fetcher?: Fetcher,
 ): Effect.Effect<void, never> {
   return Effect.gen(function* () {
-    const result = yield* callPrismApi(
+    const result = yield* callBeamApi(
       apiBaseUrl,
       "/v1/register-telegram",
       {
@@ -250,7 +250,7 @@ function handleRegister(
           `User ID: <code>${escapeHtml(data.user_id)}</code>\n` +
           `API Key: <code>${escapeHtml(data.api_key)}</code>\n\n` +
           `Save your API key securely. Use it with:\n` +
-          `<code>prism login ${escapeHtml(data.api_key.slice(0, 8))}...</code>`,
+          `<code>beam login ${escapeHtml(data.api_key.slice(0, 8))}...</code>`,
       );
     } else {
       yield* sendMessage(
@@ -266,15 +266,15 @@ function handleHelp(botToken: string, chatId: number): Effect.Effect<void, never
   return sendMessage(
     botToken,
     chatId,
-    `Prism Bot Commands:\n\n` +
+    `Beam Bot Commands:\n\n` +
       `/start - Welcome message\n` +
-      `/register - Create a new Prism account\n` +
+      `/register - Create a new Beam account\n` +
       `/link - Link existing account\n` +
       `/whoami - Show your account info\n` +
       `/status - Check agent status\n` +
       `/alerts on|off - Toggle proactive alerts\n` +
       `/help - Show this help\n\n` +
-      `For more info: https://github.com/irfndi/prism-liquidity-agent`,
+      `For more info: https://github.com/irfndi/beam-clmm`,
   );
 }
 
@@ -288,7 +288,7 @@ function handleWhoami(
   fetcher?: Fetcher,
 ): Effect.Effect<void, never> {
   return Effect.gen(function* () {
-    const result = yield* callPrismApi(
+    const result = yield* callBeamApi(
       apiBaseUrl,
       "/v1/whoami-telegram",
       {
@@ -322,7 +322,7 @@ function handleStatus(
   fetcher?: Fetcher,
 ): Effect.Effect<void, never> {
   return Effect.gen(function* () {
-    const result = yield* callPrismApi(
+    const result = yield* callBeamApi(
       apiBaseUrl,
       "/v1/agent-status",
       {
@@ -365,12 +365,12 @@ function handleAlerts(
         botToken,
         chatId,
         `Usage: <code>/alerts on</code> or <code>/alerts off</code>\n\n` +
-          `When enabled, Prism pushes position alerts (out-of-range, exits, risk rejections, fee milestones) to this chat.`,
+          `When enabled, Beam pushes position alerts (out-of-range, exits, risk rejections, fee milestones) to this chat.`,
       );
       return;
     }
     const enabled = arg === "on";
-    const result = yield* callPrismApi(
+    const result = yield* callBeamApi(
       apiBaseUrl,
       "/v1/alerts/preferences",
       { telegram_id: telegramId, enabled },
@@ -382,7 +382,7 @@ function handleAlerts(
         botToken,
         chatId,
         enabled
-          ? `Alerts enabled. Prism will notify you here about position events.`
+          ? `Alerts enabled. Beam will notify you here about position events.`
           : `Alerts disabled. Alerts are still logged but will not be pushed here.`,
       );
     } else {
@@ -415,7 +415,7 @@ function processUpdate(
   const telegramId = String(message.from.id);
   const firstName = message.from.first_name;
 
-  // Handle commands. Telegram appends "@botusername" in group chats (e.g. "/start@prism_agent_bot").
+  // Handle commands. Telegram appends "@botusername" in group chats (e.g. "/start@beam_agent_bot").
   return Effect.gen(function* () {
     if (text.startsWith("/")) {
       const rawCommand = text.split(" ")[0] ?? "";
@@ -502,7 +502,7 @@ function processUpdate(
       }
       const rawCode = text.trim().toUpperCase();
       const code = rawCode.startsWith("LINK-") ? rawCode : `LINK-${rawCode}`;
-      const result = yield* callPrismApi(
+      const result = yield* callBeamApi(
         env.API_BASE_URL,
         "/v1/link-telegram/confirm",
         {

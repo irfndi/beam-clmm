@@ -73,7 +73,7 @@ describe("Telegram binding routes", () => {
       );
       expect(res.status).toBe(200);
       const body = (await res.json()) as { user_id: string; api_key: string; tier: string };
-      expect(body.api_key).toMatch(/^sk-prism-/);
+      expect(body.api_key).toMatch(/^sk-beam-/);
       expect(body.tier).toBe("free");
 
       const user = await env.DB.prepare("SELECT telegram_id, tier FROM users WHERE id = ?")

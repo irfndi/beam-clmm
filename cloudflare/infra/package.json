@@ -1,8 +1,8 @@
 {
-  "name": "@prism-liquidity-agent/infra",
+  "name": "@beam-clmm/infra",
   "version": "1.0.0",
   "private": true,
-  "description": "Alchemy IaC composition root for the Prism Cloudflare stack (Effect 4 runtime)",
+  "description": "Alchemy IaC composition root for the Beam Cloudflare stack (Effect 4 runtime)",
   "type": "module",
   "scripts": {
     "dev": "alchemy dev",

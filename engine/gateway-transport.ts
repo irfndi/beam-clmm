@@ -234,7 +234,7 @@ export class GatewayTransport implements AgentRuntimeTransport {
   sendCheckin(checkin: AgentRuntimeCheckin): Effect.Effect<void, Error> {
     return Effect.gen({ self: this }, function* () {
       yield* this.connect();
-      const text = `Prism check-in (${checkin.trigger}) @ ${new Date(checkin.timestamp).toISOString()}\n${stringifySafe(checkin, 2)}`;
+      const text = `Beam check-in (${checkin.trigger}) @ ${new Date(checkin.timestamp).toISOString()}\n${stringifySafe(checkin, 2)}`;
       yield* Effect.tryPromise({
         try: () => this.request("system-event", { text }),
         catch: surfaceGatewayError,
@@ -345,7 +345,7 @@ export class GatewayTransport implements AgentRuntimeTransport {
         version: getCurrentVersion(),
         platform: process.platform,
         mode: GATEWAY_CLIENT_MODE,
-        instanceId: "prism-dlmm",
+        instanceId: "beam-clmm",
       },
       role: GATEWAY_ROLE,
       scopes: GATEWAY_SCOPES,

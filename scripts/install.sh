@@ -1,23 +1,23 @@
 #!/usr/bin/env bash
-# One-liner installer for prism-liquidity-agent.
-# Usage: curl -fsSL https://raw.githubusercontent.com/irfndi/prism-liquidity-agent/main/scripts/install.sh | bash
+# One-liner installer for beam-clmm.
+# Usage: curl -fsSL https://raw.githubusercontent.com/irfndi/beam-clmm/main/scripts/install.sh | bash
 set -euo pipefail
 
 export HOME="${HOME:-/tmp}"
 SHELL_NAME="${SHELL##*/}"
 SHELL_NAME="${SHELL_NAME:-sh}"
 
-REPO="${PRISM_REPO:-irfndi/prism-liquidity-agent}"
-BIN_DIR="${PRISM_BIN_DIR:-$HOME/.local/bin}"
-INSTALL_DIR="${PRISM_INSTALL_DIR:-$HOME/.prism}"
-CONFIG_DIR="${PRISM_CONFIG_DIR:-$HOME/.config/prism}"
-DATA_DIR="${PRISM_DATA_DIR:-$HOME/.local/share/prism}"
-R2_BASE_URL="${PRISM_R2_URL:-https://pub-2f55c98709e74d1d900b89ec20f8f1fc.r2.dev}"
-VERSION="${PRISM_VERSION:-}"
-CHANNEL="${PRISM_CHANNEL:-stable}"
-SKIP_SETUP="${PRISM_SKIP_SETUP:-}"
+REPO="${BEAM_REPO:-irfndi/beam-clmm}"
+BIN_DIR="${BEAM_BIN_DIR:-$HOME/.local/bin}"
+INSTALL_DIR="${BEAM_INSTALL_DIR:-$HOME/.beam}"
+CONFIG_DIR="${BEAM_CONFIG_DIR:-$HOME/.config/beam}"
+DATA_DIR="${BEAM_DATA_DIR:-$HOME/.local/share/beam}"
+R2_BASE_URL="${BEAM_R2_URL:-https://pub-2f55c98709e74d1d900b89ec20f8f1fc.r2.dev}"
+VERSION="${BEAM_VERSION:-}"
+CHANNEL="${BEAM_CHANNEL:-stable}"
+SKIP_SETUP="${BEAM_SKIP_SETUP:-}"
 IS_OPTED_OUT=0
-case "$(printf '%s' "${PRISM_FEEDBACK_OPT_OUT:-}" | tr '[:upper:]' '[:lower:]')" in
+case "$(printf '%s' "${BEAM_FEEDBACK_OPT_OUT:-}" | tr '[:upper:]' '[:lower:]')" in
   1|true|yes|on) IS_OPTED_OUT=1 ;;
 esac
 
@@ -36,27 +36,27 @@ validate_install_dir() {
     dir="${dir%/}"
   done
   if [ -z "$dir" ] || [ "$dir" = "/" ] || [ "$dir" = "$HOME" ]; then
-    log_error "Refusing to install to unsafe PRISM_INSTALL_DIR: ${INSTALL_DIR}"
-    log_error "PRISM_INSTALL_DIR must be an absolute path, not empty, /, or \$HOME."
+    log_error "Refusing to install to unsafe BEAM_INSTALL_DIR: ${INSTALL_DIR}"
+    log_error "BEAM_INSTALL_DIR must be an absolute path, not empty, /, or \$HOME."
     return 1
   fi
   # Reject "." and ".." path components so a path like /tmp/../home/user
   # cannot alias $HOME and bypass the check above.
   if printf '%s' "$dir" | grep -qE '/(\.\.?)(/|$)'; then
-    log_error "Refusing to install to unsafe PRISM_INSTALL_DIR: ${INSTALL_DIR}"
-    log_error "PRISM_INSTALL_DIR must not contain '.' or '..' path components."
+    log_error "Refusing to install to unsafe BEAM_INSTALL_DIR: ${INSTALL_DIR}"
+    log_error "BEAM_INSTALL_DIR must not contain '.' or '..' path components."
     return 1
   fi
   # Must be an absolute path with at least two components (a named directory below the root).
   if [[ "$dir" != /* ]] || [ "$(dirname "$dir")" = "/" ]; then
-    log_error "Refusing to install to unsafe PRISM_INSTALL_DIR: ${INSTALL_DIR}"
-    log_error "PRISM_INSTALL_DIR must be an absolute path with at least two components (e.g. \$HOME/.prism)."
+    log_error "Refusing to install to unsafe BEAM_INSTALL_DIR: ${INSTALL_DIR}"
+    log_error "BEAM_INSTALL_DIR must be an absolute path with at least two components (e.g. \$HOME/.beam)."
     return 1
   fi
   # The value is embedded in the generated wrapper heredoc; reject shell metacharacters.
   if ! printf '%s' "$dir" | grep -qE '^[A-Za-z0-9_./-]+$'; then
-    log_error "Refusing to install to unsafe PRISM_INSTALL_DIR: ${INSTALL_DIR}"
-    log_error "PRISM_INSTALL_DIR contains shell metacharacters; only [A-Za-z0-9_./-] are allowed."
+    log_error "Refusing to install to unsafe BEAM_INSTALL_DIR: ${INSTALL_DIR}"
+    log_error "BEAM_INSTALL_DIR contains shell metacharacters; only [A-Za-z0-9_./-] are allowed."
     return 1
   fi
   INSTALL_DIR="$dir"
@@ -268,11 +268,11 @@ if [ -n "${VERSION:-}" ] && ! printf '%s' "$VERSION" | grep -qE '^[0-9][0-9a-zA-
   exit 1
 fi
 
-TARBALL_NAME="prism-v${VERSION}-${PLATFORM}.tar.gz"
+TARBALL_NAME="beam-v${VERSION}-${PLATFORM}.tar.gz"
 TARBALL_URL="${R2_BASE_URL}/releases/v${VERSION}/${TARBALL_NAME}"
 SHA256_URL="${TARBALL_URL}.sha256"
 
-TMP_DIR="$(mktemp -d -t prism-install-XXXXXX)"
+TMP_DIR="$(mktemp -d -t beam-install-XXXXXX)"
 trap 'rm -rf "$TMP_DIR"' EXIT
 
 log_step "Downloading ${TARBALL_NAME}"
@@ -294,11 +294,11 @@ if [ "$EXPECTED_HASH" != "$ACTUAL_HASH" ]; then
 fi
 log_done "Checksum verified"
 
-log_step "Installing Prism to ${INSTALL_DIR}"
+log_step "Installing Beam to ${INSTALL_DIR}"
 mkdir -p "$BIN_DIR" "$INSTALL_DIR"
 PRESERVE_DIR="${TMP_DIR}/preserve"
 mkdir -p "$PRESERVE_DIR"
-for _state_file in .env prism.db; do
+for _state_file in .env beam.db; do
   if [ -e "${INSTALL_DIR}/${_state_file}" ]; then
     cp -p "${INSTALL_DIR}/${_state_file}" "${PRESERVE_DIR}/${_state_file}"
   fi
@@ -309,7 +309,7 @@ fi
 rm -rf "$INSTALL_DIR"
 mkdir -p "$INSTALL_DIR"
 tar -xzf "${TMP_DIR}/${TARBALL_NAME}" -C "$INSTALL_DIR"
-for _state_file in .env prism.db; do
+for _state_file in .env beam.db; do
   if [ -e "${PRESERVE_DIR}/${_state_file}" ]; then
     cp -p "${PRESERVE_DIR}/${_state_file}" "${INSTALL_DIR}/${_state_file}"
   fi
@@ -323,8 +323,8 @@ mkdir -p "$CONFIG_DIR" "$DATA_DIR"
 if [ ! -e "${CONFIG_DIR}/.env" ] && [ -e "${INSTALL_DIR}/.env" ]; then
   cp -p "${INSTALL_DIR}/.env" "${CONFIG_DIR}/.env"
 fi
-if [ ! -e "${DATA_DIR}/prism.db" ] && [ -e "${INSTALL_DIR}/prism.db" ]; then
-  cp -p "${INSTALL_DIR}/prism.db" "${DATA_DIR}/prism.db"
+if [ ! -e "${DATA_DIR}/beam.db" ] && [ -e "${INSTALL_DIR}/beam.db" ]; then
+  cp -p "${INSTALL_DIR}/beam.db" "${DATA_DIR}/beam.db"
 fi
 if [ ! -d "${DATA_DIR}/logs" ] && [ -d "${INSTALL_DIR}/logs" ]; then
   cp -R "${INSTALL_DIR}/logs" "${DATA_DIR}/logs"
@@ -336,16 +336,16 @@ fi
 
 ensure_sqlite_linux
 
-log_step "Writing wrapper ${BIN_DIR}/prism"
-WRAPPER="$BIN_DIR/prism"
+log_step "Writing wrapper ${BIN_DIR}/beam"
+WRAPPER="$BIN_DIR/beam"
 cat > "$WRAPPER" <<EOF
 #!/usr/bin/env bash
-# Auto-generated by Prism installer. Runs the compiled bundle.
-export PRISM_INSTALL_DIR="$INSTALL_DIR"
-export PRISM_VEC0_PATH="$INSTALL_DIR/lib/vec0.${EXT_SUFFIX}"
-# Mirror scripts/prism.sh: record the caller's directory so relative paths
-# (e.g. "prism wallet import ./kp.json") resolve against it.
-export PRISM_CALLER_CWD="\$PWD"
+# Auto-generated by Beam installer. Runs the compiled bundle.
+export BEAM_INSTALL_DIR="$INSTALL_DIR"
+export BEAM_VEC0_PATH="$INSTALL_DIR/lib/vec0.${EXT_SUFFIX}"
+# Mirror scripts/beam.sh: record the caller's directory so relative paths
+# (e.g. "beam wallet import ./kp.json") resolve against it.
+export BEAM_CALLER_CWD="\$PWD"
 # The Bun installer (bun.sh/install) puts bun under ~/.bun/bin but does not
 # always persist it to a shell rc, so a fresh shell or systemd unit may not have
 # it on PATH. Resolve PATH first, then the standard install location.
@@ -376,7 +376,7 @@ done
 echo ""
 log_done "Install complete."
 echo "  - Location: ${INSTALL_DIR}"
-echo "  - Run:      ${BIN_DIR}/prism --version"
+echo "  - Run:      ${BIN_DIR}/beam --version"
 echo ""
 if [ "$PATH_HAS_BIN_DIR" -eq 0 ]; then
   log_warn "$BIN_DIR is not on your current PATH."
@@ -390,16 +390,16 @@ if [ -z "$SKIP_SETUP" ]; then
   CREDENTIALS_FILE="$CONFIG_DIR/credentials.json"
   CONFIG_ENV_FILE="$CONFIG_DIR/.env"
   if [ -s "$CONFIG_ENV_FILE" ] || [ -s "${INSTALL_DIR}/.env" ]; then
-    log_step "Existing Prism environment preserved; setup not requested."
+    log_step "Existing Beam environment preserved; setup not requested."
   elif [ -s "$CREDENTIALS_FILE" ]; then
-    log_step "Running Prism setup..."
+    log_step "Running Beam setup..."
     "$WRAPPER" setup
   else
-    log_step "Setup deferred until registration. Run 'prism register' then 'prism setup'."
+    log_step "Setup deferred until registration. Run 'beam register' then 'beam setup'."
   fi
 fi
 
-# Anonymous install telemetry (opt-out via PRISM_FEEDBACK_OPT_OUT).
+# Anonymous install telemetry (opt-out via BEAM_FEEDBACK_OPT_OUT).
 INSTALL_ID_FILE="$CONFIG_DIR/install-id"
 if [ ! -s "$INSTALL_ID_FILE" ]; then
   INSTALL_ID="$(bun -e 'console.log(crypto.randomUUID())' 2>/dev/null || echo "")"
@@ -416,9 +416,9 @@ if [ ! -s "$INSTALL_ID_FILE" ]; then
 fi
 INSTALL_ID="$(cat "$INSTALL_ID_FILE" 2>/dev/null || echo "")"
 if [ -n "$INSTALL_ID" ] && [ "$IS_OPTED_OUT" -eq 0 ]; then
-  PRISM_PLATFORM="$(uname -s | tr A-Z a-z)"
-  PRISM_PAYLOAD="{\"installId\":\"$INSTALL_ID\",\"event\":\"install\",\"channel\":\"$CHANNEL\",\"platform\":\"$PRISM_PLATFORM\",\"version\":\"$VERSION\"}"
-  curl -fsS --max-time 5 -X POST "${PRISM_API_URL:-https://prism-api.irfndi.workers.dev}/v1/installs/ping" \
+  BEAM_PLATFORM="$(uname -s | tr A-Z a-z)"
+  BEAM_PAYLOAD="{\"installId\":\"$INSTALL_ID\",\"event\":\"install\",\"channel\":\"$CHANNEL\",\"platform\":\"$BEAM_PLATFORM\",\"version\":\"$VERSION\"}"
+  curl -fsS --max-time 5 -X POST "${BEAM_API_URL:-https://beam-api.irfndi.workers.dev}/v1/installs/ping" \
     -H "Content-Type: application/json" \
-    -d "$PRISM_PAYLOAD" >/dev/null 2>&1 &
+    -d "$BEAM_PAYLOAD" >/dev/null 2>&1 &
 fi

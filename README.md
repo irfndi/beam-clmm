@@ -1,4 +1,4 @@
-# Prism
+# Beam
 
 ![License](https://img.shields.io/badge/license-MIT-blue)
 ![Runtime](https://img.shields.io/badge/runtime-Bun_1.4-black)
@@ -10,7 +10,7 @@ An autonomous liquidity agent that watches liquidity pools on Solana (currently 
 
 Concentrated liquidity earns fees only when the active price bin sits inside your range. When the market drifts, your position silently collects impermanent loss instead. Most LPs either do not notice or react too late.
 
-Prism fixes this with a rule-based agent that runs every 10 minutes, checks every pool in your watchlist, and either **holds**, **shifts the range**, **pulls liquidity entirely**, or **enters new pools**.
+Beam fixes this with a rule-based agent that runs every 10 minutes, checks every pool in your watchlist, and either **holds**, **shifts the range**, **pulls liquidity entirely**, or **enters new pools**.
 
 Every cycle follows the same sequence:
 
@@ -47,14 +47,14 @@ Fabricated (heuristic) stats never pass a gate: when only the heuristic is avail
 
 ## Quickstart
 
-**One-liner install — latest stable bundle** (recommended for most users; installs Bun if needed, downloads a compiled bundle for your platform, and drops a `prism` wrapper on your PATH):
+**One-liner install — latest stable bundle** (recommended for most users; installs Bun if needed, downloads a compiled bundle for your platform, and drops a `beam` wrapper on your PATH):
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/irfndi/prism-liquidity-agent/main/scripts/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/irfndi/beam-clmm/main/scripts/install.sh | bash
 export PATH="$HOME/.local/bin:$PATH"   # if not already on PATH
-prism register
-prism setup --non-interactive --rpc-url=https://your-paid-rpc.example.com
-prism dev                               # paper trading by default
+beam register
+beam setup --non-interactive --rpc-url=https://your-paid-rpc.example.com
+beam dev                               # paper trading by default
 ```
 
 > **Security note:** the `main` branch URL is mutable. For reproducible installs, use the pinned release version below (which runs the installer from a tagged release) or download the installer and verify its SHA-256 against the release notes before executing it.
@@ -62,107 +62,107 @@ prism dev                               # paper trading by default
 **One-liner install — pinned release version** (reproducible; no git required):
 
 ```bash
-# Replace 1.2.3 with the released version you want (omit PRISM_VERSION for latest)
-curl -fsSL https://raw.githubusercontent.com/irfndi/prism-liquidity-agent/main/scripts/install.sh \
-  | PRISM_VERSION=1.2.3 bash
+# Replace 1.2.3 with the released version you want (omit BEAM_VERSION for latest)
+curl -fsSL https://raw.githubusercontent.com/irfndi/beam-clmm/main/scripts/install.sh \
+  | BEAM_VERSION=1.2.3 bash
 export PATH="$HOME/.local/bin:$PATH"
-prism register
-prism setup --non-interactive --rpc-url=https://your-paid-rpc.example.com
-prism dev
+beam register
+beam setup --non-interactive --rpc-url=https://your-paid-rpc.example.com
+beam dev
 ```
 
-Use the pinned form when you need a specific release version (CI, reproducible deploys, air-gapped networks without git). The `prism update` command will still pull newer release bundles for you.
+Use the pinned form when you need a specific release version (CI, reproducible deploys, air-gapped networks without git). The `beam update` command will still pull newer release bundles for you.
 
-**Manual install from source** (only if you're working ON Prism itself — contributors, CI):
+**Manual install from source** (only if you're working ON Beam itself — contributors, CI):
 
 ```bash
-git clone https://github.com/irfndi/prism-liquidity-agent
-cd prism-liquidity-agent
+git clone https://github.com/irfndi/beam-clmm
+cd beam-clmm
 bun install
 bun run dev          # during development; uses the local source, no wrapper needed
 ```
 
-The bundle-install paths (one-liner and pinned release) create a `prism` wrapper on `PATH`. The wrapper is a thin shim that sets `PRISM_INSTALL_DIR` and `PRISM_VEC0_PATH`, then runs the compiled bundle with `bun`, so the install root and config are resolved consistently regardless of where you invoke it from. The source workflow runs `bun run dev` directly and does not create `~/.local/bin/prism`.
+The bundle-install paths (one-liner and pinned release) create a `beam` wrapper on `PATH`. The wrapper is a thin shim that sets `BEAM_INSTALL_DIR` and `BEAM_VEC0_PATH`, then runs the compiled bundle with `bun`, so the install root and config are resolved consistently regardless of where you invoke it from. The source workflow runs `bun run dev` directly and does not create `~/.local/bin/beam`.
 
 ### Agent operating contract
 
-Agents operating Prism should use the installed `prism` wrapper as the product boundary. The installer is the supported global install: it places a verified platform bundle under `~/.prism` and the command under `~/.local/bin/prism`.
+Agents operating Beam should use the installed `beam` wrapper as the product boundary. The installer is the supported global install: it places a verified platform bundle under `~/.beam` and the command under `~/.local/bin/beam`.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/irfndi/prism-liquidity-agent/main/scripts/install.sh \
-  | PRISM_SKIP_SETUP=1 bash
+curl -fsSL https://raw.githubusercontent.com/irfndi/beam-clmm/main/scripts/install.sh \
+  | BEAM_SKIP_SETUP=1 bash
 export PATH="$HOME/.local/bin:$PATH"
-prism register
-prism version
-prism doctor
-prism setup --non-interactive --rpc-url=https://your-paid-rpc.example.com
-prism dev
+beam register
+beam version
+beam doctor
+beam setup --non-interactive --rpc-url=https://your-paid-rpc.example.com
+beam dev
 ```
 
-Use `prism update --check-only` and `prism update` for upgrades. Do not edit the checkout, run `bun run dev`, or run `bun install` while operating an installed agent. `bun install` and source edits are for Prism development only.
+Use `beam update --check-only` and `beam update` for upgrades. Do not edit the checkout, run `bun run dev`, or run `bun install` while operating an installed agent. `bun install` and source edits are for Beam development only.
 
-`bun add --global prism` is not a supported command because this project is not published as an npm package named `prism`. A GitHub global install such as `bun add --global github:irfndi/prism-liquidity-agent#<release-tag>` is a source fallback, not the production path; it does not provide the platform bundle or the release installer's checksum guarantee.
+`bun add --global beam` is not a supported command because this project is not published as an npm package named `beam`. A GitHub global install such as `bun add --global github:irfndi/beam-clmm#<release-tag>` is a source fallback, not the production path; it does not provide the platform bundle or the release installer's checksum guarantee.
 
 ### Canary builds
 
 Every merge to `main` that passes CI publishes a canary build -- the latest code, rebuilt and uploaded to R2 automatically, like Bun's own canary channel. A canary is versioned `<next patch>-canary.<UTC timestamp>` and the `releases/channel/canary.json` pointer always tracks the newest one.
 
 ```bash
-prism update --canary       # move to the latest canary build
+beam update --canary       # move to the latest canary build
 ```
 
 Canary builds are not for production. They run exactly what is on `main` right now, with no tag, no GitHub Release, and no GPG signature -- only the SHA-256 checks the updater always performs. Use them to test an unreleased fix or feature before it ships.
 
-To go back, run plain `prism update`: the next stable release supersedes the canary version and pulls you back onto the stable channel.
+To go back, run plain `beam update`: the next stable release supersedes the canary version and pulls you back onto the stable channel.
 
 ### For AI Agents (OpenClaw, Hermes, acpx, custom agents)
 
-Prism is agent-friendly by design. The CLI is the operating boundary; registration is required before setup/dev so usage, errors, and feedback are tied to the agent account. Telegram remains optional.
+Beam is agent-friendly by design. The CLI is the operating boundary; registration is required before setup/dev so usage, errors, and feedback are tied to the agent account. Telegram remains optional.
 
 ```bash
 # Pinned release — reproducible, no git, fastest for agents
 # Replace 1.2.3 with the released version you want
-curl -fsSL https://raw.githubusercontent.com/irfndi/prism-liquidity-agent/main/scripts/install.sh \
-  | PRISM_VERSION=1.2.3 bash
+curl -fsSL https://raw.githubusercontent.com/irfndi/beam-clmm/main/scripts/install.sh \
+  | BEAM_VERSION=1.2.3 bash
 export PATH="$HOME/.local/bin:$PATH"
 
 # Or latest stable bundle
-curl -fsSL https://raw.githubusercontent.com/irfndi/prism-liquidity-agent/main/scripts/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/irfndi/beam-clmm/main/scripts/install.sh | bash
 export PATH="$HOME/.local/bin:$PATH"
 
-prism register                                    # required — creates the agent account
-prism setup --non-interactive --rpc-url="$SOLANA_RPC_URL" # Helius is optional
-prism doctor
-prism dev                                         # start paper trading
+beam register                                    # required — creates the agent account
+beam setup --non-interactive --rpc-url="$SOLANA_RPC_URL" # Helius is optional
+beam doctor
+beam dev                                         # start paper trading
 ```
 
-If `prism` is not on `PATH` after the one-liner install, invoke the CLI directly:
+If `beam` is not on `PATH` after the one-liner install, invoke the CLI directly:
 
 ```bash
-prism register
-prism setup --non-interactive --rpc-url="$SOLANA_RPC_URL"
-prism doctor
-prism dev
+beam register
+beam setup --non-interactive --rpc-url="$SOLANA_RPC_URL"
+beam doctor
+beam dev
 ```
 
 Common agent commands:
 
 | Command                                                          | Purpose                                                           |
 | ---------------------------------------------------------------- | ----------------------------------------------------------------- |
-| `prism setup` / `prism setup --non-interactive --rpc-url=...` | Write `.env` (RPC providers, watchlist, optional API key)       |
-| `prism doctor [--fix]`                                           | Validate registration, environment, providers, and local state  |
-| `prism dev`                                                      | Start the registered trading agent (paper by default)             |
-| `prism backtest --days 7`                                        | Run a historical simulation against synthetic data                |
-| `prism backtest --source replay --days 7 --pools <addr>`         | Replay live on-chain snapshots through the strategy               |
-| `prism register`                                                 | Create the required cloud account and store its API key          |
-| `prism feedback "..."`                                          | Store structured feedback in Prism Cloud D1                      |
-| `prism issue "..."`                                             | Store an issue in Prism Cloud D1                                  |
-| `prism whoami`                                                   | Show current user / API key info (requires `register`)            |
-| `prism link-telegram`                                            | Issue a `LINK-<16 hex>` code to link `@prism_agent_bot` (optional)  |
-| `prism update`                                                   | Self-update from R2/GitHub releases (with smoke tests + rollback) |
-| `prism wallet {generate,import,show}`                            | Non-custodial local keypair (required for live trading)           |
+| `beam setup` / `beam setup --non-interactive --rpc-url=...` | Write `.env` (RPC providers, watchlist, optional API key)       |
+| `beam doctor [--fix]`                                           | Validate registration, environment, providers, and local state  |
+| `beam dev`                                                      | Start the registered trading agent (paper by default)             |
+| `beam backtest --days 7`                                        | Run a historical simulation against synthetic data                |
+| `beam backtest --source replay --days 7 --pools <addr>`         | Replay live on-chain snapshots through the strategy               |
+| `beam register`                                                 | Create the required cloud account and store its API key          |
+| `beam feedback "..."`                                          | Store structured feedback in Beam Cloud D1                      |
+| `beam issue "..."`                                             | Store an issue in Beam Cloud D1                                  |
+| `beam whoami`                                                   | Show current user / API key info (requires `register`)            |
+| `beam link-telegram`                                            | Issue a `LINK-<16 hex>` code to link `@beam_agent_bot` (optional)  |
+| `beam update`                                                   | Self-update from R2/GitHub releases (with smoke tests + rollback) |
+| `beam wallet {generate,import,show}`                            | Non-custodial local keypair (required for live trading)           |
 
-For the bundle-install paths (one-liner and pinned release), do NOT manually edit `.env` or bypass the `prism` wrapper — always invoke `prism` so the install root and config directories are resolved consistently. If you are developing on Prism from source, use `bun run dev` directly instead; the source workflow does not create `~/.local/bin/prism` or run `install.sh`. See [docs/agent-harness.md](docs/agent-harness.md) for the full agent guide and common anti-patterns.
+For the bundle-install paths (one-liner and pinned release), do NOT manually edit `.env` or bypass the `beam` wrapper — always invoke `beam` so the install root and config directories are resolved consistently. If you are developing on Beam from source, use `bun run dev` directly instead; the source workflow does not create `~/.local/bin/beam` or run `install.sh`. See [docs/agent-harness.md](docs/agent-harness.md) for the full agent guide and common anti-patterns.
 
 To run the historical simulation:
 
@@ -176,7 +176,7 @@ bun run backtest --days 30 --pools <addr>    # custom range
 Set `ENABLE_SNAPSHOT_CAPTURE=true` while the agent runs in paper mode. Every cycle dumps the full pool state + bin array into `pool_snapshots` in SQLite. Later, replay that real on-chain data through the strategy:
 
 ```bash
-bun run backtest --source replay --db ./prism.db --days 7 --pools <addr>
+bun run backtest --source replay --db ./beam.db --days 7 --pools <addr>
 ```
 
 ## Configuration
@@ -194,7 +194,7 @@ Key `.env` variables:
 | `SCAN_INTERVAL_MS`        | `600000`     | Scan frequency (default 10 min)          |
 | `CONFIDENCE_THRESHOLD`    | `0.65`       | Minimum agent confidence to act          |
 | `TRAILING_STOP_PCT`       | `0.10`       | Drawdown from peak that triggers EXIT    |
-| `SQLITE_DB_PATH`          | `./prism.db` | SQLite database file path                |
+| `SQLITE_DB_PATH`          | `./beam.db` | SQLite database file path                |
 | `ENABLE_SNAPSHOT_CAPTURE` | `false`      | Dump pool snapshots to DB (paper only)   |
 | `MAX_POSITIONS_PER_POOL`  | `2`          | Concurrent positions per pool (Wave 10)  |
 | `ENTRY_STRATEGY_TYPE`     | `spot`       | Deposit shape: spot\|curve\|bidask\|auto |
@@ -221,13 +221,13 @@ rejected decisions recorded in the audit trail, not execution failures.
 
 ## Agent runtime overlay
 
-Prism integrates with agent harnesses at two layers:
+Beam integrates with agent harnesses at two layers:
 
-1. **Operating boundary (always on)** — a harness drives Prism through the `prism` CLI
+1. **Operating boundary (always on)** — a harness drives Beam through the `beam` CLI
    and the auto-discovered skill files (`skills/`, `marketplaces/`), e.g.
-   `prism status --message` for a chat-ready summary. See
+   `beam status --message` for a chat-ready summary. See
    [docs/agent-harness.md](docs/agent-harness.md).
-2. **Decision overlay (opt-in)** — set `AGENTIC_MODE=true` and Prism connects *back* to
+2. **Decision overlay (opt-in)** — set `AGENTIC_MODE=true` and Beam connects *back* to
    a local agent harness so it can **review each decision and receive proactive
    check-ins/alerts**. No remote LLM API keys are used. The overlay can only reduce
    confidence or change an action to `HOLD`; it can never raise confidence, promote to
@@ -240,8 +240,8 @@ confidence or switch to `HOLD`). `AGENT_RUNTIME` (`auto` by default) selects one
 
 | Runtime | Transport | Config | Notes |
 | ------- | --------- | ------ | ----- |
-| Any [ACP](https://agentclientprotocol.com) agent | stdio JSON-RPC | `AGENT_RUNTIME=hermes` (default), `AGENT_ACP_COMMAND`, `AGENT_ACP_ARGS` | Hermes (`hermes acp`), Claude Code, Codex CLI, Gemini CLI, OpenCode, or any ACP-compatible agent. Prism speaks canonical ACP v1 (`initialize` / `session/new` / `session/prompt`, reply streamed via `session/update`). Point `AGENT_ACP_COMMAND`/`AGENT_ACP_ARGS` at any ACP agent (e.g. `npx -y @agentclientprotocol/codex-acp`). |
-| OpenClaw | Gateway WebSocket | `AGENT_RUNTIME=openclaw`, `AGENT_GATEWAY_URL`, `AGENT_GATEWAY_TOKEN` | Requires **OpenClaw >= 2026.7.1** (gateway protocol v4). `AGENT_GATEWAY_TOKEN` is required: on loopback a valid shared token lets Prism's `cli` client keep its scopes without device pairing. Prism reviews decisions via `chat.send`. |
+| Any [ACP](https://agentclientprotocol.com) agent | stdio JSON-RPC | `AGENT_RUNTIME=hermes` (default), `AGENT_ACP_COMMAND`, `AGENT_ACP_ARGS` | Hermes (`hermes acp`), Claude Code, Codex CLI, Gemini CLI, OpenCode, or any ACP-compatible agent. Beam speaks canonical ACP v1 (`initialize` / `session/new` / `session/prompt`, reply streamed via `session/update`). Point `AGENT_ACP_COMMAND`/`AGENT_ACP_ARGS` at any ACP agent (e.g. `npx -y @agentclientprotocol/codex-acp`). |
+| OpenClaw | Gateway WebSocket | `AGENT_RUNTIME=openclaw`, `AGENT_GATEWAY_URL`, `AGENT_GATEWAY_TOKEN` | Requires **OpenClaw >= 2026.7.1** (gateway protocol v4). `AGENT_GATEWAY_TOKEN` is required: on loopback a valid shared token lets Beam's `cli` client keep its scopes without device pairing. Beam reviews decisions via `chat.send`. |
 
 ### Delivery transports (alerts + check-ins)
 
@@ -255,9 +255,9 @@ independently and additively alongside it.
 | Hermes HTTP API | `AGENT_HERMES_API_URL`, `AGENT_HERMES_API_TOKEN` | POSTs alerts + check-ins as user messages to `{base}/v1/chat/completions` (model `hermes-agent`); the Bearer token is Hermes' `API_SERVER_KEY`. |
 
 
-Prism also exposes pull interfaces for agent runtimes to query state on demand:
+Beam also exposes pull interfaces for agent runtimes to query state on demand:
 
-- **MCP server** (stdio): tools `prism_status`, `prism_positions`, `prism_decisions`, `prism_config`. Enable with `AGENT_MCP_ENABLED=true` (disabled by default).
+- **MCP server** (stdio): tools `beam_status`, `beam_positions`, `beam_decisions`, `beam_config`. Enable with `AGENT_MCP_ENABLED=true` (disabled by default).
 - **HTTP fallback** on `127.0.0.1:AGENT_HTTP_PORT` (default `0`, disabled): `GET /status`, `/positions`, `/decisions`, `/config`, `/health`. Set `AGENT_HTTP_PORT` to a non-zero port to enable.
 
 | Variable                        | Default                    | Description                                          |
@@ -283,13 +283,13 @@ Prism also exposes pull interfaces for agent runtimes to query state on demand:
 
 ## Messaging summary
 
-When Prism runs under an agent runtime that owns messaging channels (Telegram, WhatsApp, Discord, Slack, etc.), the runtime can call:
+When Beam runs under an agent runtime that owns messaging channels (Telegram, WhatsApp, Discord, Slack, etc.), the runtime can call:
 
 ```bash
-prism status --message
+beam status --message
 ```
 
-This returns a short markdown summary with emojis and bullets, formatted for chat apps. Prism never sends messages directly; the agent runtime forwards summaries and alerts to the user's preferred channel.
+This returns a short markdown summary with emojis and bullets, formatted for chat apps. Beam never sends messages directly; the agent runtime forwards summaries and alerts to the user's preferred channel.
 
 ## Risk gates
 

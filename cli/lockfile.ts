@@ -3,7 +3,7 @@ import path from "path";
 import os from "os";
 import { spawnSync } from "child_process";
 
-export const LOCKFILE_DIR = path.join(os.homedir(), ".config", "prism");
+export const LOCKFILE_DIR = path.join(os.homedir(), ".config", "beam");
 export const LOCKFILE_PATH = path.join(LOCKFILE_DIR, "dev.lock");
 
 interface LockfileData {
@@ -103,10 +103,10 @@ export function findRunningEngineProcess(
         args.includes("engine/index.ts") ||
         args.includes("run dev") ||
         args.includes("cli/dev.ts") ||
-        // Bundled/source CLI dev process (e.g. `bun /root/.prism/dist/cli/
+        // Bundled/source CLI dev process (e.g. `bun /root/.beam/dist/cli/
         // index.mjs dev` under systemd, or a relative `bun cli/index.ts dev`
         // from the repo root): the source-path patterns above do not match
-        // the bundle. Scoped to Prism's CLI layout — the `cli/` segment must
+        // the bundle. Scoped to Beam's CLI layout — the `cli/` segment must
         // be preceded by a whitespace, slash, or line start (so an unrelated
         // `*-cli/` or `mycli/` directory cannot match) — with a STANDALONE
         // `dev` argument: a bare substring `dev` (dev-server, development,

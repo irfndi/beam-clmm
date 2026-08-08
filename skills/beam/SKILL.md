@@ -1,40 +1,40 @@
 ---
-name: prism
+name: beam
 version: "0.0.31"
 description: >
-  Operate Prism, an autonomous Solana DLMM liquidity agent for Meteora pools.
-  Use when the user asks about "prism", "DLMM", "liquidity agent",
+  Operate Beam, an autonomous Solana DLMM liquidity agent for Meteora pools.
+  Use when the user asks about "beam", "DLMM", "liquidity agent",
   "Meteora pools", "rebalance positions", "paper trade Solana", or
   "start the trading agent".
 license: MIT
 author: irfndi
-homepage: https://github.com/irfndi/prism-liquidity-agent
-tags: [solana, defi, liquidity, meteora, dlmm, trading-agent]
-compatibility: Requires Bun 1.4+, the `prism` CLI, and a Helius RPC key.
+homepage: https://github.com/irfndi/beam-clmm
+tags: [evm, defi, liquidity, uniswap-v3, uniswap-v4, trading-agent]
+compatibility: Requires Bun 1.4+, the `beam` CLI, and a Helius RPC key.
 metadata:
-  chain: solana
-  protocol: meteora-dlmm
+  chain: robinhood-chain (evm)
+  protocol: uniswap-v3, uniswap-v4
   openclaw:
     requires:
-      bins: ["prism"]
+      bins: ["beam"]
     os: ["darwin", "linux"]
     capabilities:
       - mcp
       - http
   hermes:
-    tags: [solana, defi, liquidity, trading]
+    tags: [evm, defi, liquidity, trading]
     category: defi
     requires_toolsets: [terminal]
     blueprint:
       schedule: "0 * * * *"
       deliver: origin
-      prompt: "Check Prism status and alert the user to any important positions, decisions, or risks. Use `prism status --message` and summarize in 3-5 bullets."
+      prompt: "Check Beam status and alert the user to any important positions, decisions, or risks. Use `beam status --message` and summarize in 3-5 bullets."
       no_agent: false
 ---
 
-# Prism Liquidity Agent
+# Beam Liquidity Agent
 
-Prism is an autonomous liquidity agent for Solana Meteora DLMM pools. It runs
+Beam is an autonomous liquidity agent for Solana Meteora DLMM pools. It runs
 locally, makes deterministic rebalancing decisions, and can optionally ask a
 local agent runtime (Hermes via ACP or OpenClaw via Gateway) for a second opinion
 when running as an agent skill.
@@ -45,7 +45,7 @@ when running as an agent skill.
 - User wants to check pool health or position performance.
 - User needs to rebalance concentrated liquidity positions.
 - User mentions Meteora DLMM, fee-IL ratio, volume authenticity, or bin arrays.
-- User wants to start, stop, configure, or monitor the Prism trading agent.
+- User wants to start, stop, configure, or monitor the Beam trading agent.
 
 ## Quick start
 
@@ -54,27 +54,27 @@ when running as an agent skill.
 bun install
 
 # Configure (non-interactive)
-prism setup --non-interactive --helius-key=$HELIUS_API_KEY
+beam setup --non-interactive --rpc-url=$ROBINHOOD_RPC_URL
 
 # Start paper trading (default)
-prism dev
+beam dev
 
 # Live trading (requires wallet)
 export WALLET_PRIVATE_KEY=...
-prism dev
+beam dev
 ```
 
 ## Common commands
 
 | Command | Purpose |
 |---------|---------|
-| `prism status --json` | JSON snapshot for agents/skills |
-| `prism status --message` | Markdown summary for messaging apps |
-| `prism dev` | Start the trading agent |
-| `prism backtest --days 7` | Run historical simulation |
-| `prism backtest --source replay --days 7 --pools <addr>` | Replay on-chain snapshots |
-| `prism wallet show` | Show wallet balance |
-| `prism whoami` | Show account info |
+| `beam status --json` | JSON snapshot for agents/skills |
+| `beam status --message` | Markdown summary for messaging apps |
+| `beam dev` | Start the trading agent |
+| `beam backtest --days 7` | Run historical simulation |
+| `beam backtest --source replay --days 7 --pools <addr>` | Replay on-chain snapshots |
+| `beam wallet show` | Show wallet balance |
+| `beam whoami` | Show account info |
 
 ## Decision flow
 
@@ -108,8 +108,8 @@ For each pool on each scan cycle:
 
 ## Agent runtime integration
 
-When Prism runs as a skill under an agent runtime, set `AGENTIC_MODE=true`.
-Prism will:
+When Beam runs as a skill under an agent runtime, set `AGENTIC_MODE=true`.
+Beam will:
 
 - Ask the agent runtime to review high-confidence decisions.
 - Send periodic check-ins with open positions and portfolio summary.
@@ -123,9 +123,9 @@ Supported runtimes:
 
 ### Pull queries (MCP + HTTP)
 
-When `AGENTIC_MODE=true`, Prism exposes agent pull interfaces:
+When `AGENTIC_MODE=true`, Beam exposes agent pull interfaces:
 
-- **MCP server** (stdio): tools `prism_status`, `prism_positions`, `prism_decisions`, `prism_config`. Enable with `AGENT_MCP_ENABLED=true` (disabled by default).
+- **MCP server** (stdio): tools `beam_status`, `beam_positions`, `beam_decisions`, `beam_config`. Enable with `AGENT_MCP_ENABLED=true` (disabled by default).
 - **HTTP fallback** on `127.0.0.1:AGENT_HTTP_PORT` (default `0`, disabled): `GET /status`, `/positions`, `/decisions`, `/config`, `/health`. Set `AGENT_HTTP_PORT` to a non-zero port to enable.
 
 Agent runtimes can query these on demand instead of waiting for push check-ins.
@@ -134,19 +134,18 @@ Agent runtimes can query these on demand instead of waiting for push check-ins.
 
 For tighter integration, install a runtime-specific variant:
 
-- `skills/prism-openclaw/` — OpenClaw-compatible frontmatter, single-line JSON metadata, hourly check-in script.
-- `skills/prism-hermes/` — Hermes-compatible frontmatter with `metadata.hermes.blueprint` for hourly scheduled checks.
+- `skills/beam-openclaw/` — OpenClaw-compatible frontmatter, single-line JSON metadata, hourly check-in script.
+- `skills/beam-hermes/` — Hermes-compatible frontmatter with `metadata.hermes.blueprint` for hourly scheduled checks.
 
-The universal `skills/prism/` skill works for both but may not enable runtime-specific features like the Hermes blueprint scheduler.
+The universal `skills/beam/` skill works for both but may not enable runtime-specific features like the Hermes blueprint scheduler.
 
 ### Messaging apps (Telegram, WhatsApp, Discord, Slack)
 
-Prism does not send messages directly. The agent runtime owns the messaging channel and forwards Prism check-ins/alerts. Use `prism status --message` to get a short markdown summary formatted for messaging apps.
+Beam does not send messages directly. The agent runtime owns the messaging channel and forwards Beam check-ins/alerts. Use `beam status --message` to get a short markdown summary formatted for messaging apps.
 
 ## Files
 
 - [references/decision-rules.md](references/decision-rules.md) — Full decision logic.
-- [references/meteora-dlmm.md](references/meteora-dlmm.md) — Meteora DLMM concepts.
 - [references/env-vars.md](references/env-vars.md) — Environment variable reference.
 - [references/agent-runtime.md](references/agent-runtime.md) — Agent runtime setup guide.
-- [scripts/prism-status.sh](scripts/prism-status.sh) — Helper to fetch status JSON.
+- [scripts/beam-status.sh](scripts/beam-status.sh) — Helper to fetch status JSON.

@@ -1,5 +1,5 @@
 // Replacer that stringifies BigInt values. Use with JSON.stringify whenever
-// the value graph may contain bigints (e.g. DLMM SDK PoolMetrics, BinArray).
+// the value graph may contain bigints (e.g. pool metrics, bin arrays).
 // Standard JSON.stringify throws on bigint; this is the standard workaround.
 export function bigintReplacer(_key: string, value: unknown): unknown {
   return typeof value === "bigint" ? value.toString() : value;

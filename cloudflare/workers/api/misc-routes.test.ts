@@ -21,7 +21,7 @@ describe("Misc routes (issue / config)", () => {
         details TEXT,
         related_files TEXT,
         context_json TEXT,
-        prism_version TEXT,
+        beam_version TEXT,
         platform TEXT,
         install_method TEXT,
         runtime TEXT,
@@ -99,7 +99,7 @@ describe("Misc routes (issue / config)", () => {
     it("returns 401 for an unknown API key", async () => {
       const response = await worker.fetch(
         buildRequest("POST", "/v1/issue", { title: "Bad auth" }, {
-          Authorization: "Bearer sk-prism-unknown-key",
+          Authorization: "Bearer sk-beam-unknown-key",
         }),
         testEnv,
         createExecutionContext(),
@@ -171,7 +171,7 @@ describe("Misc routes (issue / config)", () => {
     it("returns 401 for an unknown API key", async () => {
       const response = await worker.fetch(
         buildRequest("GET", "/v1/config", undefined, {
-          Authorization: "Bearer sk-prism-unknown-key",
+          Authorization: "Bearer sk-beam-unknown-key",
         }),
         testEnv,
         createExecutionContext(),

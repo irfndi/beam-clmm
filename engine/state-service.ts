@@ -40,7 +40,7 @@ export interface PortfolioSnapshot {
   readonly walletBalanceUsd: number;
 }
 
-export interface PrismStateSnapshot {
+export interface BeamStateSnapshot {
   readonly programStartTime: number;
   readonly scanCount: number;
   readonly lastCycleAt: number | null;
@@ -51,7 +51,7 @@ export interface PrismStateSnapshot {
   readonly pendingProposals: ReadonlyArray<AgentProposal>;
 }
 
-export const initialSnapshot: PrismStateSnapshot = {
+export const initialSnapshot: BeamStateSnapshot = {
   programStartTime: Date.now(),
   scanCount: 0,
   lastCycleAt: null,
@@ -100,7 +100,7 @@ export interface AgentStateMutableOptions {
 
 export function AgentStateMutable(options: AgentStateMutableOptions = {}): {
   readonly layer: Layer.Layer<AgentStateService, never, never>;
-  readonly update: (patch: Partial<PrismStateSnapshot>) => void;
+  readonly update: (patch: Partial<BeamStateSnapshot>) => void;
   readonly setAgentPolicy: (patch: Partial<AgentPolicySnapshot>) => void;
   readonly setPendingProposals: (proposals: ReadonlyArray<AgentProposal>) => void;
   readonly enqueueProposal: (proposal: AgentProposal) => EnqueueProposalResult;
@@ -109,11 +109,11 @@ export function AgentStateMutable(options: AgentStateMutableOptions = {}): {
   readonly rejectProposal: (id: string) => void;
 } {
   const maxPendingProposals = options.maxPendingProposals ?? 50;
-  let snapshot: PrismStateSnapshot = initialSnapshot;
+  let snapshot: BeamStateSnapshot = initialSnapshot;
 
-  const update = (patch: Partial<PrismStateSnapshot>): void => {
+  const update = (patch: Partial<BeamStateSnapshot>): void => {
     const nextPendingProposals = patch.pendingProposals ?? snapshot.pendingProposals;
-    const next: PrismStateSnapshot = {
+    const next: BeamStateSnapshot = {
       ...snapshot,
       ...patch,
       portfolio: patch.portfolio

@@ -8,15 +8,15 @@ import { createLogger } from "./logger.js";
 import { errorReporter } from "./error-reporter.js";
 import { getCurrentVersion } from "./version.js";
 import {
-  getPrismConfigDir,
-  getPrismDataDir,
-  getPrismDbPath,
-  getPrismEnvPath,
-  getPrismLogsDir,
+  getBeamConfigDir,
+  getBeamDataDir,
+  getBeamDbPath,
+  getBeamEnvPath,
+  getBeamLogsDir,
 } from "./paths.js";
 
 function redirectStdoutStderrToFile(): void {
-  const logsDir = getPrismLogsDir();
+  const logsDir = getBeamLogsDir();
   fs.mkdirSync(logsDir, { recursive: true, mode: 0o700 });
   const logPath = path.join(logsDir, "engine.log");
   const stream = fs.createWriteStream(logPath, { flags: "a" });
@@ -82,9 +82,9 @@ export function runEngine(): Promise<void> {
   errorReporter.setAppVersion(getCurrentVersion());
 
   const logger = createLogger("run-engine");
-  logger.info(`Prism engine starting — version ${getCurrentVersion()}`);
+  logger.info(`Beam engine starting — version ${getCurrentVersion()}`);
   logger.info(
-    `Resolved paths: installDir=${process.env.PRISM_INSTALL_DIR ?? "(not set)"} configDir=${getPrismConfigDir()} dataDir=${getPrismDataDir()} envPath=${getPrismEnvPath()} dbPath=${getPrismDbPath()} logsDir=${getPrismLogsDir()}`,
+    `Resolved paths: installDir=${process.env.BEAM_INSTALL_DIR ?? "(not set)"} configDir=${getBeamConfigDir()} dataDir=${getBeamDataDir()} envPath=${getBeamEnvPath()} dbPath=${getBeamDbPath()} logsDir=${getBeamLogsDir()}`,
   );
 
   process.on("uncaughtException", (err) => {

@@ -19,7 +19,7 @@ describe("0015 migration schema sync", () => {
         error_type TEXT NOT NULL,
         message TEXT NOT NULL,
         stack_trace TEXT,
-        prism_version TEXT NOT NULL,
+        beam_version TEXT NOT NULL,
         platform TEXT,
         severity TEXT DEFAULT 'error',
         is_recoverable INTEGER DEFAULT 0,

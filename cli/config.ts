@@ -2,7 +2,7 @@ import { Command } from "commander";
 import { Effect, Layer } from "effect";
 import { DbLive } from "../engine/db-service.js";
 import { DbService } from "../engine/services.js";
-import { getPrismDbPath } from "../engine/paths.js";
+import { getBeamDbPath } from "../engine/paths.js";
 import {
   DB_CONFIG_KEYS,
   dbConfigKey,
@@ -11,7 +11,7 @@ import {
 } from "../engine/db-config.js";
 
 /**
- * `prism config` — inspect and edit the DB-backed config sidecar.
+ * `beam config` — inspect and edit the DB-backed config sidecar.
  *
  * Precedence is env > DB > defaults. These commands read/write the SQLite
  * `metadata` table rows keyed `config.<ENV_KEY>`; a row only takes effect when
@@ -23,7 +23,7 @@ import {
  */
 
 function buildLayer(): Layer.Layer<DbService, never, never> {
-  return DbLive(process.env.SQLITE_DB_PATH ?? getPrismDbPath());
+  return DbLive(process.env.SQLITE_DB_PATH ?? getBeamDbPath());
 }
 
 function unknownKey(envKey: string): void {

@@ -203,7 +203,7 @@ describe("Telegram Bot Worker", () => {
         .spyOn(globalThis, "fetch")
         .mockResolvedValue(new Response(JSON.stringify({ ok: true }), { status: 200 }));
 
-      const { url, ...init } = postWebhook(groupMessage(100, "/start@prism_agent_bot"));
+      const { url, ...init } = postWebhook(groupMessage(100, "/start@beam_agent_bot"));
       const response = await worker.fetch(
         new Request(url, init),
         testEnv,
@@ -211,7 +211,7 @@ describe("Telegram Bot Worker", () => {
       );
       expect(response.status).toBe(200);
       const sentBody = fetchSpy.mock.calls[0]?.[1] as { body?: string } | undefined;
-      expect(sentBody?.body).toContain("Welcome to Prism");
+      expect(sentBody?.body).toContain("Welcome to Beam");
     });
 
     it("should HTML-escape user-controlled first names in replies", async () => {
@@ -249,7 +249,7 @@ describe("Telegram Bot Worker", () => {
       );
       expect(response.status).toBe(200);
 
-      // Exactly one call: the refusal message to Telegram. No Prism API call.
+      // Exactly one call: the refusal message to Telegram. No Beam API call.
       expect(fetchSpy).toHaveBeenCalledTimes(1);
       const callUrl = String(fetchSpy.mock.calls[0]?.[0]);
       expect(callUrl).toContain("api.telegram.org");
@@ -261,7 +261,7 @@ describe("Telegram Bot Worker", () => {
     it("should refuse /register in a group chat without leaking an API key", async () => {
       const fetchSpy = await expectGroupRefusal(300, "/register");
       const sent = sentJson(fetchSpy, 0);
-      expect(String(sent.text)).not.toContain("sk-prism-");
+      expect(String(sent.text)).not.toContain("sk-beam-");
       expect(String(sent.text)).not.toContain("API Key");
     });
 
@@ -362,7 +362,7 @@ describe("Telegram Bot Worker", () => {
       );
       expect(response.status).toBe(200);
 
-      // First fetch call goes to the Prism API and must carry the shared secret.
+      // First fetch call goes to the Beam API and must carry the shared secret.
       const [apiUrl, apiInit] = fetchSpy.mock.calls[0] as [string, RequestInit];
       expect(String(apiUrl)).toContain("/v1/link-telegram/confirm");
       const headers = new Headers(apiInit.headers);
@@ -387,13 +387,13 @@ describe("Telegram Bot Worker", () => {
       // The bot's reply (last fetch call = Telegram sendMessage) must carry the
       // API's own error, not a bare "400 Bad Request" status line.
       const lastCall = fetchSpy.mock.calls.at(-1) as [string, RequestInit];
-      expect(String(lastCall[1].body)).toContain("Link failed: Prism API error: Code expired");
+      expect(String(lastCall[1].body)).toContain("Link failed: Beam API error: Code expired");
     });
 
     it("routes the confirm call over the API_SERVICE binding when present", async () => {
       // Cloudflare rejects same-zone workers.dev worker->worker fetches
       // (error 1042); the service binding is the sanctioned transport. When
-      // API_SERVICE is present, callPrismApi must call fetcher.fetch() and
+      // API_SERVICE is present, callBeamApi must call fetcher.fetch() and
       // never the global fetch for the API call. A partial mock stands in for
       // the binding (the full Fetcher interface is not needed at runtime).
       const bindingFetch = vi
@@ -446,7 +446,7 @@ describe("Telegram Bot Worker", () => {
   });
 
   describe("Registration Flow", () => {
-    it("should handle /register command and call Prism API", async () => {
+    it("should handle /register command and call Beam API", async () => {
       const fetchSpy = vi
         .spyOn(globalThis, "fetch")
         .mockResolvedValue(
@@ -463,7 +463,7 @@ describe("Telegram Bot Worker", () => {
         createExecutionContext(),
       );
       expect(response.status).toBe(200);
-      // Should call both Prism API and Telegram API
+      // Should call both Beam API and Telegram API
       expect(fetchSpy).toHaveBeenCalled();
     });
 

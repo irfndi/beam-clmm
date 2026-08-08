@@ -1313,12 +1313,16 @@ export function executeLive(
         // $150) by more than the 20% buffer, the static value underfunds the
         // swap and the post-swap balance check rejects an otherwise-fundable
         // ENTER. A failed price lookup falls back to the config value.
-        const liveNativePrice = yield* adapter.getTokenPrices([NATIVE_MINT], { useFallback: false }).pipe(
-          Effect.map((prices) => prices[NATIVE_MINT]),
-          Effect.catch(() => Effect.succeed(undefined)),
-        );
+        const liveNativePrice = yield* adapter
+          .getTokenPrices([NATIVE_MINT], { useFallback: false })
+          .pipe(
+            Effect.map((prices) => prices[NATIVE_MINT]),
+            Effect.catch(() => Effect.succeed(undefined)),
+          );
         const effectiveSolPrice =
-          typeof liveNativePrice === "number" && liveNativePrice > 0 ? liveNativePrice : nativePriceUsd;
+          typeof liveNativePrice === "number" && liveNativePrice > 0
+            ? liveNativePrice
+            : nativePriceUsd;
         const topUpUsdc =
           effectiveSolPrice > 0
             ? Math.max(GAS_TOP_UP_STABLECOIN, Math.ceil(deficitSol * effectiveSolPrice * 1.2))
@@ -4136,10 +4140,12 @@ export const program = Effect.gen(function* () {
           Effect.map((lamports) => ({ ok: true as const, lamports })),
           Effect.catch(() => Effect.succeed({ ok: false as const, lamports: 0n })),
         );
-        const liveNativePrice = yield* adapter.getTokenPrices([NATIVE_MINT], { useFallback: false }).pipe(
-          Effect.map((prices) => prices[NATIVE_MINT]),
-          Effect.catch(() => Effect.succeed(undefined)),
-        );
+        const liveNativePrice = yield* adapter
+          .getTokenPrices([NATIVE_MINT], { useFallback: false })
+          .pipe(
+            Effect.map((prices) => prices[NATIVE_MINT]),
+            Effect.catch(() => Effect.succeed(undefined)),
+          );
         const priceOk =
           typeof liveNativePrice === "number" &&
           Number.isFinite(liveNativePrice) &&

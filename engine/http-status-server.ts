@@ -4,14 +4,14 @@ import { createLogger } from "./logger.js";
 import type { AgentStateApi } from "./services.js";
 import { AgentStateService, HttpStatusServerService } from "./services.js";
 import type { AppConfig } from "./config-service.js";
-import type { PrismStateSnapshot } from "./state-service.js";
+import type { BeamStateSnapshot } from "./state-service.js";
 import type { AgentProposal } from "./types.js";
 import { parseHttpQueueProposal, ProposalParseError } from "./proposal-schema.js";
 import { getCurrentVersion } from "./version.js";
 
 const logger = createLogger("HttpStatusServer");
 
-function sanitizeConfig(cfg: AppConfig, snapshot: PrismStateSnapshot): Record<string, unknown> {
+function sanitizeConfig(cfg: AppConfig, snapshot: BeamStateSnapshot): Record<string, unknown> {
   return {
     paperTrading: cfg.paperTrading,
     scanIntervalMs: cfg.scanIntervalMs,

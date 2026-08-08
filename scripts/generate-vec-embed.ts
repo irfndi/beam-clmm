@@ -54,7 +54,7 @@ export function getEmbeddedVec0Path(): string | null {
     return null;
   }
   const prefix = hashPrefix(EMBEDDED_VEC0.data);
-  const tmpDir = path.join(os.tmpdir(), \`prism-vec0-\${prefix}\`);
+  const tmpDir = path.join(os.tmpdir(), \`beam-vec0-\${prefix}\`);
   fs.mkdirSync(tmpDir, { recursive: true });
   // Restrict the temp dir so only the owner can access the loader path.
   fs.chmodSync(tmpDir, 0o700);

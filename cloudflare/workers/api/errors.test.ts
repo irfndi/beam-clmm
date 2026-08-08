@@ -53,7 +53,7 @@ describe("Error Reporting API", () => {
         error_type TEXT NOT NULL,
         message TEXT NOT NULL,
         stack_trace TEXT,
-        prism_version TEXT NOT NULL,
+        beam_version TEXT NOT NULL,
         platform TEXT,
         severity TEXT DEFAULT 'error',
         is_recoverable INTEGER DEFAULT 0,
@@ -91,7 +91,7 @@ describe("Error Reporting API", () => {
         errorType: "ONNX_BigInt",
         message: "BigInt serialization failed",
         stackTrace: "Error: BigInt...\n    at serialize (...)",
-        prismVersion: "1.2.3",
+        beamVersion: "1.2.3",
         platform: "darwin",
         severity: "error",
         isRecoverable: 1,
@@ -108,7 +108,7 @@ describe("Error Reporting API", () => {
         agentId: "hashed-wallet-abc",
         errorType: "ONNX_BigInt",
         message: "BigInt serialization failed",
-        prismVersion: "1.2.3",
+        beamVersion: "1.2.3",
       });
       const response = await worker.fetch(request, testEnv, ctx);
       expect(response.status).toBe(400);
@@ -120,7 +120,7 @@ describe("Error Reporting API", () => {
         id: "test-uuid-2",
         errorType: "ONNX_BigInt",
         message: "BigInt serialization failed",
-        prismVersion: "1.2.3",
+        beamVersion: "1.2.3",
       });
       const response = await worker.fetch(request, testEnv, ctx);
       expect(response.status).toBe(400);
@@ -132,7 +132,7 @@ describe("Error Reporting API", () => {
         id: "test-uuid-3",
         agentId: "hashed-wallet-abc",
         message: "BigInt serialization failed",
-        prismVersion: "1.2.3",
+        beamVersion: "1.2.3",
       });
       const response = await worker.fetch(request, testEnv, ctx);
       expect(response.status).toBe(400);
@@ -144,13 +144,13 @@ describe("Error Reporting API", () => {
         id: "test-uuid-4",
         agentId: "hashed-wallet-abc",
         errorType: "ONNX_BigInt",
-        prismVersion: "1.2.3",
+        beamVersion: "1.2.3",
       });
       const response = await worker.fetch(request, testEnv, ctx);
       expect(response.status).toBe(400);
     });
 
-    it("should return 400 when prismVersion is missing", async () => {
+    it("should return 400 when beamVersion is missing", async () => {
       const ctx = createExecutionContext();
       const request = buildRequest("POST", "/v1/errors/report", {
         id: "test-uuid-5",
@@ -169,7 +169,7 @@ describe("Error Reporting API", () => {
         agentId: "hashed-wallet-abc",
         errorType: "SQLite_Vec",
         message: "Vector dimension mismatch",
-        prismVersion: "1.2.3",
+        beamVersion: "1.2.3",
       };
       // Insert once
       const req1 = buildRequest("POST", "/v1/errors/report", report);
@@ -191,7 +191,7 @@ describe("Error Reporting API", () => {
         agentId: "hashed-wallet-abc",
         errorType: "SQLite_Vec",
         message: "Vector dimension mismatch",
-        prismVersion: "1.2.3",
+        beamVersion: "1.2.3",
       };
       await worker.fetch(
         buildRequest("POST", "/v1/errors/report", report),
@@ -222,7 +222,7 @@ describe("Error Reporting API", () => {
         agentId: "hashed-wallet-abc",
         errorType: "SQLite_Vec",
         message: "Vector dimension mismatch",
-        prismVersion: "1.2.3",
+        beamVersion: "1.2.3",
       };
       await worker.fetch(
         buildRequest("POST", "/v1/errors/report", first),
@@ -260,7 +260,7 @@ describe("Error Reporting API", () => {
         agentId: "hashed-wallet-xyz",
         errorType: i % 2 === 0 ? "ONNX_BigInt" : "SQLite_Vec",
         message: `Error ${i}`,
-        prismVersion: "1.2.3",
+        beamVersion: "1.2.3",
       }));
       const request = buildRequest("POST", "/v1/errors/batch", { reports });
       const response = await worker.fetch(request, testEnv, ctx);
@@ -275,7 +275,7 @@ describe("Error Reporting API", () => {
         agentId: "hashed-wallet-xyz",
         errorType: "SQLite_Vec",
         message: "Vector dimension mismatch",
-        prismVersion: "1.2.3",
+        beamVersion: "1.2.3",
       };
       await worker.fetch(
         buildRequest("POST", "/v1/errors/batch", { reports: [report] }),
@@ -310,7 +310,7 @@ describe("Error Reporting API", () => {
         agentId: "hashed-wallet-xyz",
         errorType: "ONNX_BigInt",
         message: `Error ${i}`,
-        prismVersion: "1.2.3",
+        beamVersion: "1.2.3",
       }));
       const request = buildRequest("POST", "/v1/errors/batch", { reports });
       const response = await worker.fetch(request, testEnv, ctx);
@@ -325,9 +325,9 @@ describe("Error Reporting API", () => {
           agentId: "hash",
           errorType: "TypeA",
           message: "ok",
-          prismVersion: "1.0",
+          beamVersion: "1.0",
         },
-        { id: "mixed-invalid-1", agentId: "hash", errorType: "TypeB", prismVersion: "1.0" }, // missing message
+        { id: "mixed-invalid-1", agentId: "hash", errorType: "TypeB", beamVersion: "1.0" }, // missing message
       ];
       const request = buildRequest("POST", "/v1/errors/batch", { reports });
       const response = await worker.fetch(request, testEnv, ctx);
@@ -344,7 +344,7 @@ describe("Error Reporting API", () => {
     it("should return 400 when a report in batch is missing required fields", async () => {
       const ctx = createExecutionContext();
       const reports = [
-        { id: "invalid-only-1", agentId: "hash", errorType: "TypeB", prismVersion: "1.0" }, // missing message
+        { id: "invalid-only-1", agentId: "hash", errorType: "TypeB", beamVersion: "1.0" }, // missing message
       ];
       const request = buildRequest("POST", "/v1/errors/batch", { reports });
       const response = await worker.fetch(request, testEnv, ctx);
@@ -358,7 +358,7 @@ describe("Error Reporting API", () => {
     beforeAll(async () => {
       // Seed some error data for stats
       const stmt = env.DB.prepare(
-        `INSERT INTO error_logs (user_id, id, agent_id, error_type, message, stack_trace, prism_version, platform, severity, is_recoverable, fingerprint, first_seen_at, last_seen_at, occurrence_count, created_at)
+        `INSERT INTO error_logs (user_id, id, agent_id, error_type, message, stack_trace, beam_version, platform, severity, is_recoverable, fingerprint, first_seen_at, last_seen_at, occurrence_count, created_at)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       );
       const now = new Date();

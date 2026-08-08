@@ -1,20 +1,20 @@
 # Agent Marketplace Skills
 
-This directory contains Prism installation skills for various agent harness marketplaces. Issue #33 tracked the full plan; this file documents the current status.
+This directory contains Beam installation skills for various agent harness marketplaces. Issue #33 tracked the full plan; this file documents the current status.
 
 ## Status by Marketplace
 
 | # | Marketplace | Status | Skill file | Local install path |
 |---|---|---|---|---|
-| 1 | **OpenCode** | ✅ Ready | [`opencode/SKILL.md`](opencode/SKILL.md) | `~/.config/opencode/skills/prism-install/SKILL.md` |
-| 1b | **OpenClaw** | ✅ Ready | [`openclaw/SKILL.md`](openclaw/SKILL.md) | `~/.openclaw/skills/prism-install/SKILL.md` |
-| 1c | **Hermes** | ✅ Ready | [`hermes/SKILL.md`](hermes/SKILL.md) | `~/.hermes/skills/software-development/prism-install/SKILL.md` |
-| 1d | **acpx / custom** | ✅ Ready | [`.agents/skills/prism-install.md`](../.agents/skills/prism-install.md) | `~/.agents/skills/prism-install.md` |
-| 2 | Claude Desktop (MCP) | ✅ Ready | [`mcp-server/`](../mcp-server/) | `npm install -g @irfndi/prism-mcp` |
+| 1 | **OpenCode** | ✅ Ready | [`opencode/SKILL.md`](opencode/SKILL.md) | `~/.config/opencode/skills/beam-install/SKILL.md` |
+| 1b | **OpenClaw** | ✅ Ready | [`openclaw/SKILL.md`](openclaw/SKILL.md) | `~/.openclaw/skills/beam-install/SKILL.md` |
+| 1c | **Hermes** | ✅ Ready | [`hermes/SKILL.md`](hermes/SKILL.md) | `~/.hermes/skills/software-development/beam-install/SKILL.md` |
+| 1d | **acpx / custom** | ✅ Ready | [`.agents/skills/beam-install.md`](../.agents/skills/beam-install.md) | `~/.agents/skills/beam-install.md` |
+| 2 | Claude Desktop (MCP) | ✅ Ready | [`mcp-server/`](../mcp-server/) | `npm install -g @irfndi/beam-mcp` |
 | 3 | OpenAI GPTs | ❌ Deferred | — | UI-only GPT Store submission |
-| 4 | AutoGPT | ✅ Ready | [`packages/autogpt-prism/`](../packages/autogpt-prism/) | `pip install autogpt-prism` |
-| 5 | LangChain | ✅ Ready | [`packages/langchain-prism/`](../packages/langchain-prism/) | `pip install langchain-prism` |
-| 6 | CrewAI | ❌ Not started | — | Requires `crewai-prism` PyPI package |
+| 4 | AutoGPT | ✅ Ready | [`packages/autogpt-beam/`](../packages/autogpt-beam/) | `pip install autogpt-beam` |
+| 5 | LangChain | ✅ Ready | [`packages/langchain-beam/`](../packages/langchain-beam/) | `pip install langchain-beam` |
+| 6 | CrewAI | ❌ Not started | — | Requires `crewai-beam` PyPI package |
 | 7 | Dify | ❌ Not started | — | Requires Dify marketplace submission |
 | 8 | Flowise | ❌ Not started | — | Requires Flowise custom-node npm package |
 | 9 | ChatGPT Plugins (legacy) | ❌ Not started | — | Deprecated; OpenAI GPTs is the successor |
@@ -28,9 +28,9 @@ The four Markdown-based harnesses, the MCP server, and two Python packages are r
 - **OpenClaw** — Plain Markdown skill file
 - **Hermes** — Rich YAML frontmatter with metadata
 - **acpx / custom** — Project's own skill format
-- **Claude Desktop (MCP)** — npm package with 4 tools (`@irfndi/prism-mcp`)
-- **LangChain** — PyPI package with `PrismTool` (`pip install langchain-prism`)
-- **AutoGPT** — PyPI plugin with 5 commands (`pip install autogpt-prism`)
+- **Claude Desktop (MCP)** — npm package with 4 tools (`@irfndi/beam-mcp`)
+- **LangChain** — PyPI package with `BeamTool` (`pip install langchain-beam`)
+- **AutoGPT** — PyPI plugin with 5 commands (`pip install autogpt-beam`)
 
 ## What's Not Done (3/10)
 
@@ -52,20 +52,20 @@ For each ready marketplace, copy the SKILL.md to the local path shown in the tab
 
 ```bash
 # OpenCode
-mkdir -p ~/.config/opencode/skills/prism-install
-cp marketplaces/opencode/SKILL.md ~/.config/opencode/skills/prism-install/SKILL.md
+mkdir -p ~/.config/opencode/skills/beam-install
+cp marketplaces/opencode/SKILL.md ~/.config/opencode/skills/beam-install/SKILL.md
 
 # OpenClaw
-mkdir -p ~/.openclaw/skills/prism-install
-cp marketplaces/openclaw/SKILL.md ~/.openclaw/skills/prism-install/SKILL.md
+mkdir -p ~/.openclaw/skills/beam-install
+cp marketplaces/openclaw/SKILL.md ~/.openclaw/skills/beam-install/SKILL.md
 
 # Hermes (under software-development category)
-mkdir -p ~/.hermes/skills/software-development/prism-install
-cp marketplaces/hermes/SKILL.md ~/.hermes/skills/software-development/prism-install/SKILL.md
+mkdir -p ~/.hermes/skills/software-development/beam-install
+cp marketplaces/hermes/SKILL.md ~/.hermes/skills/software-development/beam-install/SKILL.md
 
 # acpx / custom
 mkdir -p ~/.agents/skills
-cp .agents/skills/prism-install.md ~/.agents/skills/prism-install.md
+cp .agents/skills/beam-install.md ~/.agents/skills/beam-install.md
 ```
 
 After copying, restart your agent harness so it picks up the new skill.
@@ -74,7 +74,7 @@ After copying, restart your agent harness so it picks up the new skill.
 
 The exact command depends on the harness:
 
-- **OpenCode**: `skill()` then ask for `prism-install`
+- **OpenCode**: `skill()` then ask for `beam-install`
 - **OpenClaw**: restart the harness; skills in `~/.openclaw/skills/` are loaded automatically
 - **Hermes**: restart the harness; skills in `~/.hermes/skills/` are loaded automatically
 - **acpx**: the skill is in the standard `.agents/skills/` location; acpx discovers it on next run
@@ -92,7 +92,6 @@ The content can be adapted from the existing four skill files — the install/co
 
 ## See Also
 
-- [Issue #33](https://github.com/irfndi/prism-liquidity-agent/issues/33) — original phased plan
+- [Issue #33](https://github.com/irfndi/beam-clmm/issues/33) — original phased plan
 - [`docs/agent-harness.md`](../docs/agent-harness.md) — full agent integration guide
 - [`.agents/skills/`](../.agents/skills/) — the project's own skill directory (acpx format)
-- [`dlmm-rebalancer`](../.agents/skills/dlmm-rebalancer.md) — strategy-level reasoning skill

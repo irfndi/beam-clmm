@@ -145,7 +145,7 @@ describe("Alerts API", () => {
 
     it("rejects requests with an invalid API key (401)", async () => {
       const response = await worker.fetch(
-        authed("/v1/alerts", VALID_ALERT, "sk-prism-not-a-real-key"),
+        authed("/v1/alerts", VALID_ALERT, "sk-beam-not-a-real-key"),
         testEnv,
         createExecutionContext(),
       );

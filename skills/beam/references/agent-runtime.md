@@ -1,11 +1,11 @@
 # Agent Runtime Setup Guide
 
-This guide is for users who want Prism to communicate with a local agent runtime
+This guide is for users who want Beam to communicate with a local agent runtime
 (Hermes or OpenClaw) instead of using remote LLM APIs.
 
 ## What the overlay does
 
-When `AGENTIC_MODE=true`, Prism asks the local agent runtime to review decisions
+When `AGENTIC_MODE=true`, Beam asks the local agent runtime to review decisions
 and sends proactive check-ins. The overlay is **safety-bounded**:
 
 - It can only reduce confidence or change an action to `HOLD`.
@@ -24,9 +24,9 @@ AGENT_ACP_COMMAND=hermes
 AGENT_ACP_ARGS=acp
 ```
 
-4. Start Prism: `prism dev`
+4. Start Beam: `beam dev`
 
-Prism spawns `hermes acp` as a child process and communicates via JSON-RPC over
+Beam spawns `hermes acp` as a child process and communicates via JSON-RPC over
 stdin/stdout.
 
 ## OpenClaw (Gateway WebSocket)
@@ -42,21 +42,21 @@ AGENT_GATEWAY_URL=ws://127.0.0.1:18789
 AGENT_GATEWAY_TOKEN=your-token
 ```
 
-4. Start Prism: `prism dev`
+4. Start Beam: `beam dev`
 
-Prism connects to the OpenClaw Gateway WebSocket and sends prompts/check-ins.
+Beam connects to the OpenClaw Gateway WebSocket and sends prompts/check-ins.
 
 ## Messaging apps (Telegram, Discord, Slack, WhatsApp)
 
-Prism does **not** send messages directly. The agent runtime (Hermes/OpenClaw)
-owns the messaging channel configuration and forwards Prism check-ins/alerts to
+Beam does **not** send messages directly. The agent runtime (Hermes/OpenClaw)
+owns the messaging channel configuration and forwards Beam check-ins/alerts to
 the user's preferred app.
 
 To receive alerts:
 
 1. Configure the messaging channel in your agent runtime (e.g., Telegram bot
    token in OpenClaw `channels.telegram`).
-2. Ensure `AGENT_CHECKIN_ON_EVENTS=true` in Prism `.env`.
+2. Ensure `AGENT_CHECKIN_ON_EVENTS=true` in Beam `.env`.
 3. The runtime will surface ENTER/EXIT/REBALANCE check-ins and periodic summaries.
 
 ## Webhook alerts (OpenClaw)
@@ -68,22 +68,22 @@ AGENT_OPENCLAW_WEBHOOK_URL=http://127.0.0.1:18789/hooks/agent
 AGENT_GATEWAY_TOKEN=your-token
 ```
 
-Prism will POST structured alerts to that endpoint.
+Beam will POST structured alerts to that endpoint.
 
 ## Periodic check-ins
 
-By default Prism sends a check-in every hour. Adjust with:
+By default Beam sends a check-in every hour. Adjust with:
 
 ```bash
 AGENT_CHECKIN_INTERVAL_MS=3600000
 ```
 
-## Querying Prism from the agent
+## Querying Beam from the agent
 
 Agents can call:
 
 ```bash
-prism status --json
+beam status --json
 ```
 
 This returns portfolio, positions, recent decisions, and agent runtime config.

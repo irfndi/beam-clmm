@@ -8,8 +8,8 @@
 ## Setup
 
 ```bash
-git clone https://github.com/irfndi/prism-liquidity-agent
-cd prism-liquidity-agent
+git clone https://github.com/irfndi/beam-clmm
+cd beam-clmm
 bun install
 bun run setup          # interactive .env wizard
 ```

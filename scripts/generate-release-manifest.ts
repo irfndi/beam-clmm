@@ -23,7 +23,7 @@ if (!["stable", "beta", "dev", "canary"].includes(channel)) {
 
 const cwd = process.cwd();
 const files = fs.readdirSync(cwd).filter((f) => {
-  return f.startsWith(`prism-v${version}-`) && f.endsWith(".tar.gz") && !f.endsWith(".sha256");
+  return f.startsWith(`beam-v${version}-`) && f.endsWith(".tar.gz") && !f.endsWith(".sha256");
 });
 
 const expectedPlatforms = ["linux-x64", "linux-arm64", "darwin-x64", "darwin-arm64"];
@@ -33,7 +33,7 @@ for (const file of files) {
   // Reconstruct the platform key from the fixed file-name shape instead of
   // interpolating the version into a regex (a `+` in semver build metadata
   // would otherwise be parsed as a quantifier and break the match).
-  const platformKey = file.slice(`prism-v${version}-`.length, -".tar.gz".length);
+  const platformKey = file.slice(`beam-v${version}-`.length, -".tar.gz".length);
   if (!platformKey) continue;
   const sha256File = `${file}.sha256`;
   if (!fs.existsSync(path.join(cwd, sha256File))) {
@@ -56,7 +56,7 @@ if (Object.keys(bundles).length === 0) {
   console.warn("No bundles found; manifest will have no per-platform bundles.");
 }
 
-const tarballUrl = `${r2Base}/${keyPrefix}/prism-v${version}.tar.gz`;
+const tarballUrl = `${r2Base}/${keyPrefix}/beam-v${version}.tar.gz`;
 const signatureUrl = `${tarballUrl}.asc`;
 
 const manifest: Record<string, unknown> = {

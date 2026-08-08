@@ -1,4 +1,4 @@
-# Prism Decision Rules
+# Beam Decision Rules
 
 This reference mirrors the logic in `engine/program.ts`.
 

@@ -135,7 +135,7 @@ describe("Referral API", () => {
       // report — this should be a 401.
       const response = await worker.fetch(
         buildRequest("GET", "/v1/referral/code", undefined, {
-          Authorization: "Bearer sk-prism-unknown-key",
+          Authorization: "Bearer sk-beam-unknown-key",
         }),
         testEnv,
         createExecutionContext(),

@@ -1,5 +1,5 @@
 /**
- * Alchemy composition root (Infrastructure-as-Effects) for the Prism
+ * Alchemy composition root (Infrastructure-as-Effects) for the Beam
  * Cloudflare subproject. Replaces the old `wrangler.toml` /
  * `wrangler.telegram.toml` deployment pipeline: one typed program declares
  * both Workers plus the D1 / KV / R2 / Vectorize resources they bind.
@@ -35,7 +35,7 @@ import * as Effect from "effect/Effect";
 // ---------------------------------------------------------------------------
 
 /**
- * D1: `prism-db`. Shared by BOTH workers via the `DB` binding.
+ * D1: `beam-db`. Shared by BOTH workers via the `DB` binding.
  *
  * GUARDRAIL — do not change `name` / `jurisdiction` / `primaryLocationHint`
  * (or the account): each is creation-immutable, and editing it makes the
@@ -44,40 +44,40 @@ import * as Effect from "effect/Effect";
  * `d1_migrations` tracking table and skipped on adopt; new files apply on deploy.
  */
 export const database = Cloudflare.D1.Database("database", {
-  name: "prism-db",
+  name: "beam-db",
   migrationsDir: "../migrations",
   migrationsTable: "d1_migrations",
 });
 
-/** KV: `prism-cache` (title is the adopted identity). Shared via the `CACHE` binding. */
+/** KV: `beam-cache` (title is the adopted identity). Shared via the `CACHE` binding. */
 export const cache = Cloudflare.KV.Namespace("cache", {
-  title: "prism-cache",
+  title: "beam-cache",
 });
 
 /**
- * R2: `prism-backups`, exposed as the `BACKUPS` binding.
+ * R2: `beam-backups`, exposed as the `BACKUPS` binding.
  *
  * NOTE: release/canary CI writes release bundles to this bucket OUT-OF-BAND
  * (`npx wrangler r2 object put` in release.yml / ci.yml). It is declared here
  * only so the binding exists — never run `alchemy destroy` / a replace against it.
  */
 export const backups = Cloudflare.R2.Bucket("backups", {
-  name: "prism-backups",
+  name: "beam-backups",
 });
 
 export const telemetryArchive = Cloudflare.R2.Bucket("telemetryArchive", {
-  name: "prism-telemetry",
+  name: "beam-telemetry",
 });
 
 /**
- * Vectorize: `prism-memory`. Bound as `MEMORY` for embeddings.
+ * Vectorize: `beam-memory`. Bound as `MEMORY` for embeddings.
  *
  * `dimensions` and `metric` MUST match the live index: a Vectorize index is
  * immutable, and an adoption diff with either omitted would plan a REPLACE
  * (delete + recreate an EMPTY index, losing every embedding).
  */
 export const memory = Cloudflare.Vectorize.Index("memory", {
-  name: "prism-memory",
+  name: "beam-memory",
   dimensions: 384,
   metric: "cosine",
 });
@@ -120,9 +120,9 @@ const observability = {
   },
 };
 
-/** API worker — `prism-api.irfndi.workers.dev`. */
+/** API worker — `beam-api.irfndi.workers.dev`. */
 export const api = Cloudflare.Worker("api", {
-  name: "prism-api",
+  name: "beam-api",
   main: "../dist/api/index.mjs",
   bundle: false,
   compatibility,
@@ -136,8 +136,8 @@ export const api = Cloudflare.Worker("api", {
     MEMORY: memory,
     // Plain vars (literal string -> `plain_text`).
     ENVIRONMENT: "production",
-    TELEGRAM_WEBHOOK_URL: "https://prism-telegram-bot.irfndi.workers.dev/webhook",
-    TELEGRAM_BOT_URL: "https://prism-telegram-bot.irfndi.workers.dev",
+    TELEGRAM_WEBHOOK_URL: "https://beam-telegram-bot.irfndi.workers.dev/webhook",
+    TELEGRAM_BOT_URL: "https://beam-telegram-bot.irfndi.workers.dev",
     // Secrets (Config.redacted -> `secret_text`, read from CI env at deploy).
     TELEGRAM_BOT_TOKEN: Config.redacted("TELEGRAM_BOT_TOKEN"),
     BOT_API_SECRET: Config.redacted("BOT_API_SECRET"),
@@ -146,9 +146,9 @@ export const api = Cloudflare.Worker("api", {
   },
 });
 
-/** Telegram bot worker — `prism-telegram-bot.irfndi.workers.dev`. */
+/** Telegram bot worker — `beam-telegram-bot.irfndi.workers.dev`. */
 export const telegramBot = Cloudflare.Worker("telegramBot", {
-  name: "prism-telegram-bot",
+  name: "beam-telegram-bot",
   main: "../dist/telegram-bot/index.mjs",
   bundle: false,
   compatibility,
@@ -158,7 +158,7 @@ export const telegramBot = Cloudflare.Worker("telegramBot", {
     DB: database,
     CACHE: cache,
     // Plain var: the workers.dev HTTPS URL the bot calls (NOT a service binding).
-    API_BASE_URL: "https://prism-api.irfndi.workers.dev",
+    API_BASE_URL: "https://beam-api.irfndi.workers.dev",
     // Service binding to the API worker. Cloudflare rejects worker->worker
     // fetches over the same-zone workers.dev hostname (error 1042); the
     // binding is the sanctioned transport. `api` is declared above, so no TDZ.
@@ -175,7 +175,7 @@ export const telegramBot = Cloudflare.Worker("telegramBot", {
 // ---------------------------------------------------------------------------
 
 export default Alchemy.Stack(
-  "prism",
+  "beam",
   {
     providers: Cloudflare.providers(),
     // Remote state store (worker + Durable Object, account-level Secrets

@@ -1,4 +1,4 @@
-/** @file Merge-preserving .env writer for `prism setup`.
+/** @file Merge-preserving .env writer for `beam setup`.
  *
  * Re-running setup must NEVER wipe user configuration. The wizard only
  * manages a fixed set of keys; everything else in an existing `.env`
@@ -79,7 +79,7 @@ export function mergeEnvContent(existing: string, managed: string): string {
   );
   const toAppend = managedLines.filter((l) => l.key !== null && !presentKeys.has(l.key!));
   if (toAppend.length > 0) {
-    out.push("", "# ── Managed by `prism setup` — re-running setup updates these keys ──");
+    out.push("", "# ── Managed by `beam setup` — re-running setup updates these keys ──");
     for (const line of toAppend) out.push(line.raw);
   }
   return `${out.join("\n")}\n`;

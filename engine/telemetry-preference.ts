@@ -2,13 +2,13 @@
  * Privacy-first telemetry preference module.
  *
  * - Defaults to enabled unless explicitly opted out via env/config.
- * - Reads the local preference flag from the Prism config directory.
+ * - Reads the local preference flag from the Beam config directory.
  * - Never blocks the engine: missing file or malformed JSON falls back to enabled.
  */
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { dirname, join } from "path";
-import { getPrismUserConfigDir } from "./paths.js";
+import { getBeamUserConfigDir } from "./paths.js";
 
 const TELEMETRY_PREFERENCE_FILE = "telemetry-preference.json";
 
@@ -18,7 +18,7 @@ export interface TelemetryPreference {
 }
 
 export function getTelemetryPreferencePath(): string {
-  return join(getPrismUserConfigDir(), TELEMETRY_PREFERENCE_FILE);
+  return join(getBeamUserConfigDir(), TELEMETRY_PREFERENCE_FILE);
 }
 
 export function readTelemetryPreference(): TelemetryPreference {

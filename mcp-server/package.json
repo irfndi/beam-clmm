@@ -1,11 +1,11 @@
 {
-  "name": "@irfndi/prism-mcp",
+  "name": "@irfndi/beam-mcp",
   "version": "0.0.8",
-  "description": "Model Context Protocol (MCP) server that exposes Prism liquidity agent commands as tools for Claude Desktop and other MCP clients",
+  "description": "Model Context Protocol (MCP) server that exposes Beam liquidity agent commands as tools for Claude Desktop and other MCP clients",
   "license": "MIT",
   "type": "module",
   "bin": {
-    "prism-mcp-server": "./dist/index.js"
+    "beam-mcp-server": "./dist/index.js"
   },
   "main": "./dist/index.js",
   "files": [
@@ -37,9 +37,7 @@
   "keywords": [
     "mcp",
     "model-context-protocol",
-    "prism",
-    "solana",
-    "dlmm",
+    "beam",
     "liquidity",
     "trading",
     "agent"

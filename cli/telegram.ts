@@ -1,5 +1,5 @@
 import { Command } from "commander";
-import { prismApiPost, readCredentials } from "./api.js";
+import { beamApiPost, readCredentials } from "./api.js";
 
 interface LinkStartResult {
   code: string;
@@ -11,11 +11,11 @@ export const telegramCommand = new Command("link-telegram")
   .action(async () => {
     const creds = readCredentials();
     if (!creds) {
-      console.error("Error: Not registered. Run 'prism register' first.");
+      console.error("Error: Not registered. Run 'beam register' first.");
       process.exit(1);
     }
 
-    const result = await prismApiPost<LinkStartResult>(
+    const result = await beamApiPost<LinkStartResult>(
       "/v1/link-telegram/start",
       {},
       { apiKey: creds.apiKey },
@@ -34,5 +34,5 @@ export const telegramCommand = new Command("link-telegram")
     );
     console.log("Link code:", code);
     console.log(`(expires in ${expiresInMin} minutes)`);
-    console.log("Send this code to @prism_agent_bot on Telegram");
+    console.log("Send this code to @beam_agent_bot on Telegram");
   });

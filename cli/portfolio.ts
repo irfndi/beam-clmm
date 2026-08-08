@@ -7,7 +7,7 @@ import { ConfigLive } from "../engine/config-service.js";
 import type { PositionRecord } from "../engine/db-service.js";
 import { computePositionAnalytics, computePortfolioEquity } from "../engine/pnl.js";
 import { createLogger } from "../engine/logger.js";
-import { getPrismDbPath } from "../engine/paths.js";
+import { getBeamDbPath } from "../engine/paths.js";
 
 const logger = createLogger("portfolio-cli");
 
@@ -29,7 +29,7 @@ function sanitizeSymbol(value: string): string {
 }
 
 function buildProgram(): Layer.Layer<DbService | AdapterService, Error, never> {
-  const dbPath = process.env.SQLITE_DB_PATH ?? getPrismDbPath();
+  const dbPath = process.env.SQLITE_DB_PATH ?? getBeamDbPath();
   const dbLayer = DbLive(dbPath);
   const adapterLayer = Layer.provide(AdapterLive, ConfigLive);
   return Layer.mergeAll(dbLayer, adapterLayer) as unknown as Layer.Layer<
@@ -435,12 +435,12 @@ export const portfolioCommand = new Command("portfolio")
   .addHelpText(
     "after",
     `\nExamples:
-  $ prism portfolio                    # Show active positions with P&L
-  $ prism portfolio summary            # Show portfolio summary only
-  $ prism portfolio history            # Show exited positions
-  $ prism portfolio --json             # JSON output for scripting
+  $ beam portfolio                    # Show active positions with P&L
+  $ beam portfolio summary            # Show portfolio summary only
+  $ beam portfolio history            # Show exited positions
+  $ beam portfolio --json             # JSON output for scripting
 
-The portfolio command reads from the local SQLite database (prism.db by default)
+The portfolio command reads from the local SQLite database (beam.db by default)
 and displays current positions with unrealized P&L calculations.\n`,
   );
 

@@ -108,7 +108,7 @@ describe("Fee Wallet API", () => {
       expect(stored).toBe(addr);
     });
 
-    it("rejects invalid Solana addresses", async () => {
+    it("rejects invalid EVM addresses", async () => {
       const ctx = createExecutionContext();
       const request = withAdmin(
         buildRequest("PUT", "/v1/fee-wallet", { address: "not-a-valid-addr" }),

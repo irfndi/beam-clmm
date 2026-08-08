@@ -13,8 +13,8 @@ import {
 } from "./portfolio.js";
 import { createLogger } from "../engine/logger.js";
 import { readLockfile, isProcessAlive, findRunningEngineProcess } from "./lockfile.js";
-import { getPrismDbPath } from "../engine/paths.js";
-import { resolveEffectivePubkey } from "./wallet.js";
+import { getBeamDbPath } from "../engine/paths.js";
+import { resolveEffectiveWallet } from "../engine/wallet-keystore.js";
 
 const logger = createLogger("status-cli");
 
@@ -34,7 +34,7 @@ export type StrandedSettlementClassification =
 /**
  * Issue #183: classifies a typed `getTokenDecimals` failure. The adapter
  * raises the SAME typed error for an RPC outage and for a genuinely
- * unresolvable mint ("Cannot resolve decimals for mint X via Helius or
+ * unresolvable mint ("Cannot resolve decimals for mint X via RPC or
  * standard RPC" — adapter-service.ts) — only the message distinguishes the
  * two. Outage → Unavailable (retry later); unresolvable → Unpriceable
  * (permanent; a retry can never succeed). Exported for unit coverage.
@@ -155,7 +155,7 @@ function buildProgram(): Layer.Layer<
   Error,
   never
 > {
-  const dbPath = process.env.SQLITE_DB_PATH ?? getPrismDbPath();
+  const dbPath = process.env.SQLITE_DB_PATH ?? getBeamDbPath();
   const dbLayer = DbLive(dbPath);
   const auditLayer = Layer.provide(AuditLive, dbLayer);
   const configLayer = ConfigLive;
@@ -174,9 +174,9 @@ export const statusCommand = new Command("status")
   .addHelpText(
     "after",
     `\nExamples:
-  $ prism status                 # Human-readable status summary
-  $ prism status --json          # JSON output for agents / skills
-  $ prism status --message       # Markdown summary for Telegram/Discord/Slack/WhatsApp
+  $ beam status                 # Human-readable status summary
+  $ beam status --json          # JSON output for agents / skills
+  $ beam status --message       # Markdown summary for Telegram/Discord/Slack/WhatsApp
 
 The status command reads from the local SQLite database and is safe to call
 from agent skills or cron jobs. It does not require the engine to be running.
@@ -197,8 +197,8 @@ network; with no stranded settlements it is fully offline.`,
           const recentAudit = yield* audit.getRecentDecisions(10);
           const walletBalanceUsd = yield* readCliWalletBalance();
           const summary = computeSummaryWithEquity(positions, walletBalanceUsd);
-          const effectiveWallet = resolveEffectivePubkey();
-          const walletAddress = effectiveWallet?.error ? null : (effectiveWallet?.pubkey ?? null);
+          const effectiveWallet = resolveEffectiveWallet();
+          const walletAddress = effectiveWallet?.error ? null : (effectiveWallet?.address ?? null);
           const autonomousWalletAddress = walletAddress ?? "paper";
           const autonomous = {
             candidates: yield* db.listTokenCandidates(
@@ -236,7 +236,7 @@ network; with no stranded settlements it is fully offline.`,
           if (opts.json) {
             const json: StatusJsonOutput = {
               running: running,
-              dbPath: process.env.SQLITE_DB_PATH ?? getPrismDbPath(),
+              dbPath: process.env.SQLITE_DB_PATH ?? getBeamDbPath(),
               timestamp: new Date().toISOString(),
               agentRuntime: {
                 enabled: config.agentiveMode,
@@ -335,7 +335,7 @@ network; with no stranded settlements it is fully offline.`,
                     return `• ${d.action} ${pool} — ${(d.confidence * 100).toFixed(0)}% confidence`;
                   });
             const lines = [
-              "🔺 *Prism Status*",
+              "🔺 *Beam Status*",
               "",
               `Positions: ${activePositions.length} active`,
               `Deposited: $${summary.totalDepositedUsd.toFixed(2)}`,
@@ -409,7 +409,7 @@ network; with no stranded settlements it is fully offline.`,
           const adapter = yield* AdapterService;
           const candidateMints = [...new Set(strandedCandidates.map((s) => s.tokenMint))];
           // Price channel: fetchTokenPrices NEVER fails — every source
-          // (Helius/Jupiter/CoinGecko) catches its own errors and returns {},
+          // (RPC/price providers) catches its own errors and returns {},
           // and unresolved mints come back as price 0 — so a total
           // price-provider outage is INDISTINGUISHABLE from a genuinely
           // unquotable mint at this API and classifies as Unpriceable (the
@@ -417,7 +417,7 @@ network; with no stranded settlements it is fully offline.`,
           // DEFECT (sync throw from a malformed mint) is caught here, with a
           // per-mint fallback so one bad mint cannot label every candidate.
           // useFallback: false — the default serves the hardcoded fallback
-          // prices (SOL at $165, USDC/USDT/... at $1) as if measured during
+          // prices as if measured during
           // a total outage, which would report stranded capital at
           // FABRICATED values (the wallet-reconciliation path avoids them
           // for the same reason).
@@ -550,9 +550,9 @@ network; with no stranded settlements it is fully offline.`,
 
           console.log(
             [
-              "Prism Status",
+              "Beam Status",
               "============",
-              `  Database:    ${process.env.SQLITE_DB_PATH ?? getPrismDbPath()}`,
+              `  Database:    ${process.env.SQLITE_DB_PATH ?? getBeamDbPath()}`,
               `  Positions:   ${activePositions.length} active`,
               `  Deposited:   $${summary.totalDepositedUsd.toFixed(2)}`,
               `  Current:     $${summary.totalCurrentValueUsd.toFixed(2)}`,

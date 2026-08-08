@@ -4,22 +4,22 @@ import os from "node:os";
 import path from "node:path";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { runPrism } from "./exec.js";
+import { runBeam } from "./exec.js";
 
-function getPrismDataDir(): string {
-  if (process.env.PRISM_DATA_DIR) return process.env.PRISM_DATA_DIR;
+function getBeamDataDir(): string {
+  if (process.env.BEAM_DATA_DIR) return process.env.BEAM_DATA_DIR;
   if (existsSync(path.resolve(".env"))) return process.cwd();
-  return path.join(os.homedir(), ".local", "share", "prism");
+  return path.join(os.homedir(), ".local", "share", "beam");
 }
 
-function getPrismDbPath(): string {
-  // Keep in sync with engine/paths.ts::getPrismDbPath
+function getBeamDbPath(): string {
+  // Keep in sync with engine/paths.ts::getBeamDbPath
   if (process.env.SQLITE_DB_PATH) return process.env.SQLITE_DB_PATH;
-  return path.join(getPrismDataDir(), "prism.db");
+  return path.join(getBeamDataDir(), "beam.db");
 }
 
 function openDb(): InstanceType<typeof Database> | null {
-  const dbPath = getPrismDbPath();
+  const dbPath = getBeamDbPath();
   if (!existsSync(dbPath)) {
     return null;
   }
@@ -37,10 +37,10 @@ function activePositionsWhere(db: InstanceType<typeof Database>): string {
     : "paper_exited_at IS NULL";
 }
 
-function registerPrismStatus(server: McpServer): void {
+function registerBeamStatus(server: McpServer): void {
   server.tool(
-    "prism_status",
-    "Get the current status of the Prism trading agent. Returns position count, " +
+    "beam_status",
+    "Get the current status of the Beam trading agent. Returns position count, " +
       "total deposited/current value, and the last 3 audit entries. Returns an empty status " +
       "object if the SQLite database does not exist (no agent has run yet).",
     {},
@@ -52,7 +52,7 @@ function registerPrismStatus(server: McpServer): void {
             {
               type: "text",
               text: JSON.stringify(
-                { running: false, message: "No SQLite database found. Run `prism dev` at least once to create one." },
+                { running: false, message: "No SQLite database found. Run `beam dev` at least once to create one." },
                 null,
                 2,
               ),
@@ -91,7 +91,7 @@ function registerPrismStatus(server: McpServer): void {
               text: JSON.stringify(
                 {
                   running: true,
-                  dbPath: getPrismDbPath(),
+                  dbPath: getBeamDbPath(),
                   positionCount,
                   totalDepositedUsd: totals.total_deposited,
                   totalCurrentValueUsd: totals.total_current,
@@ -130,10 +130,10 @@ function registerPrismStatus(server: McpServer): void {
   );
 }
 
-function registerPrismPositions(server: McpServer): void {
+function registerBeamPositions(server: McpServer): void {
   server.tool(
-    "prism_positions",
-    "List all active positions tracked by the Prism agent. Excludes exited (soft-closed " +
+    "beam_positions",
+    "List all active positions tracked by the Beam agent. Excludes exited (soft-closed " +
       "or paper-exited) positions. " +
       "Returns an empty array if the SQLite database does not exist.",
     {},
@@ -199,22 +199,22 @@ function registerPrismPositions(server: McpServer): void {
   );
 }
 
-function registerPrismWhoami(server: McpServer): void {
+function registerBeamWhoami(server: McpServer): void {
   server.tool(
-    "prism_whoami",
-    "Show the current Prism cloud account info. Requires `prism register` to have been run first. " +
+    "beam_whoami",
+    "Show the current Beam cloud account info. Requires `beam register` to have been run first. " +
       "Returns an error message if not registered.",
     {},
     async () => {
-      const result = await runPrism(["whoami"]);
+      const result = await runBeam(["whoami"]);
       if (!result.ok) {
-        if (result.stderr.includes("Not registered") || result.stderr.includes("Run 'prism register'")) {
+        if (result.stderr.includes("Not registered") || result.stderr.includes("Run 'beam register'")) {
           return {
             content: [
               {
                 type: "text",
                 text: JSON.stringify(
-                  { registered: false, message: "Not registered. Run 'prism register' first." },
+                  { registered: false, message: "Not registered. Run 'beam register' first." },
                   null,
                   2,
                 ),
@@ -224,7 +224,7 @@ function registerPrismWhoami(server: McpServer): void {
         }
         const detail = result.timedOut
           ? `Command timed out after 30s:\n${result.stderr}`
-          : `Error running \`prism whoami\` (exit ${result.exitCode}):\n${result.stderr}`;
+          : `Error running \`beam whoami\` (exit ${result.exitCode}):\n${result.stderr}`;
         return {
           content: [
             {
@@ -242,15 +242,15 @@ function registerPrismWhoami(server: McpServer): void {
   );
 }
 
-function registerPrismBacktest(server: McpServer): void {
+function registerBeamBacktest(server: McpServer): void {
   server.tool(
-    "prism_backtest",
-    "Run a Prism backtest. By default uses synthetic data for 7 days. " +
+    "beam_backtest",
+    "Run a Beam backtest. By default uses synthetic data for 7 days. " +
       "Set `source` to `replay` and provide `days` + optionally `pools` to replay on-chain snapshots. " +
       "Note: the `pools` parameter is only used when `source` is `replay`; it is ignored otherwise.",
     {
       source: z.enum(["synthetic", "replay"]).default("synthetic").describe(
-        "Data source: 'synthetic' (default) generates deterministic mock data; 'replay' reads from prism.db snapshots.",
+        "Data source: 'synthetic' (default) generates deterministic mock data; 'replay' reads from beam.db snapshots.",
       ),
       days: z.number().int().min(1).max(365).default(7).describe("Number of days to backtest (1-365)."),
       pools: z
@@ -263,11 +263,11 @@ function registerPrismBacktest(server: McpServer): void {
       if (source === "replay" && pools && pools.length > 0) {
         args.push("--pools", pools.join(","));
       }
-      const result = await runPrism(args, { timeoutMs: 120_000 });
+      const result = await runBeam(args, { timeoutMs: 120_000 });
       if (!result.ok) {
         const detail = result.timedOut
           ? `Backtest timed out after 120s:\n${result.stderr || result.stdout}`
-          : `Error running \`prism backtest\` (exit ${result.exitCode}):\n${result.stderr || result.stdout}`;
+          : `Error running \`beam backtest\` (exit ${result.exitCode}):\n${result.stderr || result.stdout}`;
         return {
           content: [
             {
@@ -286,8 +286,8 @@ function registerPrismBacktest(server: McpServer): void {
 }
 
 export function registerAllTools(server: McpServer): void {
-  registerPrismStatus(server);
-  registerPrismPositions(server);
-  registerPrismWhoami(server);
-  registerPrismBacktest(server);
+  registerBeamStatus(server);
+  registerBeamPositions(server);
+  registerBeamWhoami(server);
+  registerBeamBacktest(server);
 }

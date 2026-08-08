@@ -1,5 +1,5 @@
 import { Command } from "commander";
-import { pingInstall, prismApiPost, writeCredentials, CREDENTIALS_FILE } from "./api.js";
+import { pingInstall, beamApiPost, writeCredentials, CREDENTIALS_FILE } from "./api.js";
 
 interface RegisterResult {
   user_id: string;
@@ -8,15 +8,15 @@ interface RegisterResult {
 }
 
 export const registerCommand = new Command("register")
-  .description("Register with Prism and get an API key")
+  .description("Register with Beam and get an API key")
   .action(async () => {
-    const result = await prismApiPost<RegisterResult>("/v1/register", {});
+    const result = await beamApiPost<RegisterResult>("/v1/register", {});
 
     if (!result.ok || !result.data) {
       console.error("Error: Registration failed");
       if (result.error) console.error(`  ${result.error}`);
       console.error("");
-      console.error("If the API is unreachable, set PRISM_API_URL to your local/staging API.");
+      console.error("If the API is unreachable, set BEAM_API_URL to your local/staging API.");
       process.exit(1);
     }
 
@@ -34,5 +34,5 @@ export const registerCommand = new Command("register")
     console.log(`  API Key: ${apiKey.slice(0, 12)}...`);
     console.log(`  Saved to: ${CREDENTIALS_FILE}`);
     console.log("");
-    console.log("Next: run 'prism setup' to configure your trading agent");
+    console.log("Next: run 'beam setup' to configure your trading agent");
   });

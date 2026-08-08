@@ -30,7 +30,7 @@ jobs:
         run: |
           set +e
           body=$(curl -sS --max-time 60 -X POST \
-            https://prism-telegram-bot.irfndi.workers.dev/internal/flush-alerts \
+            https://beam-telegram-bot.irfndi.workers.dev/internal/flush-alerts \
             -H "X-Bot-Api-Secret: $BOT_API_SECRET" \
             -w '\nHTTP_STATUS:%{http_code}')
           code=$?

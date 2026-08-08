@@ -18,7 +18,7 @@ import type { AppConfig } from "./config-service.js";
  *   3. compiled-in default in loadConfig     — baseline
  *
  * Effect timing: the engine loads config ONCE at startup (ConfigLive), so a
- * DB override takes effect on the NEXT engine start — `prism config set`
+ * DB override takes effect on the NEXT engine start — `beam config set`
  * prints this hint. Hot-reload of the running program is deliberately NOT
  * supported: `config` is captured by reference throughout the scan loop, and
  * silently mutating it mid-cycle would make sizing/risk decisions
@@ -57,7 +57,7 @@ export interface DbConfigSpec {
    * while this module compiles against older bases; applyDbConfigOverrides
    * narrows at runtime via the kind parse and guards the name against
    * FORWARD_REFERENCE_FIELDS. A typo fails loudly: the row is skipped with
-   * a warning and the key is invisible to `prism config list`.
+   * a warning and the key is invisible to `beam config list`.
    */
   readonly field: string;
   readonly min?: number;

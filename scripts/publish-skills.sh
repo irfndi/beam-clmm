@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Publish Prism skills to npm and PyPI registries.
+# Publish Beam skills to npm and PyPI registries.
 # Usage: ./scripts/publish-skills.sh [--dry-run]
 
 set -euo pipefail
@@ -109,7 +109,7 @@ publish_python_pkg() {
 # ---------------------------------------------------------------------------
 
 main() {
-  echo "Prism Skills Publisher"
+  echo "Beam Skills Publisher"
   echo "======================"
   echo ""
 
@@ -145,11 +145,11 @@ main() {
   echo ""
 
   # Publish LangChain tool
-  publish_python_pkg "$REPO_ROOT/packages/langchain-prism" "langchain-prism"
+  publish_python_pkg "$REPO_ROOT/packages/langchain-beam" "langchain-beam"
   echo ""
 
   # Publish AutoGPT plugin
-  publish_python_pkg "$REPO_ROOT/packages/autogpt-prism" "autogpt-prism"
+  publish_python_pkg "$REPO_ROOT/packages/autogpt-beam" "autogpt-beam"
   echo ""
 
   cd "$REPO_ROOT"

@@ -8,7 +8,7 @@ export type LimitOrderSide = "ask" | "bid";
 
 export interface LimitOrderRequest {
   readonly side: LimitOrderSide;
-  /** Target tick (v3/v4 tick, the CLMM equivalent of a DLMM bin id). */
+  /** Target tick (v3/v4 tick, the CLMM equivalent of a tick id). */
   readonly targetTick: number;
   readonly amountAtomic: bigint;
   readonly maxActiveTickSlippage?: number;
@@ -18,9 +18,7 @@ export interface ValidatedLimitOrderRequest extends LimitOrderRequest {
   readonly isAskSide: boolean;
 }
 
-export function validateLimitOrderRequest(
-  request: LimitOrderRequest,
-): ValidatedLimitOrderRequest {
+export function validateLimitOrderRequest(request: LimitOrderRequest): ValidatedLimitOrderRequest {
   if (!Number.isSafeInteger(request.targetTick)) {
     throw new Error("Limit-order target tick must be an integer");
   }

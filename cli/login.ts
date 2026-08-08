@@ -1,5 +1,5 @@
 import { Command } from "commander";
-import { prismApiPost, writeCredentials, readCredentials } from "./api.js";
+import { beamApiPost, writeCredentials, readCredentials } from "./api.js";
 
 interface LoginResult {
   id: string;
@@ -11,7 +11,7 @@ export const loginCommand = new Command("login")
   .description("Validate an existing API key and store it locally")
   .argument("<key>", "API key to validate")
   .action(async (key: string) => {
-    const result = await prismApiPost<LoginResult>("/v1/login", {}, { apiKey: key });
+    const result = await beamApiPost<LoginResult>("/v1/login", {}, { apiKey: key });
 
     if (!result.ok || !result.data) {
       console.error("Error: Invalid API key");

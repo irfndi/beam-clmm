@@ -1,5 +1,5 @@
 import { Command } from "commander";
-import { prismApiPost, prismApiGet, readCredentials } from "./api.js";
+import { beamApiPost, beamApiGet, readCredentials } from "./api.js";
 
 export const referralCommand = new Command("referral")
   .description("Manage referrals and earn credits")
@@ -7,11 +7,11 @@ export const referralCommand = new Command("referral")
     new Command("code").description("Get your referral code").action(async () => {
       const creds = readCredentials();
       if (!creds) {
-        console.error("Error: Not registered. Run 'prism register' first.");
+        console.error("Error: Not registered. Run 'beam register' first.");
         process.exit(1);
       }
 
-      const result = await prismApiGet<{ code: string; referralCount: number }>(
+      const result = await beamApiGet<{ code: string; referralCount: number }>(
         "/v1/referral/code",
         { apiKey: creds.apiKey },
       );
@@ -26,7 +26,7 @@ export const referralCommand = new Command("referral")
       console.log(`Referrals: ${result.data.referralCount}`);
       console.log("");
       console.log("Share this code with friends to earn credits:");
-      console.log(`  prism referral apply ${result.data.code}`);
+      console.log(`  beam referral apply ${result.data.code}`);
     }),
   )
   .addCommand(
@@ -36,11 +36,11 @@ export const referralCommand = new Command("referral")
       .action(async (code) => {
         const creds = readCredentials();
         if (!creds) {
-          console.error("Error: Not registered. Run 'prism register' first.");
+          console.error("Error: Not registered. Run 'beam register' first.");
           process.exit(1);
         }
 
-        const result = await prismApiPost<{ success: boolean; credits: number }>(
+        const result = await beamApiPost<{ success: boolean; credits: number }>(
           "/v1/referral/apply",
           { code },
           { apiKey: creds.apiKey },
@@ -60,11 +60,11 @@ export const referralCommand = new Command("referral")
     new Command("stats").description("Show referral statistics").action(async () => {
       const creds = readCredentials();
       if (!creds) {
-        console.error("Error: Not registered. Run 'prism register' first.");
+        console.error("Error: Not registered. Run 'beam register' first.");
         process.exit(1);
       }
 
-      const result = await prismApiGet<{
+      const result = await beamApiGet<{
         referralCount: number;
         credits: number;
         milestone: string | null;

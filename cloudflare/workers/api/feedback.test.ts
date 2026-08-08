@@ -55,7 +55,7 @@ describe("Feedback API", () => {
         details TEXT,
         related_files TEXT,
         context_json TEXT,
-        prism_version TEXT,
+        beam_version TEXT,
         platform TEXT,
         install_method TEXT,
         runtime TEXT,
@@ -103,7 +103,7 @@ describe("Feedback API", () => {
         details: "It would be easier on the eyes.",
         relatedFiles: ["cli/index.ts"],
         context: {
-          prismVersion: "0.0.20",
+          beamVersion: "0.0.20",
           platform: "darwin",
           installMethod: "curl",
           runtime: "bun 1.4.0",
