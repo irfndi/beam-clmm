@@ -33,6 +33,9 @@ export const V4_POSITION_MANAGER: Address = getAddress(
   "0x58daec3116aae6d93017baaea7749052e8a04fa7",
 );
 export const UNIVERSAL_ROUTER: Address = getAddress("0x8876789976decbfcbbbe364623c63652db8c0904");
+// v3 pools on Robinhood Chain are WETH-paired (native ETH must be wrapped for
+// v3; v4 treats address-zero as a first-class currency). Verified 2026-07.
+export const WETH9: Address = getAddress("0x0Bd7D308f8E1639FAb988df18A8011f41EAcAD73");
 
 /**
  * v4 pools have no per-pool contract address — identity is the PoolKey struct
@@ -88,7 +91,8 @@ const v4PoolManagerAbi = parseAbi([
 const v4PositionManagerAbi = parseAbi([
   "function balanceOf(address) view returns (uint256)",
   "function tokenOfOwnerByIndex(address,uint256) view returns (uint256)",
-  "function positions(uint256) view returns (uint256 poolId, uint64 liquidity, uint256 feeGrowthInside0LastX128, uint256 feeGrowthInside1LastX128, uint128 tokensOwed0, uint128 tokensOwed1)",
+  "function getPoolAndPositionInfo(uint256 tokenId) view returns ((address,address,uint24,int24,address) poolKey, uint256 positionInfo)",
+  "function getPositionLiquidity(uint256 tokenId) view returns (uint128)",
 ]);
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -108,6 +112,27 @@ function sqrtPriceX96ToPrice(sqrtPriceX96: bigint): number {
 }
 
 const decimalsCache = new Map<string, number>();
+
+/** viem encodes struct params as positional tuples — convert our PoolKey object. */
+function poolKeyTuple(key: V4PoolKey): readonly [Address, Address, number, number, Address] {
+  return [key.currency0, key.currency1, key.fee, key.tickSpacing, key.hooks];
+}
+
+/** v4 poolId = keccak256(abi.encode(poolKey)) — canonical v4 pool identity. */
+async function computeV4PoolId(key: V4PoolKey): Promise<string> {
+  const { encodeAbiParameters, keccak256 } = await import("viem");
+  const encoded = encodeAbiParameters(
+    [
+      { type: "address" },
+      { type: "address" },
+      { type: "uint24" },
+      { type: "int24" },
+      { type: "address" },
+    ],
+    [key.currency0, key.currency1, key.fee, key.tickSpacing, key.hooks],
+  );
+  return keccak256(encoded).toLowerCase();
+}
 
 // ─── The adapter ──────────────────────────────────────────────────────────────
 
@@ -184,6 +209,8 @@ export const AdapterLive = Layer.effect(AdapterService,
      */
     async function priceUsd(mint: string): Promise<number> {
       if (mint.toLowerCase() === STABLECOIN_MINT.toLowerCase()) return 1;
+      // Native ETH is WETH-paired in v3 pools.
+      if (isNative(mint)) return priceUsdViaV3Pool(WETH9);
       return priceUsdViaV3Pool(mint);
     }
 
@@ -230,8 +257,8 @@ export const AdapterLive = Layer.effect(AdapterService,
         address: poolAddress.toLowerCase(),
         tokenX: token0.toLowerCase(),
         tokenY: token1.toLowerCase(),
-        tokenXSymbol: isNative(token0) ? "ETH" : "TOKEN",
-        tokenYSymbol: isNative(token1) ? "ETH" : "TOKEN",
+        tokenXSymbol: isNative(token0) ? "ETH" : token0.toLowerCase() === WETH9.toLowerCase() ? "WETH" : "TOKEN",
+        tokenYSymbol: isNative(token1) ? "ETH" : token1.toLowerCase() === WETH9.toLowerCase() ? "WETH" : "TOKEN",
         tvlUsd: tvlUsd || 0,
         volume24hUsd: 0,
         fees24hUsd: 0,
@@ -331,8 +358,17 @@ export const AdapterLive = Layer.effect(AdapterService,
       for (let i = 0; i < balance; i++) {
         try {
           const tokenId = await pm.read.tokenOfOwnerByIndex([owner, BigInt(i)]);
-          const p = await pm.read.positions([tokenId]);
-          const poolId = `0x${p[0].toString(16).padStart(64, "0")}`;
+          // New PM interface: poolKey + packed info, liquidity via lens call.
+          const [poolKey] = await pm.read.getPoolAndPositionInfo([tokenId]);
+          const liquidity = await pm.read.getPositionLiquidity([tokenId]);
+          const key: V4PoolKey = {
+            currency0: poolKey[0],
+            currency1: poolKey[1],
+            fee: Number(poolKey[2]),
+            tickSpacing: Number(poolKey[3]),
+            hooks: poolKey[4],
+          };
+          const poolId = await computeV4PoolId(key);
           if (poolFilter && poolId.toLowerCase() !== poolFilter.toLowerCase()) continue;
           positions.push({
             id: tokenId.toString(),
@@ -340,7 +376,7 @@ export const AdapterLive = Layer.effect(AdapterService,
             poolName: `v4:${poolId.slice(0, 10)}`,
             lowerBinId: 0,
             upperBinId: 0,
-            liquidityShares: p[1],
+            liquidityShares: liquidity,
             depositedUsd: 0,
             currentValueUsd: 0,
             unrealizedPnlUsd: 0,
@@ -412,8 +448,8 @@ export const AdapterLive = Layer.effect(AdapterService,
               }
               const pm = v4PoolManager();
               const [slot0, liquidity] = await Promise.all([
-                pm.read.getSlot0([key]),
-                pm.read.getLiquidity([key]),
+                pm.read.getSlot0([poolKeyTuple(key)]),
+                pm.read.getLiquidity([poolKeyTuple(key)]),
               ]);
               const tick = Number(slot0[1]);
               return {
@@ -453,7 +489,7 @@ export const AdapterLive = Layer.effect(AdapterService,
                 };
               }
               const pm = v4PoolManager();
-              const slot0 = await pm.read.getSlot0([key]);
+              const slot0 = await pm.read.getSlot0([poolKeyTuple(key)]);
               // v4 has no TickLens; per-tick reads are unbounded. Report the
               // active tick only and mark reserves unknown — the engine treats
               // bin signals as "unknown" rather than fabricating them.
