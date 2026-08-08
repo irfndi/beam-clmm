@@ -657,7 +657,7 @@ function makeLiveAdapter(overrides: Partial<AdapterApi> = {}): AdapterApi {
     hasWallet: () => true,
     getWalletAddress: () => "Wallet111",
     getWalletBalanceUsd: () => Effect.succeed(10_000),
-    getNativeBalance: () => Effect.succeed(10_000_000_000n),
+    getNativeBalance: () => Effect.succeed(100_000_000_000_000_000_000n),
     getPoolState: () => Effect.fail(new Error("not used")),
     getBinArray: () => Effect.fail(new Error("not used")),
     getPositions: () => Effect.succeed([]),
@@ -809,7 +809,6 @@ describe("live lifecycle PnL accounting", () => {
           db,
           revenueConfigSvc: liveRevenueConfig,
           trackedPositions,
-          entryPrep: liveEntryPrep,
           nativePriceUsd: 150,
           entryStrategyShape: "spot" as const,
         };
@@ -921,7 +920,6 @@ describe("live lifecycle PnL accounting", () => {
           db,
           revenueConfigSvc: liveRevenueConfig,
           trackedPositions,
-          entryPrep: liveEntryPrep,
           nativePriceUsd: 150,
           entryStrategyShape: "spot" as const,
         };
@@ -1051,7 +1049,7 @@ describe("live lifecycle PnL accounting", () => {
         withdrawnUsd: 1000,
         withdrawnXAtomic: "5000000000",
         pendingFeeUsd: 0,
-        sweptRewards: [{ mint: "RewardMint111", amountAtomic: 5_000_000n, amountUsd: 7 }],
+        sweptRewards: [{ mint: "RewardMint111", amountAtomic: 5_000_000, amountUsd: 7 }],
       }),
     });
 
@@ -1077,7 +1075,7 @@ describe("live lifecycle PnL accounting", () => {
         withdrawnUsd: 1000,
         withdrawnXAtomic: "5000000000",
         pendingFeeUsd: 0,
-        sweptRewards: [{ mint: "ExoticMint", amountAtomic: 1_000n, amountUsd: null }],
+        sweptRewards: [{ mint: "ExoticMint", amountAtomic: 1_000, amountUsd: null }],
       }),
     });
 
@@ -1159,7 +1157,6 @@ describe("live lifecycle PnL accounting", () => {
             db,
             revenueConfigSvc: liveRevenueConfig,
             trackedPositions,
-            entryPrep: liveEntryPrep,
             nativePriceUsd: 150,
             entryStrategyShape: "spot" as const,
             reconcileRequestedPools,

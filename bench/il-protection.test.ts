@@ -26,6 +26,8 @@ import {
   GeckoTerminalService,
   AlertService,
   type AdapterApi,
+  type GeckoTerminalApi,
+  type GeckoStats,
   type MeteoraDatapiApi,
   type MeteoraPoolStats,
   type EngineAlert,
@@ -46,7 +48,7 @@ function makeAdapter(
     hasWallet: () => false,
     getWalletAddress: () => null,
     getWalletBalanceUsd: () => Effect.succeed(10_000),
-    getNativeBalance: () => Effect.succeed(0n),
+    getNativeBalance: () => Effect.succeed(100_000_000_000_000_000_000n),
     getPoolState: (addr: string) => {
       const pool = pools[addr];
       return pool ? Effect.succeed(pool) : Effect.fail(new Error(`unknown pool ${addr}`));
@@ -110,6 +112,7 @@ function makeAdapter(
 function makeTestLayer(opts: {
   adapter: AdapterApi;
   datapi?: MeteoraDatapiApi;
+  gecko?: GeckoTerminalApi;
   configOverrides?: Partial<AppConfig>;
   alertCapture?: EngineAlert[];
 }) {
@@ -177,7 +180,7 @@ function makeTestLayer(opts: {
     Layer.succeed(HttpStatusServerService, { start: () => Effect.void, stop: () => Effect.void }),
     Layer.succeed(EntryPrepService, { prepareEntryTokens: () => Effect.succeed(undefined) }),
     Layer.succeed(MeteoraDatapiService, opts.datapi ?? { getPoolData: () => Effect.succeed(null) }),
-    Layer.succeed(GeckoTerminalService, { getPoolStats: () => Effect.succeed(null) }),
+    Layer.succeed(GeckoTerminalService, opts.gecko ?? { getPoolStats: () => Effect.succeed(null) }),
     Layer.succeed(AlertService, {
       sendAlert: capture
         ? (alert) =>
@@ -224,6 +227,18 @@ function runWithSeed(
 
 const POOL = "PoolIlProt11111111111111111111111111111111111";
 
+/** GeckoTerminal overlay fixture (the EVM stats source). */
+function makeGeckoStats(overrides: Partial<GeckoStats> = {}): GeckoStats {
+  return {
+    tvlUsd: 100_000,
+    volume24hUsd: 2_000,
+    fees24hUsd: 1,
+    basePriceUsd: 150,
+    quotePriceUsd: 1,
+    ...overrides,
+  };
+}
+
 // A minimal Data API stats payload so the pool is enriched to a MEASURED source
 // (feeIlRatioKnown=true). The [fee-il-gate] now only acts on measured fees, so a
 // gate test must supply real datapi stats rather than relying on heuristic fees.
@@ -255,13 +270,15 @@ function makeDatapiStats(overrides: Partial<MeteoraPoolStats> = {}): MeteoraPool
 }
 
 describe("IL protection — ENTER fee/IL floor gate (Task 3a)", () => {
-  it("rejects ENTER when feeIlRatio < minFeeIlRatio and ilProtectionEnabled", async () => {
-    // datapi fees24hUsd = 1 → fee/IL ratio ≈ 0.4-0.8 (< default minFeeIlRatio
-    // 1.2). Datapi makes it a measured source so feeIlRatioKnown=true and the
-    // [fee-il-gate] acts on the real (low) fee/IL.
+  it("skips the fee-il-gate when fees are unmeasured (gecko/heuristic) — low modeled ratio never rejects", async () => {
+    // EVM port: no per-pool fee oracle on Robinhood Chain (datapi removed),
+    // so feeIlRatioKnown=false for gecko pools and the [fee-il-gate] is
+    // SKIPPED — a modeled-low ratio must not block ENTER. The pool still
+    // ENTERs via the measured volume/TVL/bin signals (or HOLDs on weak
+    // signals) — but never with a fee-il rejection reason.
     const layer = makeTestLayer({
       adapter: makeAdapter({ [POOL]: makePool({ address: POOL, fees24hUsd: 1 }) }),
-      datapi: { getPoolData: () => Effect.succeed(makeDatapiStats()) },
+      gecko: { getPoolStats: () => Effect.succeed(makeGeckoStats()) },
       configOverrides: { watchlistPools: [POOL], ilProtectionEnabled: true },
     });
 
@@ -272,18 +289,17 @@ describe("IL protection — ENTER fee/IL floor gate (Task 3a)", () => {
     );
     expect(
       gateRejects,
-      `expected a [fee-il-gate] ENTER rejection, got: ${stringifySafe(decisions.map((d) => `${d.action}:${d.reasoning}`))}`,
-    ).toHaveLength(1);
-    expect(gateRejects[0]!.riskResult.approved).toBe(false);
+      `expected no [fee-il-gate] rejection for unmeasured fees, got: ${stringifySafe(decisions.map((d) => `${d.action}:${d.reasoning}`))}`,
+    ).toHaveLength(0);
   }, 15_000);
 
   it("does NOT block ENTER via fee-il-gate when ilProtectionEnabled is false (default pin)", async () => {
-    // Same low-fee pool on a MEASURED source (datapi → feeIlRatioKnown=true) so
-    // the ONLY thing silencing the gate is ilProtectionEnabled=false — isolating
-    // that dimension from the known-flag skip.
+    // Same low-fee pool on a measured-volume source (gecko → fees unmeasured)
+    // so the ONLY thing silencing the gate would be ilProtectionEnabled=false —
+    // isolating that dimension from the known-flag skip.
     const layer = makeTestLayer({
       adapter: makeAdapter({ [POOL]: makePool({ address: POOL, fees24hUsd: 1 }) }),
-      datapi: { getPoolData: () => Effect.succeed(makeDatapiStats()) },
+      gecko: { getPoolStats: () => Effect.succeed(makeGeckoStats()) },
       configOverrides: { watchlistPools: [POOL] },
     });
 

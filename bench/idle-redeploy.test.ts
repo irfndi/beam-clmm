@@ -35,6 +35,7 @@ import {
   EntryPrepService,
   MeteoraDatapiService,
   GeckoTerminalService,
+  type GeckoStats,
   AlertService,
   type AdapterApi,
   type AgentApi,
@@ -150,6 +151,21 @@ const POOL = "PoolIdleRe111111111111111111111111111111111";
 type MintAuthorities = { mintAuthority: string | null; freezeAuthority: string | null };
 const NO_AUTHORITIES: MintAuthorities = { mintAuthority: null, freezeAuthority: null };
 
+/** GeckoTerminal overlay fixture (the EVM stats source) — mirrors the strong
+ *  datapi fixture below so the measured-stats gates (volume auth, fee/IL,
+ *  weighted score) fire identically.
+ */
+function makeGeckoStats(overrides: Partial<GeckoStats> = {}): GeckoStats {
+  return {
+    tvlUsd: 200_000,
+    volume24hUsd: 40_000,
+    fees24hUsd: 400,
+    basePriceUsd: 150,
+    quotePriceUsd: 1,
+    ...overrides,
+  };
+}
+
 // A strong Data API payload: passes pre-filter, candidate conditions and the
 // weighted-score threshold (the same fixture multi-position tests enter on).
 function makeDatapiStats(overrides: Partial<MeteoraPoolStats> = {}): MeteoraPoolStats {
@@ -189,7 +205,7 @@ function makeProgramAdapter(
     getWalletBalanceUsd: () => Effect.succeed(10_000),
     getWalletHoldings: () =>
       Effect.succeed(new Map<string, { amountAtomic: bigint; decimals: number }>()),
-    getNativeBalance: () => Effect.succeed(0n),
+    getNativeBalance: () => Effect.succeed(100_000_000_000_000_000_000n),
     getPoolState: (addr: string) => {
       const pool = pools[addr];
       return pool ? Effect.succeed(pool) : Effect.fail(new Error(`unknown pool ${addr}`));
@@ -387,7 +403,7 @@ describe("program — idle-capital auto-redeploy gate", () => {
   it("is inert when disabled (default): idle capital present, no redeploy, one normal ENTER only", async () => {
     const layer = makeProgramLayer({
       adapter: makeProgramAdapter({ [POOL]: makePool({ address: POOL }) }),
-      datapi: { getPoolData: () => Effect.succeed(makeDatapiStats()) },
+      gecko: { getPoolStats: () => Effect.succeed(makeGeckoStats()) },
       configOverrides: {
         watchlistPools: [POOL],
         maxPositionsPerPool: 2,
@@ -405,7 +421,7 @@ describe("program — idle-capital auto-redeploy gate", () => {
   it("deploys idle capital into the qualified candidate at the widened size when enabled", async () => {
     const layer = makeProgramLayer({
       adapter: makeProgramAdapter({ [POOL]: makePool({ address: POOL }) }),
-      datapi: { getPoolData: () => Effect.succeed(makeDatapiStats()) },
+      gecko: { getPoolStats: () => Effect.succeed(makeGeckoStats()) },
       configOverrides: {
         watchlistPools: [POOL],
         idleRedeployEnabled: true,
@@ -452,7 +468,7 @@ describe("program — idle-capital auto-redeploy gate", () => {
             ),
         },
       ),
-      datapi: { getPoolData: () => Effect.succeed(makeDatapiStats()) },
+      gecko: { getPoolStats: () => Effect.succeed(makeGeckoStats()) },
       configOverrides: {
         paperTrading: false,
         autonomousTokenMode: "shadow",
@@ -478,7 +494,7 @@ describe("program — idle-capital auto-redeploy gate", () => {
   it("skips when the post-cap widened size does not exceed the normal entry (P2 3654054429)", async () => {
     const layer = makeProgramLayer({
       adapter: makeProgramAdapter({ [POOL]: makePool({ address: POOL }) }),
-      datapi: { getPoolData: () => Effect.succeed(makeDatapiStats()) },
+      gecko: { getPoolStats: () => Effect.succeed(makeGeckoStats()) },
       configOverrides: {
         watchlistPools: [POOL],
         idleRedeployEnabled: true,
@@ -512,7 +528,7 @@ describe("program — idle-capital auto-redeploy gate", () => {
   it("dispatches when the post-cap widened size just exceeds the normal entry (P2 3654054429)", async () => {
     const layer = makeProgramLayer({
       adapter: makeProgramAdapter({ [POOL]: makePool({ address: POOL }) }),
-      datapi: { getPoolData: () => Effect.succeed(makeDatapiStats()) },
+      gecko: { getPoolStats: () => Effect.succeed(makeGeckoStats()) },
       configOverrides: {
         watchlistPools: [POOL],
         idleRedeployEnabled: true,
@@ -535,7 +551,7 @@ describe("program — idle-capital auto-redeploy gate", () => {
   it("skips the pass when idle capital is below the threshold", async () => {
     const layer = makeProgramLayer({
       adapter: makeProgramAdapter({ [POOL]: makePool({ address: POOL }) }),
-      datapi: { getPoolData: () => Effect.succeed(makeDatapiStats()) },
+      gecko: { getPoolStats: () => Effect.succeed(makeGeckoStats()) },
       configOverrides: {
         watchlistPools: [POOL],
         idleRedeployEnabled: true,
@@ -555,7 +571,7 @@ describe("program — idle-capital auto-redeploy gate", () => {
   it("is rejected by the caps it routes through: MAX_OPEN_POSITIONS full writes an audit record and opens nothing", async () => {
     const layer = makeProgramLayer({
       adapter: makeProgramAdapter({ [POOL]: makePool({ address: POOL }) }),
-      datapi: { getPoolData: () => Effect.succeed(makeDatapiStats()) },
+      gecko: { getPoolStats: () => Effect.succeed(makeGeckoStats()) },
       configOverrides: {
         watchlistPools: [POOL],
         idleRedeployEnabled: true,
@@ -584,7 +600,7 @@ describe("program — idle-capital auto-redeploy gate", () => {
   it("does not capture a cooldown-gated candidate: no redeploy despite idle capital", async () => {
     const layer = makeProgramLayer({
       adapter: makeProgramAdapter({ [POOL]: makePool({ address: POOL }) }),
-      datapi: { getPoolData: () => Effect.succeed(makeDatapiStats()) },
+      gecko: { getPoolStats: () => Effect.succeed(makeGeckoStats()) },
       configOverrides: {
         watchlistPools: [POOL],
         idleRedeployEnabled: true,
@@ -737,7 +753,7 @@ describe("program — idle-redeploy agent-overlay routing (P1)", () => {
   it("AGENTIC_MODE=false (default): overlay never consulted — redeploy dispatches unchanged", async () => {
     const layer = makeProgramLayer({
       adapter: makeProgramAdapter({ [POOL]: makePool({ address: POOL }) }),
-      datapi: { getPoolData: () => Effect.succeed(makeDatapiStats()) },
+      gecko: { getPoolStats: () => Effect.succeed(makeGeckoStats()) },
       configOverrides: { watchlistPools: [POOL], ...redeployOn },
     });
     const { positions, decisions } = await runOneCycle(layer as never);
@@ -750,7 +766,7 @@ describe("program — idle-redeploy agent-overlay routing (P1)", () => {
   it("supervised mode without an approved proposal: redeploy held → skipped with audit", async () => {
     const layer = makeProgramLayer({
       adapter: makeProgramAdapter({ [POOL]: makePool({ address: POOL }) }),
-      datapi: { getPoolData: () => Effect.succeed(makeDatapiStats()) },
+      gecko: { getPoolStats: () => Effect.succeed(makeGeckoStats()) },
       configOverrides: {
         watchlistPools: [POOL],
         ...redeployOn,
@@ -773,7 +789,7 @@ describe("program — idle-redeploy agent-overlay routing (P1)", () => {
   it("veto forcing HOLD: redeploy skipped (a vetoed entry means don't enter)", async () => {
     const layer = makeProgramLayer({
       adapter: makeProgramAdapter({ [POOL]: makePool({ address: POOL }) }),
-      datapi: { getPoolData: () => Effect.succeed(makeDatapiStats()) },
+      gecko: { getPoolStats: () => Effect.succeed(makeGeckoStats()) },
       configOverrides: {
         watchlistPools: [POOL],
         ...redeployOn,
@@ -803,7 +819,7 @@ describe("program — idle-redeploy agent-overlay routing (P1)", () => {
   it("veto lowering confidence: still routed through the risk confidence gate (no dispatch)", async () => {
     const layer = makeProgramLayer({
       adapter: makeProgramAdapter({ [POOL]: makePool({ address: POOL }) }),
-      datapi: { getPoolData: () => Effect.succeed(makeDatapiStats()) },
+      gecko: { getPoolStats: () => Effect.succeed(makeGeckoStats()) },
       configOverrides: {
         watchlistPools: [POOL],
         ...redeployOn,
@@ -861,10 +877,12 @@ describe("program — idle-redeploy entry-backoff guard (P2)", () => {
         {
           hasWallet: () => true,
           getWalletHoldings: () => Effect.succeed(usdcHoldings),
+          // $0 native balance — the insufficient-funds ENTER failure arms the
+          // backoff this test asserts on.
           getNativeBalance: () => Effect.succeed(0n),
         },
       ),
-      datapi: { getPoolData: () => Effect.succeed(makeDatapiStats()) },
+      gecko: { getPoolStats: () => Effect.succeed(makeGeckoStats()) },
       configOverrides: {
         watchlistPools: [POOL],
         paperTrading: false,
@@ -891,7 +909,7 @@ describe("program — idle-redeploy confidence uses known signals only (P2)", ()
   it("datapi candidate: confidence is the fee-aware formula (above the neutral base)", async () => {
     const layer = makeProgramLayer({
       adapter: makeProgramAdapter({ [POOL]: makePool({ address: POOL }) }),
-      datapi: { getPoolData: () => Effect.succeed(makeDatapiStats()) },
+      gecko: { getPoolStats: () => Effect.succeed(makeGeckoStats()) },
       configOverrides: {
         watchlistPools: [POOL],
         idleRedeployEnabled: true,
@@ -920,7 +938,6 @@ describe("program — idle-redeploy confidence uses known signals only (P2)", ()
     // gecko candidate clears CONFIDENCE_THRESHOLD=0.65 and executes.
     const layer = makeProgramLayer({
       adapter: makeProgramAdapter({ [POOL]: makePool({ address: POOL }) }),
-      datapi: { getPoolData: () => Effect.succeed(null) },
       gecko: {
         getPoolStats: () =>
           Effect.succeed({
@@ -968,7 +985,7 @@ describe("program — idle-redeploy follow-up fidelity (post-merge review)", () 
     const POOL_OTHER = "PoolIdleOo111111111111111111111111111111111";
     const layer = makeProgramLayer({
       adapter: makeProgramAdapter({ [POOL]: makePool({ address: POOL }) }),
-      datapi: { getPoolData: () => Effect.succeed(makeDatapiStats()) },
+      gecko: { getPoolStats: () => Effect.succeed(makeGeckoStats()) },
       configOverrides: {
         watchlistPools: [POOL],
         paperPortfolioUsd: 10_000,
@@ -1017,8 +1034,8 @@ describe("program — idle-redeploy follow-up fidelity (post-merge review)", () 
         [POOL_A]: makePool({ address: POOL_A }),
         [POOL_B]: makePool({ address: POOL_B }),
       }),
-      datapi: {
-        getPoolData: (addr: string) => Effect.succeed(makeDatapiStats({ address: addr })),
+      gecko: {
+        getPoolStats: (addr: string) => Effect.succeed(makeGeckoStats()),
       },
       configOverrides: {
         watchlistPools: [POOL_A, POOL_B],
@@ -1069,7 +1086,7 @@ describe("program — idle-redeploy follow-up fidelity (post-merge review)", () 
   it("(g) 3655404934: widened-size guard compares against the agent-ENLARGED normal entry", async () => {
     const layer = makeProgramLayer({
       adapter: makeProgramAdapter({ [POOL]: makePool({ address: POOL }) }),
-      datapi: { getPoolData: () => Effect.succeed(makeDatapiStats()) },
+      gecko: { getPoolStats: () => Effect.succeed(makeGeckoStats()) },
       configOverrides: {
         watchlistPools: [POOL],
         paperPortfolioUsd: 10_000,
@@ -1127,7 +1144,7 @@ describe("program — idle-redeploy follow-up fidelity (post-merge review)", () 
   it("(f) 3655404926: a pool whose EXIT executed this cycle is excluded from redeploy", async () => {
     const layer = makeProgramLayer({
       adapter: makeProgramAdapter({ [POOL]: makePool({ address: POOL }) }),
-      datapi: { getPoolData: () => Effect.succeed(makeDatapiStats()) },
+      gecko: { getPoolStats: () => Effect.succeed(makeGeckoStats()) },
       configOverrides: {
         watchlistPools: [POOL],
         paperPortfolioUsd: 10_000,

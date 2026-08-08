@@ -175,7 +175,7 @@ export function defaultAppConfig(overrides: Partial<AppConfig> = {}): AppConfig 
     // Pinned false (production default true) so the gecko secondary stats source
     // never touches the network for the existing program tests; stats-pipeline
     // tests opt in explicitly.
-    geckoTerminalEnabled: false,
+    geckoTerminalEnabled: true,
     rebalanceGasCostNative: 0.01,
     nativePriceUsd: 150,
     gasAwareMinDaysOfFeesPaidAhead: 3,
@@ -242,7 +242,7 @@ export function defaultAppConfig(overrides: Partial<AppConfig> = {}): AppConfig 
     signalWeightDecayFactor: 0.95,
     signalWeightFloor: 0.3,
     signalWeightCeiling: 2.5,
-    weightedEntryScoreThreshold: 1.8,
+    weightedEntryScoreThreshold: 0.6,
     autoSwapEntry: false,
     entryStrategyType: "spot",
     idleRedeployEnabled: false,

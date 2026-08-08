@@ -33,7 +33,6 @@ import { RevenueConfigServiceLive } from "./revenue-config-service.js";
 import { AgentStateMutable, initialSnapshot, type PositionSnapshot } from "./state-service.js";
 import { McpServerLive } from "./mcp-server.js";
 import { HttpStatusServerLive } from "./http-status-server.js";
-import { EntryPrepLive } from "./entry-prep-service.js";
 import { shouldDiscoverPools } from "./pool-policy.js";
 import { advanceScreenedCandidates } from "./candidate-discovery.js";
 import { gateAndRankMarketPools, type MarketPoolRank } from "./market-gate.js";
@@ -50,7 +49,6 @@ import { errorReporter } from "./error-reporter.js";
 import {
   BlacklistError,
   DiscoverPoolsError,
-  EntryPrepError,
   underlyingErrorMessage,
 } from "./errors.js";
 import {
@@ -80,8 +78,6 @@ import {
   AgentStateService,
   McpServerService,
   HttpStatusServerService,
-  EntryPrepService,
-  MeteoraDatapiService,
   GeckoTerminalService,
   PythPriceService,
   AlertService,
@@ -94,7 +90,6 @@ import {
   type DiscoveredPool,
   type StrategyApi,
   type RevenueConfigApi,
-  type EntryPrepApi,
   type EntryPreparationOutcome,
   type AgentStateApi,
 } from "./services.js";
@@ -864,8 +859,6 @@ type AllServices =
   | AgentStateService
   | McpServerService
   | HttpStatusServerService
-  | EntryPrepService
-  | MeteoraDatapiService
   | GeckoTerminalService
   | PythPriceService
   | AlertService
@@ -878,7 +871,6 @@ export function buildLayer(cfg?: AppConfig): Layer.Layer<AllServices, never, nev
   const adapter = Layer.provide(AdapterLive, configLayer);
   const memory = Layer.provide(MemoryLive, dbLayer);
   const audit = Layer.provide(AuditLive, dbLayer);
-  const meteoraDatapi = Layer.provide(MeteoraDatapiLive, configLayer);
   // Available-but-unconsumed: PythPriceLive exposes USD prices through the
   // PythPriceService Tag; no decision/risk code reads it yet (follow-up).
   const pythPrice = Layer.provide(PythPriceLive, configLayer);
@@ -909,8 +901,6 @@ export function buildLayer(cfg?: AppConfig): Layer.Layer<AllServices, never, nev
   const revenueConfigDeps = Layer.merge(dbLayer, configLayer);
   const revenueConfig = Layer.provide(RevenueConfigServiceLive, revenueConfigDeps);
 
-  const entryPrepDeps = Layer.merge(adapter, configLayer);
-  const entryPrep = Layer.provide(EntryPrepLive, entryPrepDeps);
 
   const merged = Layer.merge(adapter, StrategyLive);
   const merged2 = Layer.merge(merged, dbLayer);
@@ -921,10 +911,8 @@ export function buildLayer(cfg?: AppConfig): Layer.Layer<AllServices, never, nev
   const merged7 = Layer.merge(merged6, screener);
   const merged8 = Layer.merge(merged7, configLayer);
   const merged11 = Layer.merge(merged8, revenueConfig);
-  const merged11a = Layer.merge(merged11, entryPrep);
-  const merged11b = Layer.merge(merged11a, meteoraDatapi);
-  const merged11c = Layer.merge(merged11b, GeckoTerminalLive);
-  const merged11d = Layer.merge(merged11c, pythPrice);
+  const merged11b = Layer.merge(merged11, GeckoTerminalLive);
+  const merged11c = Layer.merge(merged11b, pythPrice);
 
   const agentLayer = cfg?.agentiveMode ? AgentLive(cfg) : Layer.succeed(AgentService, AgentNoOp);
 
@@ -944,7 +932,7 @@ export function buildLayer(cfg?: AppConfig): Layer.Layer<AllServices, never, nev
           stop: () => Effect.void,
         });
 
-  const merged12 = Layer.merge(merged11d, agentLayer);
+  const merged12 = Layer.merge(merged11c, agentLayer);
   const merged13 = Layer.merge(merged12, agentStateLayer);
   const merged14 = Layer.merge(merged13, mcpLayer);
   const merged15 = Layer.merge(merged14, httpLayer);
@@ -1206,7 +1194,8 @@ function settlementJobsForReceipts(input: {
 }
 
 /**
- * Execute a live decision. `entryPrep` is only used for ENTER actions; callers
+ * Execute a live decision. Entry token preparation is part of the live-tx
+ * milestone (the EVM adapter rejects live ENTERs today); callers
  * must still provide it because the function signature does not conditionally
  * expose the dependency.
  */
@@ -1217,7 +1206,6 @@ export function executeLive(
     db: DbApi;
     revenueConfigSvc: RevenueConfigApi;
     trackedPositions: Map<string, PositionRecord>;
-    entryPrep: EntryPrepApi;
     nativePriceUsd: number;
     entryStrategyShape: EntryStrategyShape;
     entryRangeHalfWidth?: number;
@@ -1247,7 +1235,6 @@ export function executeLive(
       db,
       revenueConfigSvc,
       trackedPositions,
-      entryPrep,
       nativePriceUsd,
       entryStrategyShape,
       entryRangeHalfWidth,
@@ -1384,99 +1371,6 @@ export function executeLive(
     }
 
     let preparation: EntryPreparationOutcome | null = null;
-    if (decision.action === "ENTER" && decision.positionSizeUsd) {
-      const prepResult = yield* entryPrep
-        .prepareEntryTokens(decision.poolAddress, decision.positionSizeUsd)
-        .pipe(
-          Effect.matchEffect({
-            onSuccess: (outcome) =>
-              Effect.succeed({
-                outcome: outcome ?? null,
-                partial: null,
-                error: undefined as string | undefined,
-              }),
-            onFailure: (err) => {
-              const partial =
-                err instanceof EntryPrepError ? (err.partialPreparation ?? null) : null;
-              return Effect.succeed({
-                outcome: null,
-                partial,
-                error: `Entry token preparation failed: ${err instanceof Error ? err.message : String(err)}`,
-              });
-            },
-          }),
-        );
-      if (prepResult.error) {
-        if (autonomous && entryOperation) {
-          const now = Date.now();
-          let settlementPersisted = true;
-          for (const job of settlementJobsForReceipts({
-            context: autonomous,
-            positionId: `rollback:${entryOperation.id}`,
-            poolAddress: decision.poolAddress,
-            receipts: prepResult.partial?.receipts ?? [],
-            now,
-          })) {
-            yield* db.saveSettlementJob(job).pipe(
-              Effect.catch(() =>
-                Effect.sync(() => {
-                  settlementPersisted = false;
-                }),
-              ),
-            );
-            if (!settlementPersisted) {
-              deps.reconcileRequestedPools?.add(decision.poolAddress);
-              yield* db
-                .saveSafetyPause({
-                  walletAddress: autonomous.walletAddress,
-                  agentInstanceId: autonomous.agentInstanceId,
-                  reason: "settlement_persistence_failed",
-                  triggeredAt: now,
-                  resolvedAt: null,
-                })
-                .pipe(Effect.catch(() => Effect.void));
-              break;
-            }
-          }
-          if (settlementPersisted) {
-            yield* db
-              .saveExecutionOperation({
-                ...entryOperation,
-                operationType: "rollback",
-                status: prepResult.partial ? "retryable" : "failed",
-                error: prepResult.error,
-                updatedAt: now,
-              })
-              .pipe(
-                Effect.catch(() =>
-                  Effect.sync(() => {
-                    settlementPersisted = false;
-                  }),
-                ),
-              );
-          }
-          if (!settlementPersisted) {
-            deps.reconcileRequestedPools?.add(decision.poolAddress);
-            yield* db
-              .saveSafetyPause({
-                walletAddress: autonomous.walletAddress,
-                agentInstanceId: autonomous.agentInstanceId,
-                reason: "settlement_persistence_failed",
-                triggeredAt: now,
-                resolvedAt: null,
-              })
-              .pipe(Effect.catch(() => Effect.void));
-          }
-        }
-        console.warn(prepResult.error, { pool: decision.poolAddress });
-        return { executed: false, error: prepResult.error };
-      }
-      preparation = prepResult.outcome;
-      if (entryOperation) {
-        entryOperation = { ...entryOperation, status: "prepared", updatedAt: Date.now() };
-        yield* db.saveExecutionOperation(entryOperation).pipe(Effect.catch(() => Effect.void));
-      }
-    }
 
     if (decision.action === "ENTER" && decision.positionSizeUsd) {
       const recommended = strategy.recommendBinRange(
@@ -1582,67 +1476,6 @@ export function executeLive(
             .pipe(Effect.catch(() => Effect.void));
         }
         return { executed: true, error: undefined };
-      }
-      if (autonomous && entryOperation && preparation) {
-        const now = Date.now();
-        let settlementPersisted = true;
-        for (const job of settlementJobsForReceipts({
-          context: autonomous,
-          positionId: `rollback:${entryOperation.id}`,
-          poolAddress: decision.poolAddress,
-          receipts: preparation.receipts,
-          now,
-        })) {
-          yield* db.saveSettlementJob(job).pipe(
-            Effect.catch(() =>
-              Effect.sync(() => {
-                settlementPersisted = false;
-              }),
-            ),
-          );
-          if (!settlementPersisted) {
-            deps.reconcileRequestedPools?.add(decision.poolAddress);
-            yield* db
-              .saveSafetyPause({
-                walletAddress: autonomous.walletAddress,
-                agentInstanceId: autonomous.agentInstanceId,
-                reason: "settlement_persistence_failed",
-                triggeredAt: now,
-                resolvedAt: null,
-              })
-              .pipe(Effect.catch(() => Effect.void));
-            break;
-          }
-        }
-        if (settlementPersisted) {
-          yield* db
-            .saveExecutionOperation({
-              ...entryOperation,
-              operationType: "rollback",
-              status: "retryable",
-              error: enterResult.error ?? "Position entry failed after funding swaps",
-              updatedAt: now,
-            })
-            .pipe(
-              Effect.catch(() =>
-                Effect.sync(() => {
-                  settlementPersisted = false;
-                }),
-              ),
-            );
-        }
-        if (!settlementPersisted) {
-          deps.reconcileRequestedPools?.add(decision.poolAddress);
-          yield* db
-            .saveSafetyPause({
-              walletAddress: autonomous.walletAddress,
-              agentInstanceId: autonomous.agentInstanceId,
-              reason: "settlement_persistence_failed",
-              triggeredAt: now,
-              resolvedAt: null,
-            })
-            .pipe(Effect.catch(() => Effect.void));
-        }
       }
       return { executed: false, error: enterResult.error };
     } else if (decision.action === "ENTER") {
@@ -2298,7 +2131,6 @@ export const program = Effect.gen(function* () {
   const agentState = yield* AgentStateService;
   const mcpServer = yield* McpServerService;
   const httpStatusServer = yield* HttpStatusServerService;
-  const meteoraDatapi = yield* MeteoraDatapiService;
   const gecko = yield* GeckoTerminalService;
   const alertSvc = yield* AlertService;
   const copySignalsOption = yield* Effect.serviceOption(CopySignalService);
@@ -3032,7 +2864,7 @@ export const program = Effect.gen(function* () {
     candidates: ReadonlyArray<IdleRedeployCandidate>,
     cycle: AgentCycle,
     executedExitPools: ReadonlySet<string>,
-  ): Effect.Effect<void, never, EntryPrepService> =>
+  ): Effect.Effect<void, never, never> =>
     Effect.gen(function* () {
       const cycleId = cycle.cycleId;
 
@@ -3760,7 +3592,6 @@ export const program = Effect.gen(function* () {
               entrySolBudgetLamports -= neededLamports;
             }
           }
-          const entryPrep = yield* EntryPrepService;
           const liveResult = yield* executeLive(
             {
               adapter,
@@ -3768,7 +3599,6 @@ export const program = Effect.gen(function* () {
               db,
               revenueConfigSvc,
               trackedPositions,
-              entryPrep,
               nativePriceUsd: config.nativePriceUsd,
               entryStrategyShape,
               entryRangeHalfWidth,
@@ -3953,7 +3783,7 @@ export const program = Effect.gen(function* () {
 
   // ─── Scan cycle ────────────────────────────────────────────────────────
 
-  const runScanCycle = (): Effect.Effect<void, never, EntryPrepService> =>
+  const runScanCycle = (): Effect.Effect<void, never, never> =>
     Effect.gen(function* () {
       coreDataFailuresThisCycle = 0;
       const cycle: AgentCycle = {
@@ -4541,7 +4371,7 @@ export const program = Effect.gen(function* () {
     cycle: AgentCycle,
     idleRedeployCandidates: IdleRedeployCandidate[],
     executedExitPools: Set<string>,
-  ): Effect.Effect<ReadonlyArray<AgentDecision>, Error, EntryPrepService> =>
+  ): Effect.Effect<ReadonlyArray<AgentDecision>, Error, never> =>
     Effect.gen(function* () {
       const cycleId = cycle.cycleId;
       const rawPool = yield* adapter.getPoolState(poolAddress);
@@ -4551,22 +4381,20 @@ export const program = Effect.gen(function* () {
       // Real pool stats, resolved datapi (primary) > geckoterminal (secondary)
       // > the adapter's fabricated heuristic (last-resort safety net). The
       // chosen source is tagged onto the pool so the volume/fee gates skip
-      // heuristic fiction instead of acting on it. The gecko fee rate is the
-      // pool's binStep-derived base fee applied to REAL gecko volume (gecko's
-      // own pool_fee_percentage is null for every CL pool — see
-      // gecko-terminal-service.ts). Data-API-exclusive safety signals are never
-      // sourced from gecko: they stay null and the screener fails open on null.
-      const datapiStats = yield* meteoraDatapi.getPoolData(poolAddress);
+      // Real pool stats, resolved geckoterminal (primary) > the adapter's
+      // fabricated heuristic (last-resort safety net). The chosen source is
+      // tagged onto the pool so the volume/fee gates skip heuristic fiction
+      // instead of acting on it. The gecko fee rate is the pool's
+      // binStep-derived base fee applied to REAL gecko volume (gecko's own
+      // pool_fee_percentage is null for every CL pool — see
+      // gecko-terminal-service.ts). Data-API-exclusive safety signals are
+      // never sourced from gecko: they stay null and the screener fails open
+      // on null.
       const geckoStats =
-        datapiStats === null && config.geckoTerminalEnabled !== false
+        config.geckoTerminalEnabled !== false
           ? yield* gecko.getPoolStats(poolAddress, 0.0025 + rawPool.binStep / 10_000)
           : null;
-      const pool =
-        datapiStats !== null
-          ? enrichPoolWithDatapi(rawPool, datapiStats)
-          : geckoStats !== null
-            ? enrichPoolFromGecko(rawPool, geckoStats)
-            : rawPool;
+      const pool = geckoStats !== null ? enrichPoolFromGecko(rawPool, geckoStats) : rawPool;
 
       // TVL velocity + IL price-drift need a previous reference point, so the
       // previous snapshot must be read BEFORE persisting the current one.
@@ -4650,9 +4478,6 @@ export const program = Effect.gen(function* () {
           return [];
         });
 
-      if (datapiStats?.isBlacklisted === true) {
-        return yield* rejectForSafety("Meteora Data API flags pool as blacklisted");
-      }
 
       const fetchAuthorities = (mint: string) =>
         adapter.getMintAuthorities(mint).pipe(
@@ -4699,9 +4524,9 @@ export const program = Effect.gen(function* () {
       }
 
       const freezeEnabledX =
-        datapiStats?.tokenXFreezeAuthorityDisabled === false || authX?.freezeAuthority != null;
+        authX?.freezeAuthority != null;
       const freezeEnabledY =
-        datapiStats?.tokenYFreezeAuthorityDisabled === false || authY?.freezeAuthority != null;
+        authY?.freezeAuthority != null;
 
       // Per-leg trust exemption: a freeze-enabled leg is exempt when its mint is
       // on the trusted stablecoin allowlist (STABLECOIN_MINTS). The pool is
@@ -4764,7 +4589,7 @@ export const program = Effect.gen(function* () {
           const flaggedLegs: Array<{ symbol: string; mint: string; status: LegStatus }> = [];
           const legXStatus = classifyLeg(
             untrustedFreezeX,
-            datapiStats?.tokenXVerified === true,
+            false,
             pool.tokenX,
           );
           if (legXStatus !== null) {
@@ -4772,7 +4597,7 @@ export const program = Effect.gen(function* () {
           }
           const legYStatus = classifyLeg(
             untrustedFreezeY,
-            datapiStats?.tokenYVerified === true,
+            false,
             pool.tokenY,
           );
           if (legYStatus !== null) {
@@ -6304,7 +6129,6 @@ export const program = Effect.gen(function* () {
       // Decisions run sequentially so a queued proposal consumed by one
       // decision is gone for the next, and so executions mutate tracking in
       // a deterministic order (per-position decisions first, ENTER last).
-      const entryPrep = yield* EntryPrepService;
 
       // Resolve the deposit distribution for entries: a concrete configured
       // shape is used as-is; `auto` picks per pool from the recent volatility
@@ -7061,7 +6885,6 @@ export const program = Effect.gen(function* () {
               db,
               revenueConfigSvc,
               trackedPositions,
-              entryPrep,
               nativePriceUsd: config.nativePriceUsd,
               entryStrategyShape,
               entryRangeHalfWidth: rangeHalfWidth,
@@ -7111,7 +6934,6 @@ export const program = Effect.gen(function* () {
               db,
               revenueConfigSvc,
               trackedPositions,
-              entryPrep,
               nativePriceUsd: config.nativePriceUsd,
               entryStrategyShape,
               entryRangeHalfWidth: rangeHalfWidth,

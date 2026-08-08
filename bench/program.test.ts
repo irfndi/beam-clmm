@@ -28,7 +28,6 @@ import {
   AuditService,
   ScreenerService,
   DbService,
-  EntryPrepService,
   AgentService,
   AgentStateService,
   type AdapterApi,
@@ -56,7 +55,6 @@ describe("Program integration", () => {
         yield* AuditService;
         yield* ScreenerService;
         yield* DbService;
-        yield* EntryPrepService;
         yield* AgentService;
         yield* AgentStateService;
         return "ok";
@@ -75,7 +73,7 @@ describe("executeLive", () => {
       getWalletBalanceUsd: () => Effect.succeed(10_000),
       getWalletHoldings: () =>
         Effect.succeed(new Map<string, { amountAtomic: bigint; decimals: number }>()),
-      getNativeBalance: () => Effect.succeed(1_000_000_000n),
+      getNativeBalance: () => Effect.succeed(100_000_000_000_000_000_000n),
       getPoolState: () =>
         Effect.succeed({
           address: "TestPool111111111111111111111111111111111111",
@@ -279,162 +277,6 @@ describe("executeLive", () => {
     };
   }
 
-  it("calls prepareEntryTokens on a live ENTER decision", () => {
-    const poolAddress = "TestPool111111111111111111111111111111111111";
-    const positionSizeUsd = 1234;
-
-    const prepareSpy = vi.fn().mockReturnValue(Effect.void);
-
-    const result = Effect.runSync(
-      executeLive(
-        {
-          adapter: makeAdapter(),
-          strategy: makeStrategy(),
-          db: makeDb(),
-          revenueConfigSvc: makeRevenueConfigSvc(),
-          trackedPositions: new Map(),
-          entryPrep: { prepareEntryTokens: prepareSpy },
-          nativePriceUsd: 150,
-          entryStrategyShape: "spot",
-        },
-        {
-          action: "ENTER",
-          poolAddress,
-          confidence: 0.8,
-          reasoning: "test",
-          positionSizeUsd,
-        } as AgentDecision,
-        {
-          activeBinId: 5000,
-          binStep: 10,
-          tokenXSymbol: "SOL",
-          tokenYSymbol: "USDC",
-          currentPrice: 150,
-        },
-      ),
-    );
-
-    expect(result.executed).toBe(true);
-    expect(result.error).toBeUndefined();
-    expect(prepareSpy).toHaveBeenCalledTimes(1);
-    expect(prepareSpy).toHaveBeenCalledWith(poolAddress, positionSizeUsd);
-  });
-
-  it("skips enterPosition when prepareEntryTokens fails", () => {
-    const poolAddress = "TestPool111111111111111111111111111111111111";
-    const positionSizeUsd = 1234;
-
-    const enterPositionSpy = vi.fn(() =>
-      Effect.succeed({
-        positionPubKey: "mock-pos",
-        txSignature: "mock-tx",
-        depositMode: "two-sided" as const,
-        amountXUsd: positionSizeUsd / 2,
-        amountYUsd: positionSizeUsd / 2,
-      }),
-    );
-    const adapter: AdapterApi = {
-      ...makeAdapter(),
-      enterPosition: enterPositionSpy,
-    };
-
-    const result = Effect.runSync(
-      executeLive(
-        {
-          adapter,
-          strategy: makeStrategy(),
-          db: makeDb(),
-          revenueConfigSvc: makeRevenueConfigSvc(),
-          trackedPositions: new Map(),
-          entryPrep: {
-            prepareEntryTokens: () =>
-              Effect.fail(
-                new EntryPrepError({
-                  code: "INSUFFICIENT_USDC_BALANCE",
-                  message: "Not enough USDC",
-                  poolAddress,
-                }),
-              ),
-          },
-          nativePriceUsd: 150,
-          entryStrategyShape: "spot",
-        },
-        {
-          action: "ENTER",
-          poolAddress,
-          confidence: 0.8,
-          reasoning: "test",
-          positionSizeUsd,
-        } as AgentDecision,
-        {
-          activeBinId: 5000,
-          binStep: 10,
-          tokenXSymbol: "SOL",
-          tokenYSymbol: "USDC",
-          currentPrice: 150,
-        },
-      ),
-    );
-
-    expect(result.executed).toBe(false);
-    expect(result.error).toContain("Entry token preparation failed");
-    expect(enterPositionSpy).not.toHaveBeenCalled();
-  });
-
-  it("passes the resolved entry strategy shape to the adapter", () => {
-    const poolAddress = "TestPool111111111111111111111111111111111111";
-    const positionSizeUsd = 1234;
-
-    const enterPositionSpy = vi.fn(
-      (
-        _pool: string,
-        _lower: number,
-        _upper: number,
-        sizeUsd: number,
-        _options?: { strategyShape?: "spot" | "curve" | "bidask" },
-      ) =>
-        Effect.succeed({
-          positionPubKey: "mock-pos",
-          txSignature: "mock-tx",
-          depositMode: "two-sided" as const,
-          amountXUsd: sizeUsd / 2,
-          amountYUsd: sizeUsd / 2,
-        }),
-    );
-
-    const result = Effect.runSync(
-      executeLive(
-        {
-          adapter: { ...makeAdapter(), enterPosition: enterPositionSpy },
-          strategy: makeStrategy(),
-          db: makeDb(),
-          revenueConfigSvc: makeRevenueConfigSvc(),
-          trackedPositions: new Map(),
-          entryPrep: { prepareEntryTokens: () => Effect.succeed(undefined) },
-          nativePriceUsd: 150,
-          entryStrategyShape: "curve",
-        },
-        {
-          action: "ENTER",
-          poolAddress,
-          confidence: 0.8,
-          reasoning: "test",
-          positionSizeUsd,
-        } as AgentDecision,
-        {
-          activeBinId: 5000,
-          binStep: 10,
-          tokenXSymbol: "SOL",
-          tokenYSymbol: "USDC",
-          currentPrice: 150,
-        },
-      ),
-    );
-
-    expect(result.executed).toBe(true);
-    expect(enterPositionSpy).toHaveBeenCalledTimes(1);
-    expect(enterPositionSpy.mock.calls[0]![4]).toEqual({ strategyShape: "curve" });
-  });
 
   it("records single-sided entry legs and metadata from the adapter result", () => {
     const poolAddress = "TestPool111111111111111111111111111111111111";
@@ -462,7 +304,6 @@ describe("executeLive", () => {
           db,
           revenueConfigSvc: makeRevenueConfigSvc(),
           trackedPositions,
-          entryPrep: { prepareEntryTokens: () => Effect.succeed(undefined) },
           nativePriceUsd: 150,
           entryStrategyShape: "spot",
         },

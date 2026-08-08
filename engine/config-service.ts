@@ -1048,7 +1048,12 @@ const loadConfig = Effect.gen(function* () {
   const weightedEntryScoreThreshold = yield* validatedNumber(
     "WEIGHTED_ENTRY_SCORE_THRESHOLD",
     0.1,
-    1.8,
+    // EVM port calibration: the weighted entry score EXCLUDES the fee/IL term
+    // when fees are unmeasured (gecko/heuristic — no per-pool fee oracle on
+    // Robinhood Chain), so the datapi-era 1.8 default was unreachable; the
+    // remaining measured signals (volume auth ≤1×w, bin util ≤1×w, TVL ≤1×w,
+    // velocity) cap near ~0.9. 0.6 is a strict-but-reachable floor.
+    0.6,
   );
   const autoSwapEntry = yield* Config.boolean("AUTO_SWAP_ENTRY").pipe(
     Effect.orElseSucceed(() => false),

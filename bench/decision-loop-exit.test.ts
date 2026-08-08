@@ -29,6 +29,8 @@ import {
   type AdapterApi,
   type AgentApi,
   type MemoryApi,
+  type GeckoTerminalApi,
+  type GeckoStats,
   type MeteoraDatapiApi,
   type MeteoraPoolStats,
 } from "../engine/services.js";
@@ -41,6 +43,18 @@ import { stringifySafe } from "../engine/bigint-json.js";
 
 type MintAuthorities = { mintAuthority: string | null; freezeAuthority: string | null };
 const NO_AUTHORITIES: MintAuthorities = { mintAuthority: null, freezeAuthority: null };
+
+/** GeckoTerminal overlay fixture (the EVM stats source). */
+function makeGeckoStats(overrides: Partial<GeckoStats> = {}): GeckoStats {
+  return {
+    tvlUsd: 200_000,
+    volume24hUsd: 30_000,
+    fees24hUsd: 300,
+    basePriceUsd: 150,
+    quotePriceUsd: 1,
+    ...overrides,
+  };
+}
 
 function makeDatapiStats(overrides: Partial<MeteoraPoolStats> = {}): MeteoraPoolStats {
   return {
@@ -77,7 +91,7 @@ function makeAdapter(
     hasWallet: () => false,
     getWalletAddress: () => null,
     getWalletBalanceUsd: () => Effect.succeed(10_000),
-    getNativeBalance: () => Effect.succeed(0n),
+    getNativeBalance: () => Effect.succeed(100_000_000_000_000_000_000n),
     getPoolState: (addr: string) => {
       const pool = pools[addr];
       return pool ? Effect.succeed(pool) : Effect.fail(new Error(`unknown pool ${addr}`));
@@ -165,6 +179,7 @@ function makeTestLayer(opts: {
   adapter: AdapterApi;
   memoryRecorded?: RecordedMemory[];
   datapi?: MeteoraDatapiApi;
+  gecko?: GeckoTerminalApi;
   configOverrides?: Partial<AppConfig>;
   agent?: AgentApi;
 }) {
@@ -233,7 +248,7 @@ function makeTestLayer(opts: {
     Layer.succeed(HttpStatusServerService, { start: () => Effect.void, stop: () => Effect.void }),
     Layer.succeed(EntryPrepService, { prepareEntryTokens: () => Effect.succeed(undefined) }),
     Layer.succeed(MeteoraDatapiService, opts.datapi ?? { getPoolData: () => Effect.succeed(null) }),
-    Layer.succeed(GeckoTerminalService, { getPoolStats: () => Effect.succeed(null) }),
+    Layer.succeed(GeckoTerminalService, opts.gecko ?? { getPoolStats: () => Effect.succeed(null) }),
     Layer.succeed(AlertService, {
       sendAlert: () => Effect.void,
       recordFeeClaim: () => Effect.void,
@@ -395,17 +410,24 @@ describe("portfolio value math (Wave 2)", () => {
     // bins off center) → unrealized PnL ≈ -$47.50. Against a wallet-only
     // "portfolio" of $100 that is a 47% drawdown (ENTER blocked); against the
     // real portfolio of ~$1002 it is ~4.7% (ENTER allowed).
-    const adapter = makeAdapter({
-      [POOL_HELD]: makePool({ address: POOL_HELD, activeBinId: 5002, fees24hUsd: 100 }),
-      [POOL_NEW]: makePool({ address: POOL_NEW }),
-    });
-    const datapi: MeteoraDatapiApi = {
-      getPoolData: (addr: string) =>
-        Effect.succeed(addr === POOL_NEW ? makeDatapiStats({ address: POOL_NEW }) : null),
+    const adapter = makeAdapter(
+      {
+        [POOL_HELD]: makePool({ address: POOL_HELD, activeBinId: 5002, fees24hUsd: 100 }),
+        [POOL_NEW]: makePool({ address: POOL_NEW }),
+      },
+      {
+        hasWallet: () => true,
+        getWalletAddress: () => "wallet-1",
+        getWalletBalanceUsd: () => Effect.succeed(100),
+      },
+    );
+    const gecko: GeckoTerminalApi = {
+      getPoolStats: (addr: string) =>
+        Effect.succeed(addr === POOL_NEW ? makeGeckoStats() : null),
     };
     const layer = makeTestLayer({
       adapter,
-      datapi,
+      gecko,
       configOverrides: {
         watchlistPools: [POOL_HELD, POOL_NEW],
         paperPortfolioUsd: 100,
@@ -435,6 +457,7 @@ describe("portfolio value math (Wave 2)", () => {
       >,
     );
 
+    console.log("PNEW:", JSON.stringify(decisions.find((d) => d.poolAddress === POOL_NEW), (k, v) => typeof v === "bigint" ? v.toString() : v));
     const enter = decisions.find((d) => d.poolAddress === POOL_NEW && d.action === "ENTER");
     expect(
       enter,

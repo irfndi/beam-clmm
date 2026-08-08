@@ -564,7 +564,7 @@ describe("settlement job processing", () => {
       quoteSwap: () => Effect.succeed(quote),
       prepareSwap: () => Effect.succeed(prepared),
       simulateSwap: () => Effect.succeed(simulation),
-      getNativeBalance: () => Effect.succeed(100n),
+      getNativeBalance: () => Effect.succeed(100_000_000_000_000_000_000n),
       submitSwap: (
         _prepared: PreparedSwap,
         onBroadcast: ((signature: string) => Effect.Effect<void, Error>) | undefined,

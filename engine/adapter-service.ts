@@ -32,7 +32,13 @@ export const V4_POOL_MANAGER: Address = getAddress("0x8366a39cc670b4001a1121b8f6
 export const V4_POSITION_MANAGER: Address = getAddress(
   "0x58daec3116aae6d93017baaea7749052e8a04fa7",
 );
-export const UNIVERSAL_ROUTER: Address = getAddress("0x8876789976decbfcbbbe364623c63652db8c0904");
+export const V4_STATE_VIEW: Address = getAddress("0xF3334192D15450CdD385c8B70e03f9A6bD9E673b");
+// Official 4663 deployments (developers.uniswap.org/deployments.json, 2026-07-15).
+export const UNIVERSAL_ROUTER: Address = getAddress("0x06AfBA43Fd06227fA663b0DAecF536f6EaA6bf99");
+export const V3_SWAP_ROUTER_02: Address = getAddress(
+  "0xCaf681a66D020601342297493863E78C959E5cb2",
+);
+export const MULTICALL3: Address = getAddress("0xcA11bDe05977b3631167028862bE2a173976CA11");
 // v3 pools on Robinhood Chain are WETH-paired (native ETH must be wrapped for
 // v3; v4 treats address-zero as a first-class currency). Verified 2026-07.
 export const WETH9: Address = getAddress("0x0Bd7D308f8E1639FAb988df18A8011f41EAcAD73");
@@ -52,7 +58,17 @@ export interface V4PoolKey {
   readonly tickSpacing: number;
   readonly hooks: Address;
 }
-export const V4_POOL_REGISTRY: Readonly<Record<string, V4PoolKey>> = {};
+export const V4_POOL_REGISTRY: Record<string, V4PoolKey> = {};
+
+/**
+ * Register a v4 pool key by poolId (lowercase 0x-hex). v4 pools have no
+ * on-chain enumeration (poolId is a one-way hash), so discovery seeds this
+ * registry from known pairs / an indexer; `poolKeys(bytes25)` on the
+ * PositionManager can reverse a truncated id when the key is unknown.
+ */
+export function registerV4Pool(poolId: string, key: V4PoolKey): void {
+  V4_POOL_REGISTRY[poolId.toLowerCase()] = key;
+}
 
 // ─── Minimal ABIs (only the functions this adapter calls) ────────────────────
 
@@ -83,10 +99,9 @@ const v3NpmAbi = parseAbi([
   "function tokenOfOwnerByIndex(address,uint256) view returns (uint256)",
   "function positions(uint256) view returns (uint96 nonce, address operator, address token0, address token1, uint24 fee, int24 tickLower, int24 tickUpper, uint128 liquidity, uint256 feeGrowthInside0LastX128, uint256 feeGrowthInside1LastX128, uint128 tokensOwed0, uint128 tokensOwed1)",
 ]);
-const v4PoolManagerAbi = parseAbi([
-  "function getSlot0((address,address,uint24,int24,address) key) view returns (uint160,int24,uint16,uint24)",
-  "function getLiquidity((address,address,uint24,int24,address) key) view returns (uint128)",
-  "function getPool((address,address,uint24,int24,address) key) view returns (uint256)",
+const v4StateViewAbi = parseAbi([
+  "function getSlot0(bytes32 poolId) view returns (uint160 sqrtPriceX96, int24 tick, uint24 protocolFee, uint24 lpFee)",
+  "function getLiquidity(bytes32 poolId) view returns (uint128 liquidity)",
 ]);
 const v4PositionManagerAbi = parseAbi([
   "function balanceOf(address) view returns (uint256)",
@@ -94,6 +109,19 @@ const v4PositionManagerAbi = parseAbi([
   "function getPoolAndPositionInfo(uint256 tokenId) view returns ((address,address,uint24,int24,address) poolKey, uint256 positionInfo)",
   "function getPositionLiquidity(uint256 tokenId) view returns (uint128)",
 ]);
+
+/** v3 factory PoolCreated — canonical event, verified on 4663. */
+const poolCreatedEvent = {
+  type: "event",
+  name: "PoolCreated",
+  inputs: [
+    { type: "address", name: "token0", indexed: true },
+    { type: "address", name: "token1", indexed: true },
+    { type: "uint24", name: "fee", indexed: true },
+    { type: "int24", name: "tickSpacing" },
+    { type: "address", name: "pool" },
+  ],
+} as const;
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -172,10 +200,10 @@ export const AdapterLive = Layer.effect(AdapterService,
       getContract({ address: V3_NPM, abi: v3NpmAbi, client: { public: publicClient } });
     const tickLens = () =>
       getContract({ address: V3_TICK_LENS, abi: tickLensAbi, client: { public: publicClient } });
-    const v4PoolManager = () =>
+    const v4StateView = () =>
       getContract({
-        address: V4_POOL_MANAGER,
-        abi: v4PoolManagerAbi,
+        address: V4_STATE_VIEW,
+        abi: v4StateViewAbi,
         client: { public: publicClient },
       });
     const v4PositionManager = () =>
@@ -214,9 +242,12 @@ export const AdapterLive = Layer.effect(AdapterService,
       return priceUsdViaV3Pool(mint);
     }
 
-    /** Price of `mint` in USDG via the most liquid v3 pool. */
+    /** Price of `mint` in USDG via the most liquid v3 pool. The on-chain
+     *  sqrt price is the RAW token1/token0 ratio (decimals-sensitive); scale
+     *  by 10^(decimals(mint) - 6) so the result is USDG per mint (USDG=1). */
     async function priceUsdViaV3Pool(mint: string): Promise<number> {
       const factory = v3Factory();
+      const mintAddr = getAddress(mint).toLowerCase();
       for (const fee of [3000, 500, 10_000]) {
         try {
           const pool = await factory.read.getPool([
@@ -230,8 +261,10 @@ export const AdapterLive = Layer.effect(AdapterService,
             poolContract.read.token0(),
             poolContract.read.slot0(),
           ]);
-          const price = sqrtPriceX96ToPrice(slot0[0]);
-          return token0.toLowerCase() === getAddress(mint).toLowerCase() ? price : 1 / price;
+          const rawPrice = sqrtPriceX96ToPrice(slot0[0]); // token1/token0 raw
+          const decimals = await getDecimals(mint);
+          const scale = 10 ** (decimals - 6);
+          return token0.toLowerCase() === mintAddr ? rawPrice * scale : scale / rawPrice;
         } catch {
           continue;
         }
@@ -390,25 +423,79 @@ export const AdapterLive = Layer.effect(AdapterService,
       return positions;
     }
 
+    /**
+     * v3 factory has no allPairs/allPairsLength on 4663 (reverts) — discover
+     * via PoolCreated logs (factory startBlock 8930). In-memory cache; the
+     * engine rotates scanOrdinal pages of 50.
+     * ponytail: full-log scan on first call; a subgraph indexer replaces this
+     * when pool counts grow.
+     */
+    let discoveredPoolCache: DiscoveredPool[] | null = null;
+    async function discoverAllV3Pools(): Promise<DiscoveredPool[]> {
+      if (discoveredPoolCache !== null) return discoveredPoolCache;
+      const latest = await publicClient.getBlockNumber();
+      // Public RPC times out on 100k-block log queries; 10k chunks work.
+      // Scan the recent window only (pool creation since ~2M blocks ago);
+      // the gecko indexer is the completeness path (follow-up).
+      const CHUNK = 10_000n;
+      const fromStart = latest > 2_000_000n ? latest - 2_000_000n : 8930n;
+      const pools = new Map<string, DiscoveredPool>();
+      for (let from = fromStart; from <= latest; from += CHUNK) {
+        const to = from + CHUNK - 1n < latest ? from + CHUNK - 1n : latest;
+        try {
+          const logs = await publicClient.getLogs({
+            address: V3_FACTORY,
+            event: poolCreatedEvent,
+            fromBlock: from,
+            toBlock: to,
+          });
+          for (const log of logs) {
+            const args = log.args;
+            if (!args.pool) continue;
+            pools.set(args.pool.toLowerCase(), {
+              address: args.pool.toLowerCase(),
+              tokenX: args.token0?.toLowerCase() ?? "",
+              tokenY: args.token1?.toLowerCase() ?? "",
+              binStep: Number(args.tickSpacing ?? 60),
+              tvlUsd: 0,
+              volume24hUsd: 0,
+              fees24hUsd: 0,
+              apr: 0,
+            });
+          }
+        } catch (e) {
+          // viem errors embed BigInt args — stringify via message only.
+          logger.warn("discoverAllV3Pools: chunk failed", {
+            from: from.toString(),
+            to: to.toString(),
+            error: e instanceof Error ? e.message : String(e),
+          });
+        }
+      }
+      discoveredPoolCache = [...pools.values()];
+      logger.info("discovered v3 pools", { count: discoveredPoolCache.length });
+      return discoveredPoolCache;
+    }
+
     return {
       hasWallet: () => account !== null,
       getWalletAddress: () => walletAddress,
       getWalletBalanceUsd: () => Effect.gen(function* () {
         if (!walletAddress) return 0;
-        const [nativeWei, stable] = yield* Effect.promise(async () => {
+        const [nativeWei, stable] = yield* Effect.tryPromise(async () => {
           const [n, s] = await Promise.all([
             getBalance(NATIVE_MINT, walletAddress),
             getBalance(STABLECOIN_MINT, walletAddress),
           ]);
           return [n, s] as const;
         });
-        const ethPrice = yield* Effect.promise(() => priceUsd(NATIVE_MINT));
+        const ethPrice = yield* Effect.tryPromise(() => priceUsd(NATIVE_MINT));
         return (Number(nativeWei) / 1e18) * ethPrice + Number(stable) / 1e6;
       }),
       getWalletHoldings: () => Effect.gen(function* () {
         const holdings = new Map<string, { amountAtomic: bigint; decimals: number }>();
         if (!walletAddress) return holdings;
-        yield* Effect.promise(async () => {
+        yield* Effect.tryPromise(async () => {
           const [n, s] = await Promise.all([
             getBalance(NATIVE_MINT, walletAddress),
             getBalance(STABLECOIN_MINT, walletAddress),
@@ -418,7 +505,7 @@ export const AdapterLive = Layer.effect(AdapterService,
         });
         return holdings;
       }),
-      getNativeBalance: () => Effect.promise(async () => {
+      getNativeBalance: () => Effect.tryPromise(async () => {
         if (!walletAddress) return 0n;
         return publicClient.getBalance({ address: walletAddress });
       }),
@@ -446,10 +533,11 @@ export const AdapterLive = Layer.effect(AdapterService,
                   statsSource: "heuristic" as const,
                 };
               }
-              const pm = v4PoolManager();
+              const stateView = v4StateView();
+              const poolIdHex = poolAddress.toLowerCase() as `0x${string}`;
               const [slot0, liquidity] = await Promise.all([
-                pm.read.getSlot0([poolKeyTuple(key)]),
-                pm.read.getLiquidity([poolKeyTuple(key)]),
+                stateView.read.getSlot0([poolIdHex]),
+                stateView.read.getLiquidity([poolIdHex]),
               ]);
               const tick = Number(slot0[1]);
               return {
@@ -488,8 +576,9 @@ export const AdapterLive = Layer.effect(AdapterService,
                   reservesKnown: false,
                 };
               }
-              const pm = v4PoolManager();
-              const slot0 = await pm.read.getSlot0([poolKeyTuple(key)]);
+              const stateView = v4StateView();
+              const poolIdHex = poolAddress.toLowerCase() as `0x${string}`;
+              const slot0 = await stateView.read.getSlot0([poolIdHex]);
               // v4 has no TickLens; per-tick reads are unbounded. Report the
               // active tick only and mark reserves unknown — the engine treats
               // bin signals as "unknown" rather than fabricating them.
@@ -566,36 +655,12 @@ export const AdapterLive = Layer.effect(AdapterService,
       discoverPools: (scanOrdinal) =>
         Effect.tryPromise({
           try: async () => {
-            const factory = v3Factory();
-            const total = Number(await factory.read.allPairsLength());
-            // Cap discovery per scan; the engine rotates scanOrdinal pages.
-            const start = (scanOrdinal ?? 0) * 50;
-            const end = Math.min(total, start + 50);
-            const pools: DiscoveredPool[] = [];
-            for (let i = start; i < end; i++) {
-              try {
-                const pool = await factory.read.allPairs([BigInt(i)]);
-                const pc = v3Pool(pool);
-                const [token0, token1, tickSpacing] = await Promise.all([
-                  pc.read.token0(),
-                  pc.read.token1(),
-                  pc.read.tickSpacing(),
-                ]);
-                pools.push({
-                  address: pool.toLowerCase(),
-                  tvlUsd: 0,
-                  volume24hUsd: 0,
-                  fees24hUsd: 0,
-                  apr: 0,
-                  binStep: Number(tickSpacing),
-                  tokenX: token0.toLowerCase(),
-                  tokenY: token1.toLowerCase(),
-                });
-              } catch {
-                continue;
-              }
-            }
-            return pools;
+            const all = await discoverAllV3Pools();
+            if (all.length === 0) return all;
+            const pageSize = 50;
+            const pages = Math.ceil(all.length / pageSize);
+            const page = (scanOrdinal ?? 0) % pages;
+            return all.slice(page * pageSize, page * pageSize + pageSize);
           },
           catch: (e) =>
             new DiscoverPoolsError({

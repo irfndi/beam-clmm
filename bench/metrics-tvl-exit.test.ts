@@ -43,7 +43,7 @@ describe("evaluatePool TVL-drop EXIT (integration)", () => {
       getWalletBalanceUsd: () => Effect.succeed(10_000),
       getWalletHoldings: () =>
         Effect.succeed(new Map<string, { amountAtomic: bigint; decimals: number }>()),
-      getNativeBalance: () => Effect.succeed(0n),
+      getNativeBalance: () => Effect.succeed(100_000_000_000_000_000_000n),
       getPoolState: () =>
         Effect.succeed(
           makePool({ address: POOL, tvlUsd: 60_000, currentPrice: 150, fees24hUsd: 300 }),

@@ -29,26 +29,18 @@ import type {
 import type { BeamStateSnapshot } from "./state-service.js";
 import type { EvolvableThresholds, OutcomeRecord } from "./strategy-service.js";
 
-/** Pool stats from GeckoTerminal (chain-agnostic; Robinhood Chain support is
- *  a follow-up — until then the engine's heuristic stats path covers pools). */
-export interface GeckoStats {
-  readonly tvlUsd: number;
-  readonly volume24hUsd: number;
-  readonly fees24hUsd: number;
-  readonly basePriceUsd: number;
-  readonly quotePriceUsd: number;
-}
+import type { GeckoPoolStats } from "./gecko-terminal-service.js";
+import type { ClaimedReward as RewardClaim } from "./rewards.js";
+
+/** Pool stats from GeckoTerminal (chain-agnostic; live on Robinhood Chain). */
+export type GeckoStats = GeckoPoolStats;
 
 /**
- * A reward slot claimed off-chain (LM/farm rewards). The old rewards.ts was a
- * Solana/Meteora module; this is the adapter contract's own shape.
+ * A reward slot claimed off-chain (LM/farm rewards). Same shape as the
+ * rewards module's ClaimedReward — the adapter contract re-exports it so
+ * claim accounting stays unified.
  */
-export interface ClaimedReward {
-  readonly mint: string;
-  readonly amountAtomic: bigint;
-  readonly amountUsd: number | null;
-  readonly txSignature?: string;
-}
+export type ClaimedReward = RewardClaim;
 import type { LimitOrderRequest } from "./limit-orders.js";
 import type { DiscoverPoolsError, EntryPrepError } from "./errors.js";
 import type { CopySignalApi } from "./copy-trading-signals.js";
