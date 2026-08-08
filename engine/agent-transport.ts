@@ -4,10 +4,10 @@ import type { DecisionRecord } from "./services.js";
 
 // ─── Agent Runtime Transport ─────────────────────────────────────────────────
 //
-// Prism's non-deterministic reasoning layer talks to local agent runtimes
+// Beam's non-deterministic reasoning layer talks to local agent runtimes
 // (Hermes via ACP, OpenClaw via Gateway WebSocket) instead of remote LLM APIs.
 // This file defines the common transport interface shared by all runtimes.
-// Every transport operation is wrapped in Effect to match the rest of Prism.
+// Every transport operation is wrapped in Effect to match the rest of Beam.
 
 export interface AgentRuntimeContext {
   readonly decision: AgentDecision;
@@ -88,8 +88,8 @@ export interface AgentRuntimeCheckin {
     readonly content: string;
   }>;
   readonly market: {
-    readonly solPriceUsd: number;
-    readonly gasEstimateSol: number;
+    readonly nativePriceUsd: number;
+    readonly gasEstimateNative: number;
     readonly scanCount: number;
     readonly uptimeMs: number;
   };

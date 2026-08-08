@@ -1,6 +1,7 @@
 import fs from "fs";
 import path from "path";
 import { isAddress } from "viem";
+import { privateKeyToAccount } from "viem/accounts";
 import { getBeamUserConfigDir } from "./paths.js";
 
 /**
@@ -30,5 +31,26 @@ export function loadKeystoreSecretKeyHex(): string | null {
     return isAddress(key) || /^0x[0-9a-fA-F]{64}$/.test(key) ? key : null;
   } catch {
     return null;
+  }
+}
+
+export interface EffectiveWallet {
+  readonly address?: `0x${string}`;
+  readonly error?: string;
+}
+
+/**
+ * Resolve the effective wallet address from the keystore or WALLET_PRIVATE_KEY
+ * (keystore wins). Returns null when no key is configured at all; a
+ * non-null result carries either the address or a parse error.
+ */
+export function resolveEffectiveWallet(): EffectiveWallet | null {
+  const raw = loadKeystoreSecretKeyHex() ?? process.env.WALLET_PRIVATE_KEY ?? null;
+  if (raw === null) return null;
+  const key = raw.startsWith("0x") ? raw : `0x${raw}`;
+  try {
+    return { address: privateKeyToAccount(key as `0x${string}`).address };
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : String(e) };
   }
 }

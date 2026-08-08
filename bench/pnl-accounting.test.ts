@@ -1051,7 +1051,7 @@ describe("live lifecycle PnL accounting", () => {
         withdrawnUsd: 1000,
         withdrawnXAtomic: "5000000000",
         pendingFeeUsd: 0,
-        sweptRewards: [{ mint: "RewardMint111", amountAtomic: 5_000_000, amountUsd: 7 }],
+        sweptRewards: [{ mint: "RewardMint111", amountAtomic: 5_000_000n, amountUsd: 7 }],
       }),
     });
 
@@ -1077,7 +1077,7 @@ describe("live lifecycle PnL accounting", () => {
         withdrawnUsd: 1000,
         withdrawnXAtomic: "5000000000",
         pendingFeeUsd: 0,
-        sweptRewards: [{ mint: "ExoticMint", amountAtomic: 1_000, amountUsd: null }],
+        sweptRewards: [{ mint: "ExoticMint", amountAtomic: 1_000n, amountUsd: null }],
       }),
     });
 

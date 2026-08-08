@@ -54,10 +54,10 @@ import {
   underlyingErrorMessage,
 } from "./errors.js";
 import {
-  GAS_TOP_UP_USDC,
-  SOL_GAS_TOP_UP_THRESHOLD_WEI,
-  MIN_SOL_FOR_GAS_WEI,
-  MIN_SOL_FOR_ENTRY_WEI,
+  GAS_TOP_UP_STABLECOIN,
+  NATIVE_GAS_TOP_UP_THRESHOLD_WEI,
+  MIN_NATIVE_FOR_GAS_WEI,
+  MIN_NATIVE_FOR_ENTRY_WEI,
   NATIVE_MINT,
   STABLECOIN_MINT,
 } from "./constants.js";
@@ -98,7 +98,6 @@ import {
   type EntryPreparationOutcome,
   type AgentStateApi,
 } from "./services.js";
-import { MeteoraDatapiLive, enrichPoolWithDatapi } from "./meteora-datapi-service.js";
 import { GeckoTerminalLive, enrichPoolFromGecko } from "./gecko-terminal-service.js";
 import { PythPriceLive } from "./pyth-price-service.js";
 import { AlertLive } from "./alert-service.js";
@@ -1189,7 +1188,7 @@ function settlementJobsForReceipts(input: {
     poolAddress: input.poolAddress,
     tokenMint: receipt.outputMint,
     amountAtomic: receipt.acquiredAmountAtomic.toString(),
-    destinationAsset: "SOL",
+    destinationAsset: "ETH",
     status: "pending",
     attempts: 0,
     nextRetryAt: input.now,
@@ -1297,12 +1296,12 @@ export function executeLive(
       // swap to the ACTUAL DEFICIT (plus a slippage/fee buffer), not the full
       // reserve: swapping the whole reserve when the wallet is only slightly
       // below it wastes USDC that token preparation downstream still needs, and
-      // can fail an otherwise fundable ENTER. SOL_GAS_TOP_UP_THRESHOLD_WEI
+      // can fail an otherwise fundable ENTER. NATIVE_GAS_TOP_UP_THRESHOLD_WEI
       // aliases the reserve, so the swap trigger and the entry gate share one
       // value. When the balance read fails (null), skip the top-up entirely —
       // the post-swap recheck below will independently reject the ENTER if the
       // SOL balance cannot be confirmed.
-      const entryReserveNative = Number(SOL_GAS_TOP_UP_THRESHOLD_WEI) / 1e9;
+      const entryReserveNative = Number(NATIVE_GAS_TOP_UP_THRESHOLD_WEI) / 1e9;
       const preSwapSol = yield* adapter.getNativeBalance().pipe(
         Effect.map((lamports) => Number(lamports) / 1e9),
         Effect.catch(() => Effect.succeed(null)),
@@ -1322,8 +1321,8 @@ export function executeLive(
           typeof liveNativePrice === "number" && liveNativePrice > 0 ? liveNativePrice : nativePriceUsd;
         const topUpUsdc =
           effectiveSolPrice > 0
-            ? Math.max(GAS_TOP_UP_USDC, Math.ceil(deficitSol * effectiveSolPrice * 1.2))
-            : GAS_TOP_UP_USDC;
+            ? Math.max(GAS_TOP_UP_STABLECOIN, Math.ceil(deficitSol * effectiveSolPrice * 1.2))
+            : GAS_TOP_UP_STABLECOIN;
         yield* adapter
           .swapUSDCForNative(entryReserveNative, topUpUsdc)
           .pipe(Effect.catch(() => Effect.void));
@@ -1357,17 +1356,17 @@ export function executeLive(
         }
         return { executed: false, error };
       }
-      const nativeBalance = nativeBalance.value;
-      if (nativeBalance < MIN_SOL_FOR_ENTRY_WEI) {
-        const availableLamports = Number(nativeBalance);
-        const neededLamports = Number(MIN_SOL_FOR_ENTRY_WEI);
-        const reserve = neededLamports - Number(MIN_SOL_FOR_GAS_WEI);
+      const nativeBalanceWei = nativeBalance.value;
+      if (nativeBalanceWei < MIN_NATIVE_FOR_ENTRY_WEI) {
+        const availableLamports = Number(nativeBalanceWei);
+        const neededLamports = Number(MIN_NATIVE_FOR_ENTRY_WEI);
+        const reserve = neededLamports - Number(MIN_NATIVE_FOR_GAS_WEI);
         const availableHuman = (availableLamports / 1e9).toFixed(4);
         const neededHuman = (neededLamports / 1e9).toFixed(4);
         const reserveHuman = (reserve / 1e9).toFixed(4);
         console.warn(
           `Insufficient SOL for ENTER — available ${availableHuman} SOL, need ${neededHuman} SOL ` +
-            `(gas ${(Number(MIN_SOL_FOR_GAS_WEI) / 1e9).toFixed(4)} + rent/fee reserve ${reserveHuman})`,
+            `(gas ${(Number(MIN_NATIVE_FOR_GAS_WEI) / 1e9).toFixed(4)} + rent/fee reserve ${reserveHuman})`,
         );
         const error =
           `Insufficient SOL for ENTER — available: ${availableHuman} SOL, ` +
@@ -1761,7 +1760,7 @@ export function executeLive(
               poolAddress: decision.poolAddress,
               tokenMint: item.mint,
               amountAtomic: String(item.amountAtomic),
-              destinationAsset: "SOL",
+              destinationAsset: "ETH",
               status: "pending",
               attempts: 0,
               nextRetryAt: now,

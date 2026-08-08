@@ -762,7 +762,7 @@ export function sweepOrphanSettlements(
         poolAddress: "",
         tokenMint: mint,
         amountAtomic: holding.amountAtomic.toString(),
-        destinationAsset: "SOL",
+        destinationAsset: "ETH",
         status: "pending",
         attempts: 0,
         nextRetryAt: input.now,

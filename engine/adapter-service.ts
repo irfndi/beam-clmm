@@ -1,4 +1,4 @@
-import { Context, Effect, Layer } from "effect";
+import { Effect, Layer } from "effect";
 import {
   createPublicClient,
   getAddress,
@@ -10,12 +10,8 @@ import {
 } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { ConfigService } from "./config-service.js";
-import type {
-  AdapterApi,
-  DiscoveredPool,
-  EntryDepositMode,
-  EntryStrategyShape,
-} from "./services.js";
+import { AdapterService, type AdapterApi, type DiscoveredPool } from "./services.js";
+import type { EntryDepositMode, EntryStrategyShape } from "./types.js";
 import type { BinArray, BinData, PoolState, Position } from "./types.js";
 import { NATIVE_MINT, STABLECOIN_MINT } from "./constants.js";
 import { createLogger } from "./logger.js";
@@ -33,7 +29,9 @@ export const V3_NPM: Address = getAddress("0x73991a25c818bf1f1128deaab1492d45638
 export const V3_TICK_LENS: Address = getAddress("0x7dfd4f31be6814d2906bde155c3e1b146eac1468");
 export const V3_QUOTER_V2: Address = getAddress("0x33e885ed0ec9bf04ecfb19341582aadcb4c8a9e7");
 export const V4_POOL_MANAGER: Address = getAddress("0x8366a39cc670b4001a1121b8f6a443a643e40951");
-export const V4_POSITION_MANAGER: Address = getAddress("0x58daec3116aae6d93017baaea7749052e8a04fa7");
+export const V4_POSITION_MANAGER: Address = getAddress(
+  "0x58daec3116aae6d93017baaea7749052e8a04fa7",
+);
 export const UNIVERSAL_ROUTER: Address = getAddress("0x8876789976decbfcbbbe364623c63652db8c0904");
 
 /**
@@ -75,7 +73,7 @@ const v3PoolAbi = parseAbi([
   "function liquidity() view returns (uint128)",
 ]);
 const tickLensAbi = parseAbi([
-  "function getPopulatedTicksInWord(address pool, int16 tickBitmapIndex) view returns (tuple(int24 tick, int128 liquidityNet, uint128 liquidityGross)[])",
+  "function getPopulatedTicksInWord(address pool, int16 tickBitmapIndex) view returns (tuple(int24,int128,uint128)[])",
 ]);
 const v3NpmAbi = parseAbi([
   "function balanceOf(address) view returns (uint256)",
@@ -83,9 +81,9 @@ const v3NpmAbi = parseAbi([
   "function positions(uint256) view returns (uint96 nonce, address operator, address token0, address token1, uint24 fee, int24 tickLower, int24 tickUpper, uint128 liquidity, uint256 feeGrowthInside0LastX128, uint256 feeGrowthInside1LastX128, uint128 tokensOwed0, uint128 tokensOwed1)",
 ]);
 const v4PoolManagerAbi = parseAbi([
-  "function getSlot0(tuple(address currency0, address currency1, uint24 fee, int24 tickSpacing, address hooks) key) view returns (uint160 sqrtPriceX96, int24 tick, uint16 protocolFee, uint24 swapFee)",
-  "function getLiquidity(tuple(address currency0, address currency1, uint24 fee, int24 tickSpacing, address hooks) key) view returns (uint128)",
-  "function getPool(tuple(address currency0, address currency1, uint24 fee, int24 tickSpacing, address hooks) key) view returns (uint256)",
+  "function getSlot0(tuple(address,address,uint24,int24,address) key) view returns (uint160,int24,uint16,uint24)",
+  "function getLiquidity(tuple(address,address,uint24,int24,address) key) view returns (uint128)",
+  "function getPool(tuple(address,address,uint24,int24,address) key) view returns (uint256)",
 ]);
 const v4PositionManagerAbi = parseAbi([
   "function balanceOf(address) view returns (uint256)",
@@ -122,8 +120,7 @@ const NOT_IMPLEMENTED = (what: string) =>
     ),
   );
 
-export const AdapterLive = Layer.effect(
-  Context.GenericTag<AdapterApi>("AdapterService"),
+export const AdapterLive = Layer.effect(AdapterService,
   Effect.gen(function* () {
     const config = yield* ConfigService;
     const rpcUrl = config.rpcUrl || DEFAULT_RPC;
@@ -167,7 +164,9 @@ export const AdapterLive = Layer.effect(
       if (isNative(mint)) return 18;
       const cached = decimalsCache.get(mint.toLowerCase());
       if (cached !== undefined) return cached;
-      const decimals = await erc20(getAddress(mint)).read.decimals().catch(() => 18);
+      const decimals = await erc20(getAddress(mint))
+        .read.decimals()
+        .catch(() => 18);
       decimalsCache.set(mint.toLowerCase(), Number(decimals));
       return Number(decimals);
     }
@@ -204,7 +203,7 @@ export const AdapterLive = Layer.effect(
             poolContract.read.token0(),
             poolContract.read.slot0(),
           ]);
-          const price = sqrtPriceX96ToPrice(slot0.sqrtPriceX96);
+          const price = sqrtPriceX96ToPrice(slot0[0]);
           return token0.toLowerCase() === getAddress(mint).toLowerCase() ? price : 1 / price;
         } catch {
           continue;
@@ -224,7 +223,7 @@ export const AdapterLive = Layer.effect(
         poolContract.read.slot0(),
         poolContract.read.liquidity(),
       ]);
-      const tick = Number(slot0.tick);
+      const tick = Number(slot0[1]);
       const price0 = await priceUsd(token0).catch(() => 0);
       const tvlUsd = (Number(liquidity) / 1e18) * (price0 || 0) * 4; // rough reserve proxy
       return {
@@ -252,18 +251,21 @@ export const AdapterLive = Layer.effect(
         poolContract.read.slot0(),
         poolContract.read.tickSpacing(),
       ]);
-      const activeTick = Number(slot0.tick);
+      const activeTick = Number(slot0[1]);
       const lens = tickLens();
       const word = activeTick >> 8;
       const bins: BinData[] = [];
       for (const w of [word - 1, word, word + 1]) {
-        const populated = await lens.read.getPopulatedTicksInWord([poolAddress, w]);
+        const populated = (await lens.read.getPopulatedTicksInWord([poolAddress, w])) as unknown as ReadonlyArray<
+          readonly [number, bigint, bigint]
+        >;
         for (const p of populated) {
           bins.push({
-            binId: Number(p.tick),
-            xReserve: p.liquidityGross,
-            yReserve: 0n,
-            price: tickToPrice(Number(p.tick)),
+            binId: Number(p[0]),
+            reserveX: p[2],
+            reserveY: 0n,
+            liquiditySupply: p[2],
+            price: tickToPrice(Number(p[0])),
           });
         }
       }
@@ -290,15 +292,17 @@ export const AdapterLive = Layer.effect(
         try {
           const tokenId = await npm.read.tokenOfOwnerByIndex([owner, BigInt(i)]);
           const p = await npm.read.positions([tokenId]);
-          const pool = await v3PoolOf(p.token0, p.token1, p.fee);
+          const token0 = p[2];
+          const token1 = p[3];
+          const pool = await v3PoolOf(token0, token1, p[4]);
           if (poolFilter && pool.toLowerCase() !== poolFilter.toLowerCase()) continue;
           positions.push({
             id: tokenId.toString(),
             poolAddress: pool.toLowerCase(),
-            poolName: `${p.token0.slice(0, 6)}/${p.token1.slice(0, 6)}`,
-            lowerBinId: Number(p.tickLower),
-            upperBinId: Number(p.tickUpper),
-            liquidityShares: p.liquidity,
+            poolName: `${token0.slice(0, 6)}/${token1.slice(0, 6)}`,
+            lowerBinId: Number(p[5]),
+            upperBinId: Number(p[6]),
+            liquidityShares: p[7],
             depositedUsd: 0,
             currentValueUsd: 0,
             unrealizedPnlUsd: 0,
@@ -328,7 +332,7 @@ export const AdapterLive = Layer.effect(
         try {
           const tokenId = await pm.read.tokenOfOwnerByIndex([owner, BigInt(i)]);
           const p = await pm.read.positions([tokenId]);
-          const poolId = `0x${p.poolId.toString(16).padStart(64, "0")}`;
+          const poolId = `0x${p[0].toString(16).padStart(64, "0")}`;
           if (poolFilter && poolId.toLowerCase() !== poolFilter.toLowerCase()) continue;
           positions.push({
             id: tokenId.toString(),
@@ -336,7 +340,7 @@ export const AdapterLive = Layer.effect(
             poolName: `v4:${poolId.slice(0, 10)}`,
             lowerBinId: 0,
             upperBinId: 0,
-            liquidityShares: p.liquidity,
+            liquidityShares: p[1],
             depositedUsd: 0,
             currentValueUsd: 0,
             unrealizedPnlUsd: 0,
@@ -353,7 +357,7 @@ export const AdapterLive = Layer.effect(
     return {
       hasWallet: () => account !== null,
       getWalletAddress: () => walletAddress,
-      getWalletBalanceUsd: Effect.gen(function* () {
+      getWalletBalanceUsd: () => Effect.gen(function* () {
         if (!walletAddress) return 0;
         const [nativeWei, stable] = yield* Effect.promise(async () => {
           const [n, s] = await Promise.all([
@@ -365,7 +369,7 @@ export const AdapterLive = Layer.effect(
         const ethPrice = yield* Effect.promise(() => priceUsd(NATIVE_MINT));
         return (Number(nativeWei) / 1e18) * ethPrice + Number(stable) / 1e6;
       }),
-      getWalletHoldings: Effect.gen(function* () {
+      getWalletHoldings: () => Effect.gen(function* () {
         const holdings = new Map<string, { amountAtomic: bigint; decimals: number }>();
         if (!walletAddress) return holdings;
         yield* Effect.promise(async () => {
@@ -378,7 +382,7 @@ export const AdapterLive = Layer.effect(
         });
         return holdings;
       }),
-      getNativeBalance: Effect.promise(async () => {
+      getNativeBalance: () => Effect.promise(async () => {
         if (!walletAddress) return 0n;
         return publicClient.getBalance({ address: walletAddress });
       }),
@@ -411,7 +415,7 @@ export const AdapterLive = Layer.effect(
                 pm.read.getSlot0([key]),
                 pm.read.getLiquidity([key]),
               ]);
-              const tick = Number(slot0.tick);
+              const tick = Number(slot0[1]);
               return {
                 address: poolAddress.toLowerCase(),
                 tokenX: key.currency0.toLowerCase(),
@@ -454,10 +458,10 @@ export const AdapterLive = Layer.effect(
               // active tick only and mark reserves unknown — the engine treats
               // bin signals as "unknown" rather than fabricating them.
               return {
-                lowerBinId: Number(slot0.tick),
-                upperBinId: Number(slot0.tick),
+                lowerBinId: Number(slot0[1]),
+                upperBinId: Number(slot0[1]),
                 bins: [],
-                activeBinId: Number(slot0.tick),
+                activeBinId: Number(slot0[1]),
                 binStep: key.tickSpacing,
                 reservesKnown: false,
               };
@@ -560,6 +564,7 @@ export const AdapterLive = Layer.effect(
           catch: (e) =>
             new DiscoverPoolsError({
               message: `discoverPools: ${underlyingErrorMessage(e)}`,
+              url: rpcUrl,
             }),
         }),
       reportFeeCollection: () => Effect.void,
@@ -595,7 +600,8 @@ export const AdapterLive = Layer.effect(
       getMintAuthorities: (mintAddress) =>
         Effect.succeed({ mintAuthority: null, freezeAuthority: null }),
       quoteSwapUSDCForToken: (outputMint, amountAtomic) => NOT_IMPLEMENTED("quoteSwapUSDCForToken"),
-      swapUSDCForToken: (outputMint, amountAtomic, quoteData) => NOT_IMPLEMENTED("swapUSDCForToken"),
+      swapUSDCForToken: (outputMint, amountAtomic, quoteData) =>
+        NOT_IMPLEMENTED("swapUSDCForToken"),
       swapToken: (inputMint, outputMint, amountAtomic, quoteData) => NOT_IMPLEMENTED("swapToken"),
       quoteSwap: (request) => NOT_IMPLEMENTED("quoteSwap"),
       prepareSwap: (quote) => NOT_IMPLEMENTED("prepareSwap"),

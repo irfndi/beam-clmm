@@ -3,8 +3,8 @@ import { Effect, Layer } from "effect";
 import { ConfigLive, ConfigService } from "../engine/config-service.js";
 import { DbLive } from "../engine/db-service.js";
 import { DbService } from "../engine/services.js";
-import { getPrismDbPath } from "../engine/paths.js";
-import { resolveEffectivePubkey } from "./wallet.js";
+import { getBeamDbPath } from "../engine/paths.js";
+import { resolveEffectiveWallet } from "../engine/wallet-keystore.js";
 
 class ResumeCommandError extends Error {
   constructor(message: string) {
@@ -14,7 +14,7 @@ class ResumeCommandError extends Error {
 }
 
 function buildProgram(): Layer.Layer<DbService | ConfigService, Error, never> {
-  const dbLayer = DbLive(process.env.SQLITE_DB_PATH ?? getPrismDbPath());
+  const dbLayer = DbLive(process.env.SQLITE_DB_PATH ?? getBeamDbPath());
   return Layer.merge(dbLayer, ConfigLive);
 }
 
@@ -30,18 +30,22 @@ wallet and configured agent instance. It does not submit or sign any transaction
     try {
       await Effect.runPromise(
         Effect.gen(function* () {
-          const effectiveWallet = resolveEffectivePubkey();
+          const effectiveWallet = resolveEffectiveWallet();
           if (effectiveWallet === null || effectiveWallet.error !== undefined) {
             return yield* Effect.fail(
               new ResumeCommandError(
-                "No valid effective wallet is configured; run prism wallet show",
+                "No valid effective wallet is configured; set WALLET_PRIVATE_KEY or the keystore",
               ),
             );
           }
 
           const db = yield* DbService;
           const config = yield* ConfigService;
-          const pause = yield* db.getSafetyPause(effectiveWallet.pubkey, config.agentInstanceId);
+          if (!effectiveWallet.address) {
+            console.log("No wallet address available; cannot check the autonomous safety pause.");
+            return;
+          }
+          const pause = yield* db.getSafetyPause(effectiveWallet.address, config.agentInstanceId);
           if (pause === null) {
             console.log("No autonomous safety pause is recorded for the current wallet.");
             return;

@@ -157,7 +157,6 @@ export function defaultAppConfig(overrides: Partial<AppConfig> = {}): AppConfig 
     githubRepo: "",
     feedbackOptOut: false,
     paperModeExitLive: false,
-      "https://dlmm.datapi.meteora.ag/pools?page=1&page_size=1000&filter_by=is_blacklisted=false&sort_by=tvl:desc",
     stablecoinMints: new Set(),
     depegAbsoluteUsd: 0.02,
     depegRelativePct: 0.02,
@@ -177,7 +176,7 @@ export function defaultAppConfig(overrides: Partial<AppConfig> = {}): AppConfig 
     // never touches the network for the existing program tests; stats-pipeline
     // tests opt in explicitly.
     geckoTerminalEnabled: false,
-    rebalanceGasCostSol: 0.01,
+    rebalanceGasCostNative: 0.01,
     nativePriceUsd: 150,
     gasAwareMinDaysOfFeesPaidAhead: 3,
     volatilityExitStddev: 5,

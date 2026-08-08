@@ -59,7 +59,6 @@ function buildLayer(
     githubRepo: "",
     feedbackOptOut: false,
     paperModeExitLive: false,
-      "https://dlmm.datapi.meteora.ag/pools?page=1&page_size=1000&filter_by=is_blacklisted=false&sort_by=tvl:desc",
     rebalanceGasCostNative: 0.01,
     nativePriceUsd: 150,
     gasAwareMinDaysOfFeesPaidAhead: 3,

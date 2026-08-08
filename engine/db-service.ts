@@ -1427,7 +1427,7 @@ function parseSettlementJobStatus(value: unknown): SettlementJobStatus {
 }
 
 function parseSettlementAsset(value: unknown): SettlementAsset {
-  if (value === "SOL") return value;
+  if (value === "ETH") return value;
   throw new PersistenceContractError({
     entity: "settlement_job",
     field: "destination_asset",
