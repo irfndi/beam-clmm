@@ -463,10 +463,10 @@ Hermes' blueprint metadata enables skills to be scheduled automations:
 ```yaml
 ---
 name: daily-market-check
-description: "Check Meteora DLMM pool health and report anomalies."
+description: "Check Uniswap pool health and report anomalies."
 metadata:
   hermes:
-    tags: [defi, monitoring, meteora]
+    tags: [defi, monitoring, evm]
     blueprint:
       schedule: "0 9 * * *"
       deliver: telegram
@@ -480,9 +480,9 @@ metadata:
 ```bash
 #!/usr/bin/env bash
 # watchdog.sh — runs every 5m, silent if OK
-result=$(curl -s https://prism-api.irfndi.workers.dev/health)
+result=$(curl -s https://beam-api.irfndi.workers.dev/health)
 if echo "$result" | jq -e '.status != "ok"' > /dev/null 2>&1; then
-  echo "⚠️ Prism API health check failed: $result"
+  echo "⚠️ Beam API health check failed: $result"
 fi
 ```
 
@@ -506,70 +506,70 @@ hermes send --to telegram "Pool SOL/USDC entered out-of-range"
 
 ---
 
-## 7. Recommended Prism Integration Approach
+## 7. Recommended Beam Integration Approach
 
-### Option A: Hermes Skill for Prism (Recommended)
+### Option A: Hermes Skill for Beam (Recommended)
 
-Create a Hermes skill that wraps Prism's trading agent functionality:
+Create a Hermes skill that wraps Beam's trading agent functionality:
 
 ```text
-~/.hermes/skills/defi/prism-dlmm/
+~/.hermes/skills/defi/beam-clmm/
 ├── SKILL.md
 ├── references/
-│   ├── architecture.md       # Prism architecture overview
+│   ├── architecture.md       # Beam architecture overview
 │   └── env-vars.md           # Configuration reference
 └── scripts/
-    └── prism-status.sh       # Quick status check script
+    └── beam-status.sh       # Quick status check script
 ```
 
 **SKILL.md sketch:**
 
 ```yaml
 ---
-name: prism-dlmm
-description: "Manage Prism liquidity agent — scan pools, check positions, trigger rebalances, review audit logs. Use when the user mentions DLMM, Meteora, liquidity positions, or Prism trading."
+name: beam-clmm
+description: "Manage Beam liquidity agent — scan pools, check positions, trigger rebalances, review audit logs. Use when the user mentions Uniswap, liquidity positions, or Beam trading."
 version: 1.0.0
-author: Prism Team
+author: Beam Team
 license: MIT
 platforms: [linux, macos]
 metadata:
   hermes:
-    tags: [defi, meteora, dlmm, liquidity, trading]
+    tags: [defi, evm, liquidity, trading]
     related_skills: [hermes-agent]
     requires_tools: [terminal]
 required_environment_variables:
-  - name: HELIUS_API_KEY
-    prompt: "Helius API key for Solana RPC"
-    help: "Get one at https://helius.dev"
+  - name: ROBINHOOD_RPC_URL
+    prompt: "Robinhood Chain RPC URL"
+    help: "Default: https://rpc.mainnet.chain.robinhood.com"
     required_for: "Pool state fetching"
   - name: WALLET_PRIVATE_KEY
-    prompt: "Solana wallet private key (optional, paper trading works without it)"
+    prompt: "EVM wallet private key (optional, paper trading works without it)"
     help: "Only needed for live trading"
     required_for: "Live execution"
 ---
 ```
 
 **Why this works:**
-- Hermes agents can invoke Prism via terminal tools (CLI commands)
+- Hermes agents can invoke Beam via terminal tools (CLI commands)
 - Cron jobs can run periodic health checks with cross-platform delivery
 - Skills are self-documenting and discoverable
-- No protocol changes needed — Hermes calls Prism's CLI
+- No protocol changes needed — Hermes calls Beam's CLI
 
-### Option B: Hermes Gateway + Prism Telegram Bot
+### Option B: Hermes Gateway + Beam Telegram Bot
 
-If Prism already has a Telegram bot (`@prism_agent_bot`), run both Hermes and Prism gateways:
+If Beam already has a Telegram bot (`@beam_agent_bot`), run both Hermes and Beam gateways:
 
 1. Hermes gateway → user interactions, cron scheduling, skill management
-2. Prism Telegram bot → trading-specific commands
+2. Beam Telegram bot → trading-specific commands
 3. Hermes cron jobs call `hermes send --to telegram` for check-in delivery
 
 ### Option C: ACP Integration for IDE-Based Monitoring
 
-For developers who want to monitor Prism from their editor:
+For developers who want to monitor Beam from their editor:
 
-1. Run `hermes acp` in the Prism project directory
+1. Run `hermes acp` in the Beam project directory
 2. IDE (VS Code/Zed) connects via ACP
-3. Agent has access to Prism codebase, logs, and terminal
+3. Agent has access to Beam codebase, logs, and terminal
 4. Ask questions like "check pool health", "why did this rebalance fail"
 
 ### Option D: API Server for Dashboards
@@ -580,7 +580,7 @@ Run Hermes' OpenAI-compatible API server:
 hermes gateway start --platform api_server
 ```
 
-Then build a web dashboard that sends prompts to Hermes, which has Prism context via skills.
+Then build a web dashboard that sends prompts to Hermes, which has Beam context via skills.
 
 ### Integration Matrix
 
@@ -594,12 +594,12 @@ Then build a web dashboard that sends prompts to Hermes, which has Prism context
 ### Recommended Path
 
 **Start with Option A** (Hermes Skill) because:
-1. Zero protocol changes — Hermes calls Prism CLI via terminal tools
+1. Zero protocol changes — Hermes calls Beam CLI via terminal tools
 2. Cron jobs enable automated monitoring with delivery to any platform
 3. Skills are portable (agentskills.io standard) and discoverable
 4. Agent can create/update skills autonomously based on experience
 5. Progressive disclosure keeps token costs low
-6. External skill directories let Prism ship skills alongside the engine
+6. External skill directories let Beam ship skills alongside the engine
 
 The skill can later evolve to Option B (dual gateway) if real-time bidirectional communication is needed.
 

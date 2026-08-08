@@ -1,6 +1,6 @@
-# DLMM Rebalance Guardrails
+# CLMM Rebalance Guardrails
 
-Prism should only rebalance when the new band is measurably better than staying put. This note is a reminder that activity alone is not alpha.
+Beam should only rebalance when the new band is measurably better than staying put. This note is a reminder that activity alone is not alpha.
 
 ## Rebalance only when
 

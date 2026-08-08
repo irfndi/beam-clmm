@@ -6,7 +6,7 @@ Design approved; awaiting implementation plan.
 
 ## Context
 
-In Prism v0.0.32, live entry into a Meteora DLMM position requires the wallet to already hold both of the pool's tokens in a roughly 50/50 USD split. `adapter.enterPosition` computes the required amounts, checks balances, and fails with:
+In Beam v0.0.32, live entry into a Meteora DLMM position requires the wallet to already hold both of the pool's tokens in a roughly 50/50 USD split. `adapter.enterPosition` computes the required amounts, checks balances, and fails with:
 
 > `Insufficient token balance: ... Wallet must hold both pool tokens before live entry.`
 

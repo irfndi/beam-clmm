@@ -1,22 +1,22 @@
-# Prism Installation Guide
+# Beam Installation Guide
 
 > **For agent harnesses (OpenClaw, Hermes, acpx):** See [`agent-harness.md`](agent-harness.md) for the full agent setup flow with architecture overview and 3-layer quickstarts.
 
-## Prism Architecture
+## Beam Architecture
 
-Prism has 3 layers. The CLI is the operating boundary, and the API account is required before an agent can configure or run so telemetry, errors, and feedback have an owner. Telegram is optional.
+Beam has 3 layers. The CLI is the operating boundary, and the API account is required before an agent can configure or run so telemetry, errors, and feedback have an owner. Telegram is optional.
 
 1. **CLI (Local)** — The trading agent runs on your machine. All strategy, memory,
-   risk management, and position execution lives here. Commands: `prism dev`,
-   `prism setup`, `prism wallet`, `prism backtest`, `prism update`.
+   risk management, and position execution lives here. Commands: `beam dev`,
+   `beam setup`, `beam wallet`, `beam backtest`, `beam update`.
    **REQUIRED.**
 
 2. **API (Cloud)** — A Cloudflare Worker that handles user accounts, API keys,
-   and subscription tiers. Commands that need it: `prism register`, `prism whoami`,
-   `prism login`, `prism link-telegram`, `prism subscription`.
-   **REQUIRED for setup and agent operation.** `prism register` stores the account key locally.
+   and subscription tiers. Commands that need it: `beam register`, `beam whoami`,
+   `beam login`, `beam link-telegram`, `beam subscription`.
+   **REQUIRED for setup and agent operation.** `beam register` stores the account key locally.
 
-3. **Telegram (Chat)** — A Telegram bot (`@prism_agent_bot`) for monitoring and
+3. **Telegram (Chat)** — A Telegram bot (`@beam_agent_bot`) for monitoring and
    control from your phone. Requires the API layer for auth.
    **OPTIONAL.** Skip if you don't use Telegram.
 
@@ -27,29 +27,28 @@ Pick the option that matches your use case:
 **Option A: Standard (CLI + API)** — The supported agent and user flow.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/irfndi/prism-liquidity-agent/main/scripts/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/irfndi/beam-clmm/main/scripts/install.sh | bash
 export PATH="$HOME/.local/bin:$PATH"
-prism register
-prism setup --non-interactive --rpc-url="$SOLANA_RPC_URL"
-prism doctor
-prism dev                                                  # start paper trading
+beam register
+beam setup --non-interactive --rpc-url="$ROBINHOOD_RPC_URL"
+beam dev                                                  # start paper trading
 ```
 
 **Option B: Full (CLI + API + Telegram)** — Adds subscription management, multi-device
 support, and Telegram monitoring.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/irfndi/prism-liquidity-agent/main/scripts/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/irfndi/beam-clmm/main/scripts/install.sh | bash
 export PATH="$HOME/.local/bin:$PATH"
-prism register                                              # get API key from cloud
-prism setup --non-interactive --rpc-url="$SOLANA_RPC_URL"
-prism dev
+beam register                                              # get API key from cloud
+beam setup --non-interactive --rpc-url="$ROBINHOOD_RPC_URL"
+beam dev
 ```
 
 ```bash
 # Same as Standard, then:
-prism link-telegram   # generates 6-char code
-# Send the code to @prism_agent_bot on Telegram
+beam link-telegram   # generates 6-char code
+# Send the code to @beam_agent_bot on Telegram
 ```
 
 ### Feature Matrix
@@ -73,13 +72,13 @@ prism link-telegram   # generates 6-char code
 
 - **Bun 1.4.0+** — [Install Bun](https://bun.sh/docs/installation) (the one-liner installer can do this for you)
 - **Git** — only for contributor source installs
-- **Solana wallet** (optional) — only needed for live trading; paper trading works without one
-- **Private Solana RPC URL** — required for reliable live trading; Helius is optional
+- **EVM wallet** (optional) — only needed for live trading; paper trading works without one
+- **Robinhood Chain RPC URL** — required for reliable live trading; the public mainnet RPC works too
 
 ## One-liner Install (Recommended)
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/irfndi/prism-liquidity-agent/main/scripts/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/irfndi/beam-clmm/main/scripts/install.sh | bash
 ```
 
 What the installer does:
@@ -88,21 +87,20 @@ What the installer does:
 2. Detects your OS and architecture (`linux-x64`, `linux-arm64`, `darwin-x64`, `darwin-arm64`)
 3. Downloads the matching compiled bundle (`dist/` engine + CLI, `lib/` native sqlite-vec extension) from Cloudflare R2
 4. Verifies the bundle's SHA-256 checksum
-5. Extracts it to `~/.prism` (override with `PRISM_INSTALL_DIR`)
-6. Writes a `prism` wrapper at `~/.local/bin/prism` that sets `PRISM_INSTALL_DIR` and `PRISM_VEC0_PATH`, then runs the bundle with Bun
-7. Preserves existing `.env`, `prism.db`, and logs; setup is deferred until registration
+5. Extracts it to `~/.beam` (override with `BEAM_INSTALL_DIR`)
+6. Writes a `beam` wrapper at `~/.local/bin/beam` that sets `BEAM_INSTALL_DIR` and `BEAM_VEC0_PATH`, then runs the bundle with Bun
+7. Preserves existing `.env`, `beam.db`, and logs; setup is deferred until registration
 
 Then:
 
 ```bash
 export PATH="$HOME/.local/bin:$PATH"   # if not already on PATH
 
-prism register                          # required before setup/dev
+beam register                          # required before setup/dev
 
 # Required for reliable live trading:
-prism setup --non-interactive --rpc-url=https://your-paid-rpc.example.com
-prism doctor
-prism dev                               # start paper trading
+beam setup --non-interactive --rpc-url=https://your-paid-rpc.example.com
+beam dev                               # start paper trading
 ```
 
 ## Quick Start (Manual)
@@ -113,52 +111,51 @@ Choose your path based on the architecture above. The recommended path is the on
 
 ```bash
 # One-liner installer (recommended)
-curl -fsSL https://raw.githubusercontent.com/irfndi/prism-liquidity-agent/main/scripts/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/irfndi/beam-clmm/main/scripts/install.sh | bash
 export PATH="$HOME/.local/bin:$PATH"
-prism register
-prism setup     # interactive RPC/.env wizard
-prism doctor
-prism dev       # start paper trading
+beam register
+beam setup     # interactive RPC/.env wizard
+beam dev       # start paper trading
 ```
 
 **With cloud account (same required flow):**
 
 ```bash
 # One-liner installer (recommended)
-curl -fsSL https://raw.githubusercontent.com/irfndi/prism-liquidity-agent/main/scripts/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/irfndi/beam-clmm/main/scripts/install.sh | bash
 export PATH="$HOME/.local/bin:$PATH"
-prism register  # get API key from Cloudflare API
-prism setup     # configure RPC providers + watchlist
-prism doctor    # validate registration, providers, and local state
-prism dev       # start paper trading
+beam register  # get API key from Cloudflare API
+beam setup     # configure RPC providers + watchlist
+
+beam dev       # start paper trading
 ```
 
 **Manual source install** (for contributors or CI — not needed for users):
 
 ```bash
-git clone https://github.com/irfndi/prism-liquidity-agent.git
-cd prism-liquidity-agent
+git clone https://github.com/irfndi/beam-clmm.git
+cd beam-clmm
 bun install
-bun run dev     # during development only; use `prism dev` for production
+bun run dev     # during development only; use `beam dev` for production
 ```
 
 ## Step-by-Step Setup
 
-### 1. Install Prism
+### 1. Install Beam
 
 **Recommended — one-liner:**
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/irfndi/prism-liquidity-agent/main/scripts/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/irfndi/beam-clmm/main/scripts/install.sh | bash
 ```
 
-This downloads a compiled bundle for your platform, verifies its checksum, and writes the `prism` wrapper to `~/.local/bin/prism`.
+This downloads a compiled bundle for your platform, verifies its checksum, and writes the `beam` wrapper to `~/.local/bin/beam`.
 
 **Manual source install (contributors only):**
 
 ```bash
-git clone https://github.com/irfndi/prism-liquidity-agent.git
-cd prism-liquidity-agent
+git clone https://github.com/irfndi/beam-clmm.git
+cd beam-clmm
 bun install  # postinstall writes a default .env next to package.json
 ```
 
@@ -168,11 +165,11 @@ If the postinstall hook is disabled (`bun install --ignore-scripts`), run
 ### 2. Register (Get API Key) — REQUIRED
 
 ```bash
-prism register
+beam register
 ```
 
-Creates your identity with Prism's Cloudflare Worker and returns an API key. Store it
-securely in `~/.config/prism/credentials.json`.
+Creates your identity with Beam's Cloudflare Worker and returns an API key. Store it
+securely in `~/.config/beam/credentials.json`.
 
 Setup, dev, feedback, issue, error reporting, and registered telemetry require the
 stored account key. Telegram remains optional.
@@ -180,52 +177,50 @@ stored account key. Telegram remains optional.
 ### 3. Configure RPC providers
 
 ```bash
-prism setup
+beam setup
 ```
 
-`prism setup` preserves the existing environment by writing a timestamped backup and
+`beam setup` preserves the existing environment by writing a timestamped backup and
 never asks an already configured install to repeat setup during upgrade.
 
 Interactive wizard that asks for:
 
 | Prompt             | Required | Default                     |
 | ------------------ | -------- | --------------------------- |
-| Helius API key     | NO       | empty when using custom RPC |
-| Primary RPC URL    | NO       | derived from Helius key     |
-| Fallback RPC URL   | NO       | empty                       |
+| Robinhood Chain RPC URL | NO       | public mainnet               |
+
+
 | Wallet private key | NO       | empty (paper trading)       |
 | Watchlist pools    | NO       | empty (discovery is opt-in) |
 
 Everything else is **preconfigured** with sensible defaults:
 
 - `PAPER_TRADING=true`
-- `SOLANA_RPC_URL` defaults to Helius when a key is present; set it to a paid RPC URL for live trading
-- `SOLANA_RPC_FALLBACK_URL` optionally points to a separate provider
-- `JUPITER_API_KEY` optionally raises Jupiter Price API limits
+- `ROBINHOOD_RPC_URL` defaults to the public mainnet RPC; set it to a paid RPC URL for live trading
+- `ROBINHOOD_RPC_FALLBACK_URL` optionally points to a separate provider
+- USD pricing comes from Pyth Hermes (ETH/USD, USDG/USD) with CoinGecko fallback
 - All strategy params (min TVL, fee/IL ratio, etc.) from `config-service.ts`
 
 #### Agent-driven setup (non-interactive)
 
 ```bash
-prism setup --non-interactive --rpc-url=https://your-paid-rpc.example.com \
+beam setup --non-interactive --rpc-url=https://your-paid-rpc.example.com \
   --rpc-fallback-url=https://your-second-rpc.example.com
 
-# Or use a non-Helius primary provider:
-prism setup --non-interactive --rpc-url=https://your-paid-rpc.example.com
+
+beam setup --non-interactive --rpc-url=https://your-paid-rpc.example.com
 ```
 
 ### 4. Start Trading
 
 ```bash
 # Paper trading (default, no wallet needed)
-prism dev
+beam dev
 
 # Live trading (requires wallet private key in .env)
-PAPER_TRADING=false prism dev
+PAPER_TRADING=false beam dev
 ```
 
-Use `prism doctor` before starting, or `prism doctor --fix` to create missing local
-directories and repair their permissions without changing secrets.
 
 ## What's Preconfigured
 
@@ -244,7 +239,7 @@ not set through `.env`.
 - `VOLUME_AUTH_THRESHOLD=0.70` — skip wash-traded pools
 - `CONFIDENCE_THRESHOLD=0.65` — minimum confidence to act
 - `TRAILING_STOP_PCT=0.10` — 10% drawdown triggers exit
-- `SQLITE_DB_PATH=./prism.db` — agent's local DB
+- `SQLITE_DB_PATH=./beam.db` — agent's local DB
 - `EMBEDDINGS_BACKEND=fallback` — pure-JS embeddings (no ONNX download)
 - All other strategy parameters
 

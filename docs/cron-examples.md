@@ -1,6 +1,6 @@
 # Cron / Launchd / Systemd Examples
 
-Run Prism unattended on a schedule.
+Run Beam unattended on a schedule.
 
 ## Cron (Linux/macOS)
 
@@ -11,21 +11,21 @@ Run Prism unattended on a schedule.
 crontab -e
 
 # Add line:
-*/10 * * * * cd /path/to/prism-liquidity-agent && bun run dev >> /var/log/prism.log 2>&1
+*/10 * * * * cd /path/to/beam-clmm && bun run dev >> /var/log/beam.log 2>&1
 ```
 
 ### Every hour (conservative)
 
 ```bash
-0 * * * * cd /path/to/prism-liquidity-agent && bun run dev >> /var/log/prism.log 2>&1
+0 * * * * cd /path/to/beam-clmm && bun run dev >> /var/log/beam.log 2>&1
 ```
 
 ### With log rotation
 
 ```bash
-# Use logrotate for /var/log/prism.log
-# /etc/logrotate.d/prism
-/var/log/prism.log {
+# Use logrotate for /var/log/beam.log
+# /etc/logrotate.d/beam
+/var/log/beam.log {
     daily
     rotate 7
     compress
@@ -36,7 +36,7 @@ crontab -e
 
 ## Launchd (macOS)
 
-Create `~/Library/LaunchAgents/com.prism.dlmm.plist`:
+Create `~/Library/LaunchAgents/com.beam.agent.plist`:
 
 ```xml
 <?xml version="1.0" encoding="UTF-8"?>
@@ -44,7 +44,7 @@ Create `~/Library/LaunchAgents/com.prism.dlmm.plist`:
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>com.prism.dlmm</string>
+    <string>com.beam.agent</string>
     <key>ProgramArguments</key>
     <array>
         <string>/usr/local/bin/bun</string>
@@ -52,13 +52,13 @@ Create `~/Library/LaunchAgents/com.prism.dlmm.plist`:
         <string>dev</string>
     </array>
     <key>WorkingDirectory</key>
-    <string>/path/to/prism-liquidity-agent</string>
+    <string>/path/to/beam-clmm</string>
     <key>StartInterval</key>
     <integer>600</integer>
     <key>StandardOutPath</key>
-    <string>/var/log/prism.log</string>
+    <string>/var/log/beam.log</string>
     <key>StandardErrorPath</key>
-    <string>/var/log/prism.error.log</string>
+    <string>/var/log/beam.error.log</string>
 </dict>
 </plist>
 ```
@@ -66,28 +66,28 @@ Create `~/Library/LaunchAgents/com.prism.dlmm.plist`:
 Load and start:
 
 ```bash
-launchctl load ~/Library/LaunchAgents/com.prism.dlmm.plist
-launchctl start com.prism.dlmm
+launchctl load ~/Library/LaunchAgents/com.beam.agent.plist
+launchctl start com.beam.agent
 ```
 
 ## Systemd (Linux)
 
-Create `/etc/systemd/system/prism-liquidity-agent.service`:
+Create `/etc/systemd/system/beam-clmm.service`:
 
 ```ini
 [Unit]
-Description=Prism DLMM Trading Agent
+Description=Beam CLMM Trading Agent
 After=network.target
 
 [Service]
 Type=simple
-User=prism
-WorkingDirectory=/path/to/prism-liquidity-agent
+User=beam
+WorkingDirectory=/path/to/beam-clmm
 ExecStart=/usr/local/bin/bun run dev
 Restart=always
 RestartSec=600
-StandardOutput=append:/var/log/prism.log
-StandardError=append:/var/log/prism.error.log
+StandardOutput=append:/var/log/beam.log
+StandardError=append:/var/log/beam.error.log
 
 [Install]
 WantedBy=multi-user.target
@@ -97,8 +97,8 @@ Enable and start:
 
 ```bash
 sudo systemctl daemon-reload
-sudo systemctl enable prism-liquidity-agent
-sudo systemctl start prism-liquidity-agent
+sudo systemctl enable beam-clmm
+sudo systemctl start beam-clmm
 ```
 
 ## Docker (Optional)
@@ -112,8 +112,8 @@ CMD ["bun", "run", "dev"]
 ```
 
 ```bash
-docker build -t prism-liquidity-agent .
-docker run -d --env-file .env -v $(pwd)/prism.db:/app/prism.db prism-liquidity-agent
+docker build -t beam-clmm .
+docker run -d --env-file .env -v $(pwd)/beam.db:/app/beam.db beam-clmm
 ```
 
 ## Monitoring
@@ -125,8 +125,8 @@ Check if the agent is running:
 ps aux | grep "bun run dev"
 
 # Launchd
-launchctl list | grep com.prism.dlmm
+launchctl list | grep com.beam.agent
 
 # Systemd
-sudo systemctl status prism-liquidity-agent
+sudo systemctl status beam-clmm
 ```
