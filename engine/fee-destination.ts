@@ -2,7 +2,7 @@ import type { FeeDestination } from "./config-service.js";
 
 export type FeeRouting =
   | { readonly kind: "compound" }
-  | { readonly kind: "accumulate"; readonly destination: "accumulate-quote" | "accumulate-sol" };
+  | { readonly kind: "accumulate"; readonly destination: "accumulate-quote" | "accumulate-native" };
 
 export function routeClaimedFees(destination: FeeDestination | undefined): FeeRouting {
   const resolved = destination ?? "compound";
@@ -23,11 +23,11 @@ export interface FeeSwap {
 }
 
 export function summarizeAccumulation(
-  destination: "accumulate-quote" | "accumulate-sol",
+  destination: "accumulate-quote" | "accumulate-native",
   swaps: ReadonlyArray<FeeSwap>,
   targetMint: string,
 ): {
-  readonly destination: "accumulate-quote" | "accumulate-sol";
+  readonly destination: "accumulate-quote" | "accumulate-native";
   readonly outputAtomic: bigint;
   readonly txSignatures: ReadonlyArray<string>;
 } {

@@ -454,8 +454,8 @@ export interface AgentRebalanceCapitalGateInput {
   readonly minRebalanceIntervalMs: number;
   /** When true (OOR grace expired), min-interval may be bypassed. */
   readonly oorGraceExpired: boolean;
-  readonly rebalanceGasCostSol: number;
-  readonly solPriceUsd: number;
+  readonly rebalanceGasCostNative: number;
+  readonly nativePriceUsd: number;
   readonly positionDailyFeesUsd: number;
   readonly minDaysOfFeesPaidAhead: number;
   readonly recoveryProbability: number;
@@ -482,8 +482,8 @@ export function evaluateAgentRebalanceCapitalGates(input: AgentRebalanceCapitalG
   }
 
   const gasGate = evaluateGasGate({
-    rebalanceGasCostSol: input.rebalanceGasCostSol,
-    solPriceUsd: input.solPriceUsd,
+    rebalanceGasCostNative: input.rebalanceGasCostNative,
+    nativePriceUsd: input.nativePriceUsd,
     positionDailyFeesUsd: input.positionDailyFeesUsd,
     minDaysOfFeesPaidAhead: input.minDaysOfFeesPaidAhead,
   });
@@ -509,8 +509,8 @@ export function evaluateAgentRebalanceCapitalGates(input: AgentRebalanceCapitalG
 // ─── F1: Gas-aware rebalancing gate ──────────────────────────────────────────
 
 export interface GasGateInput {
-  readonly rebalanceGasCostSol: number;
-  readonly solPriceUsd: number;
+  readonly rebalanceGasCostNative: number;
+  readonly nativePriceUsd: number;
   readonly positionDailyFeesUsd: number;
   readonly minDaysOfFeesPaidAhead: number;
 }
@@ -528,7 +528,7 @@ export interface GasGateResult {
  * rejected (let downstream risk gates handle those).
  */
 export function evaluateGasGate(input: GasGateInput): GasGateResult {
-  const gasCostUsd = input.rebalanceGasCostSol * input.solPriceUsd;
+  const gasCostUsd = input.rebalanceGasCostNative * input.nativePriceUsd;
   const feesThresholdUsd = input.positionDailyFeesUsd * input.minDaysOfFeesPaidAhead;
 
   if (!Number.isFinite(gasCostUsd) || !Number.isFinite(feesThresholdUsd)) {
@@ -543,7 +543,7 @@ export function evaluateGasGate(input: GasGateInput): GasGateResult {
   if (gasCostUsd <= 0) {
     return {
       approved: false,
-      reason: `Gas cost must be positive (configured ${input.rebalanceGasCostSol} SOL) — refusing rebalance`,
+      reason: `Gas cost must be positive (configured ${input.rebalanceGasCostNative} SOL) — refusing rebalance`,
       gasCostUsd,
       feesThresholdUsd,
     };
@@ -808,13 +808,13 @@ export function getTokenDecimals(symbol: string): number {
 
 /**
  * Convert a raw token base-unit amount to a USD estimate. SOL uses
- * solPriceUsd; USDC/USDT use par ($1). Unknown tokens return 0 (fail closed)
+ * nativePriceUsd; USDC/USDT use par ($1). Unknown tokens return 0 (fail closed)
  * so the compound gate rejects instead of compounding on a mis-priced fee.
  */
 export function tokenAmountToUsd(
   rawAmount: number,
   tokenSymbol: string,
-  solPriceUsd: number,
+  nativePriceUsd: number,
 ): number {
   if (rawAmount === 0) return 0;
   const decimals = getTokenDecimals(tokenSymbol);
@@ -822,7 +822,7 @@ export function tokenAmountToUsd(
   const human = rawAmount / Math.pow(10, decimals);
   const upper = tokenSymbol.toUpperCase();
   if (upper === "USDC" || upper === "USDT") return human;
-  return human * solPriceUsd;
+  return human * nativePriceUsd;
 }
 
 export interface ClaimFeesUsdInput {
@@ -830,7 +830,7 @@ export interface ClaimFeesUsdInput {
   readonly netFeeYRaw: number;
   readonly tokenXSymbol: string;
   readonly tokenYSymbol: string;
-  readonly solPriceUsd: number;
+  readonly nativePriceUsd: number;
 }
 
 /**
@@ -849,7 +849,7 @@ export function convertClaimFeesToUsd(input: ClaimFeesUsdInput): number {
   const xDecimals = getTokenDecimals(input.tokenXSymbol);
   const yDecimals = getTokenDecimals(input.tokenYSymbol);
   if (xDecimals < 0 || yDecimals < 0) return 0;
-  const feeXUsd = tokenAmountToUsd(input.netFeeXRaw, input.tokenXSymbol, input.solPriceUsd);
-  const feeYUsd = tokenAmountToUsd(input.netFeeYRaw, input.tokenYSymbol, input.solPriceUsd);
+  const feeXUsd = tokenAmountToUsd(input.netFeeXRaw, input.tokenXSymbol, input.nativePriceUsd);
+  const feeYUsd = tokenAmountToUsd(input.netFeeYRaw, input.tokenYSymbol, input.nativePriceUsd);
   return feeXUsd + feeYUsd;
 }

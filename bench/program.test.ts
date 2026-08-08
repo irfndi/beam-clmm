@@ -75,7 +75,7 @@ describe("executeLive", () => {
       getWalletBalanceUsd: () => Effect.succeed(10_000),
       getWalletHoldings: () =>
         Effect.succeed(new Map<string, { amountAtomic: bigint; decimals: number }>()),
-      getNativeSolBalance: () => Effect.succeed(1_000_000_000n),
+      getNativeBalance: () => Effect.succeed(1_000_000_000n),
       getPoolState: () =>
         Effect.succeed({
           address: "TestPool111111111111111111111111111111111111",
@@ -143,7 +143,7 @@ describe("executeLive", () => {
         }),
       discoverPools: () => Effect.succeed([]),
       reportFeeCollection: () => Effect.void,
-      swapUSDCForSOL: () => Effect.void,
+      swapUSDCForNative: () => Effect.void,
       getTokenBalance: () => Effect.succeed(0n),
       getTokenPrices: () => Effect.succeed({}),
       getTokenDecimals: () => Effect.succeed(9),
@@ -294,7 +294,7 @@ describe("executeLive", () => {
           revenueConfigSvc: makeRevenueConfigSvc(),
           trackedPositions: new Map(),
           entryPrep: { prepareEntryTokens: prepareSpy },
-          solPriceUsd: 150,
+          nativePriceUsd: 150,
           entryStrategyShape: "spot",
         },
         {
@@ -356,7 +356,7 @@ describe("executeLive", () => {
                 }),
               ),
           },
-          solPriceUsd: 150,
+          nativePriceUsd: 150,
           entryStrategyShape: "spot",
         },
         {
@@ -411,7 +411,7 @@ describe("executeLive", () => {
           revenueConfigSvc: makeRevenueConfigSvc(),
           trackedPositions: new Map(),
           entryPrep: { prepareEntryTokens: () => Effect.succeed(undefined) },
-          solPriceUsd: 150,
+          nativePriceUsd: 150,
           entryStrategyShape: "curve",
         },
         {
@@ -463,7 +463,7 @@ describe("executeLive", () => {
           revenueConfigSvc: makeRevenueConfigSvc(),
           trackedPositions,
           entryPrep: { prepareEntryTokens: () => Effect.succeed(undefined) },
-          solPriceUsd: 150,
+          nativePriceUsd: 150,
           entryStrategyShape: "spot",
         },
         {

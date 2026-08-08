@@ -15,7 +15,7 @@ import {
   shouldTriggerSafetyPause,
   sweepOrphanSettlements,
 } from "../engine/autonomous-runtime.js";
-import { SOL_MINT } from "../engine/constants.js";
+import { NATIVE_MINT } from "../engine/constants.js";
 import { computeNetRealizedPnlUsd } from "../engine/pnl.js";
 import type {
   AdapterApi,
@@ -36,7 +36,7 @@ function settlementJob(overrides: Partial<SettlementJobRecord> = {}): Settlement
     poolAddress: "pool-1",
     tokenMint: "token-1",
     amountAtomic: "9007199254740993",
-    destinationAsset: "SOL",
+    destinationAsset: "ETH",
     status: "pending",
     attempts: 0,
     nextRetryAt: null,
@@ -58,7 +58,7 @@ function swapQuote(job: SettlementJobRecord): SwapQuote {
   return {
     request: {
       inputMint: job.tokenMint,
-      outputMint: SOL_MINT,
+      outputMint: NATIVE_MINT,
       amountAtomic: BigInt(job.amountAtomic),
       slippageBps: 50,
     },
@@ -66,7 +66,7 @@ function swapQuote(job: SettlementJobRecord): SwapQuote {
     minimumOutAmountAtomic: 1n,
     priceImpactBps: 1,
     quotedAt: 1,
-    route: [{ inputMint: job.tokenMint, outputMint: SOL_MINT }],
+    route: [{ inputMint: job.tokenMint, outputMint: NATIVE_MINT }],
     rawQuote: {},
   };
 }
@@ -445,7 +445,7 @@ describe("settlement job processing", () => {
     const job = settlementJob();
     const savedJobs: SettlementJobRecord[] = [];
     const adapter = {
-      getTokenPrices: () => Effect.succeed({ [SOL_MINT]: 1, [job.tokenMint]: 1 }),
+      getTokenPrices: () => Effect.succeed({ [NATIVE_MINT]: 1, [job.tokenMint]: 1 }),
       getTokenDecimals: () => Effect.succeed(6),
     } as unknown as AdapterApi;
 
@@ -486,7 +486,7 @@ describe("settlement job processing", () => {
     let quoteCalls = 0;
     const adapter = {
       getSwapStatus: () => Effect.succeed({ state: "not_found", error: null }),
-      getTokenPrices: () => Effect.succeed({ [SOL_MINT]: 1, [job.tokenMint]: 1 }),
+      getTokenPrices: () => Effect.succeed({ [NATIVE_MINT]: 1, [job.tokenMint]: 1 }),
       getTokenDecimals: () => Effect.succeed(6),
       quoteSwap: () =>
         Effect.sync(() => {
@@ -559,12 +559,12 @@ describe("settlement job processing", () => {
     const simulation: SwapSimulation = { successful: true, logs: [], unitsConsumed: null };
     const savedJobs: SettlementJobRecord[] = [];
     const adapter = {
-      getTokenPrices: () => Effect.succeed({ [SOL_MINT]: 1, [job.tokenMint]: 1 }),
+      getTokenPrices: () => Effect.succeed({ [NATIVE_MINT]: 1, [job.tokenMint]: 1 }),
       getTokenDecimals: () => Effect.succeed(6),
       quoteSwap: () => Effect.succeed(quote),
       prepareSwap: () => Effect.succeed(prepared),
       simulateSwap: () => Effect.succeed(simulation),
-      getNativeSolBalance: () => Effect.succeed(100n),
+      getNativeBalance: () => Effect.succeed(100n),
       submitSwap: (
         _prepared: PreparedSwap,
         onBroadcast: ((signature: string) => Effect.Effect<void, Error>) | undefined,
@@ -590,10 +590,10 @@ describe("settlement job processing", () => {
 
   it("preserves decimal precision when converting large atomic amounts to USD", async () => {
     // Given
-    const job = settlementJob({ tokenMint: SOL_MINT });
+    const job = settlementJob({ tokenMint: NATIVE_MINT });
     const savedJobs: SettlementJobRecord[] = [];
     const adapter = {
-      getTokenPrices: () => Effect.succeed({ [SOL_MINT]: 1 }),
+      getTokenPrices: () => Effect.succeed({ [NATIVE_MINT]: 1 }),
     } as unknown as AdapterApi;
 
     // When
@@ -665,7 +665,7 @@ describe("settlement job processing", () => {
       getSwapStatus: () => Effect.succeed({ state: "confirmed", error: null }),
       getConfirmedSwapOutput: () =>
         Effect.succeed({ outputAtomic: 1_000_000_000n, feeAtomic: 5_000_000n }),
-      getTokenPrices: () => Effect.succeed({ [SOL_MINT]: 100 }),
+      getTokenPrices: () => Effect.succeed({ [NATIVE_MINT]: 100 }),
     } as unknown as AdapterApi;
 
     // When
@@ -942,7 +942,7 @@ describe("issue #166 settlement recovery", () => {
     const job = settlementJob({ expiresAt: 9_000 });
     const savedJobs: SettlementJobRecord[] = [];
     const adapter = {
-      getTokenPrices: () => Effect.succeed({ [SOL_MINT]: 100, "token-1": 1 }),
+      getTokenPrices: () => Effect.succeed({ [NATIVE_MINT]: 100, "token-1": 1 }),
       getTokenDecimals: () => Effect.succeed(6),
       quoteSwap: () => Effect.fail(new Error("Jupiter quote failed: 429")),
       prepareSwap: () => Effect.fail(new Error("unused")),
@@ -968,7 +968,7 @@ describe("issue #166 settlement recovery", () => {
     const job = settlementJob({ expiresAt: 9_000 });
     const savedJobs: SettlementJobRecord[] = [];
     const adapter = {
-      getTokenPrices: () => Effect.succeed({ [SOL_MINT]: 100, "token-1": 1 }),
+      getTokenPrices: () => Effect.succeed({ [NATIVE_MINT]: 100, "token-1": 1 }),
       getTokenDecimals: () => Effect.succeed(6),
       quoteSwap: () => Effect.fail(new Error("insufficient funds for swap")),
       prepareSwap: () => Effect.fail(new Error("unused")),
@@ -993,7 +993,7 @@ describe("issue #166 settlement recovery", () => {
     const job = settlementJob({ expiresAt: 100_000 });
     const savedJobs: SettlementJobRecord[] = [];
     const adapter = {
-      getTokenPrices: () => Effect.succeed({ [SOL_MINT]: 100, "token-1": 1 }),
+      getTokenPrices: () => Effect.succeed({ [NATIVE_MINT]: 100, "token-1": 1 }),
       getTokenDecimals: () => Effect.succeed(6),
       quoteSwap: () => Effect.fail(new Error("insufficient funds for swap")),
       prepareSwap: () => Effect.fail(new Error("unused")),
@@ -1016,7 +1016,7 @@ describe("issue #166 settlement recovery", () => {
     // still-in-wallet tokens.
     const job = settlementJob({ tokenMint: "no-price-1", positionId: "orphan:test" });
     const adapter = {
-      getTokenPrices: () => Effect.succeed({ [SOL_MINT]: 100, "no-price-1": 0 }),
+      getTokenPrices: () => Effect.succeed({ [NATIVE_MINT]: 100, "no-price-1": 0 }),
       getTokenDecimals: () => Effect.succeed(6),
       quoteSwap: () => Effect.fail(new Error("unused — quote must never run")),
       prepareSwap: () => Effect.fail(new Error("unused")),
@@ -1061,7 +1061,7 @@ describe("issue #166 settlement recovery", () => {
     // (bounded retries, then terminal on expiry — operator-visible).
     const job = settlementJob({ tokenMint: "no-price-1" }); // default real positionId
     const adapter = {
-      getTokenPrices: () => Effect.succeed({ [SOL_MINT]: 100, "no-price-1": 0 }),
+      getTokenPrices: () => Effect.succeed({ [NATIVE_MINT]: 100, "no-price-1": 0 }),
       getTokenDecimals: () => Effect.succeed(6),
       quoteSwap: () => Effect.fail(new Error("Jupiter quote failed: 400")),
       prepareSwap: () => Effect.fail(new Error("unused")),
@@ -1098,7 +1098,7 @@ describe("issue #166 settlement recovery", () => {
     // Given a tiny priceable amount below the dust cutoff.
     const job = settlementJob({ amountAtomic: "1000" }); // 0.001 token at $1
     const adapter = {
-      getTokenPrices: () => Effect.succeed({ [SOL_MINT]: 100, "token-1": 1 }),
+      getTokenPrices: () => Effect.succeed({ [NATIVE_MINT]: 100, "token-1": 1 }),
       getTokenDecimals: () => Effect.succeed(6),
       quoteSwap: () => Effect.fail(new Error("unused — quote must never run")),
       prepareSwap: () => Effect.fail(new Error("unused")),
@@ -1208,7 +1208,7 @@ describe("issue #166 settlement recovery", () => {
       error: "Jupiter quote failed: 429",
     });
     const adapter = {
-      getTokenPrices: () => Effect.succeed({ [SOL_MINT]: 100, "no-price-1": 0 }),
+      getTokenPrices: () => Effect.succeed({ [NATIVE_MINT]: 100, "no-price-1": 0 }),
       getTokenDecimals: () => Effect.succeed(6),
       quoteSwap: () => Effect.fail(new Error("Jupiter quote failed: 429")),
       prepareSwap: () => Effect.fail(new Error("unused")),
@@ -1270,7 +1270,7 @@ describe("issue #166 settlement recovery", () => {
       ["dust-1", { amountAtomic: 50_000n, decimals: 6 }], // $0.05 → skip
       ["unpriceable-1", { amountAtomic: 5_000_000n, decimals: 6 }], // no price → skip (dust; re-qualifies when priced)
       ["backed-1", { amountAtomic: 1_000_000n, decimals: 6 }], // position leg → skip
-      [SOL_MINT, { amountAtomic: 1_000_000_000n, decimals: 9 }], // settlement asset → skip
+      [NATIVE_MINT, { amountAtomic: 1_000_000_000n, decimals: 9 }], // settlement asset → skip
       ["zero-1", { amountAtomic: 0n, decimals: 6 }], // nothing held → skip
     ]);
     const adapter = {
@@ -1307,7 +1307,7 @@ describe("issue #166 settlement recovery", () => {
       walletAddress: "wallet-1",
       agentInstanceId: "primary",
       poolAddress: "",
-      destinationAsset: "SOL",
+      destinationAsset: "ETH",
       status: "pending",
       attempts: 0,
       nextRetryAt: 10_000,

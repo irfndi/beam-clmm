@@ -1,12 +1,17 @@
-import type { ConcreteFunctionType } from "@meteora-ag/dlmm";
-
+/**
+ * Limit-order style requests. On Uniswap v3/v4 a limit order is a one-sided
+ * range position placed entirely above (ask) or below (bid) the active tick;
+ * the engine encodes the intent with these fields and the adapter maps them
+ * to ticks.
+ */
 export type LimitOrderSide = "ask" | "bid";
 
 export interface LimitOrderRequest {
   readonly side: LimitOrderSide;
-  readonly targetBinId: number;
+  /** Target tick (v3/v4 tick, the CLMM equivalent of a DLMM bin id). */
+  readonly targetTick: number;
   readonly amountAtomic: bigint;
-  readonly maxActiveBinSlippage?: number;
+  readonly maxActiveTickSlippage?: number;
 }
 
 export interface ValidatedLimitOrderRequest extends LimitOrderRequest {
@@ -15,23 +20,18 @@ export interface ValidatedLimitOrderRequest extends LimitOrderRequest {
 
 export function validateLimitOrderRequest(
   request: LimitOrderRequest,
-  concreteFunctionType: number,
-  limitOrderType: typeof ConcreteFunctionType.LimitOrder,
 ): ValidatedLimitOrderRequest {
-  if (concreteFunctionType !== limitOrderType) {
-    throw new Error("Limit orders are unsupported for this pool function type");
-  }
-  if (!Number.isSafeInteger(request.targetBinId)) {
-    throw new Error("Limit-order target bin must be an integer");
+  if (!Number.isSafeInteger(request.targetTick)) {
+    throw new Error("Limit-order target tick must be an integer");
   }
   if (request.amountAtomic <= 0n) {
     throw new Error("Limit-order amount must be positive");
   }
   if (
-    request.maxActiveBinSlippage !== undefined &&
-    (!Number.isSafeInteger(request.maxActiveBinSlippage) || request.maxActiveBinSlippage < 0)
+    request.maxActiveTickSlippage !== undefined &&
+    (!Number.isSafeInteger(request.maxActiveTickSlippage) || request.maxActiveTickSlippage < 0)
   ) {
-    throw new Error("Limit-order active-bin slippage must be a non-negative integer");
+    throw new Error("Limit-order active-tick slippage must be a non-negative integer");
   }
   return { ...request, isAskSide: request.side === "ask" };
 }

@@ -14,7 +14,7 @@ import {
 } from "../engine/services.js";
 
 const ctx = (): FeedbackContext => ({
-  prismVersion: "1.2.3-test",
+  beamVersion: "1.2.3-test",
   installMethod: "test",
   platform: "linux-x64",
   runtime: "bun test",
@@ -33,14 +33,13 @@ function makeFeedback(overrides: Partial<AgentFeedback> = {}): AgentFeedback {
 
 function buildLayer(
   githubToken: string,
-  githubRepo = "irfndi/prism-liquidity-agent",
+  githubRepo = "irfndi/beam-clmm",
   optOut = false,
 ): Layer.Layer<FeedbackService, never, never> {
   const mockConfig = Layer.succeed(ConfigService, {
     walletPrivateKey: "",
-    heliusApiKey: "",
-    solanaRpcUrl: "",
-    solanaRpcFallbackUrl: "",
+    rpcUrl: "",
+    rpcFallbackUrl: "",
     paperTrading: true,
     ...AUTONOMOUS_TOKEN_CONFIG_DEFAULTS,
     scanIntervalMs: 600_000,
@@ -82,8 +81,8 @@ function buildLayer(
     meteoraPoolsUrl:
       "https://dlmm.datapi.meteora.ag/pools?page=1&page_size=1000&filter_by=is_blacklisted=false&sort_by=tvl:desc",
     meteoraDatapiBaseUrl: "https://dlmm.datapi.meteora.ag",
-    rebalanceGasCostSol: 0.01,
-    solPriceUsd: 150,
+    rebalanceGasCostNative: 0.01,
+    nativePriceUsd: 150,
     gasAwareMinDaysOfFeesPaidAhead: 3,
     volatilityExitStddev: 5,
     volatilityLookbackSnapshots: 12,
@@ -168,36 +167,36 @@ function mockFetch(impl: typeof fetch): void {
   vi.stubGlobal("fetch", vi.fn(impl));
 }
 
-const credentialsFile = join(tmpdir(), "prism-feedback-service-test-credentials.json");
+const credentialsFile = join(tmpdir(), "beam-feedback-service-test-credentials.json");
 
 function enableCredentials(): void {
   writeFileSync(
     credentialsFile,
     JSON.stringify({
-      apiKey: "test-prism-api-key",
+      apiKey: "test-beam-api-key",
       userId: "test-user",
       createdAt: new Date().toISOString(),
     }),
     { mode: 0o600 },
   );
-  process.env.PRISM_CREDENTIALS_FILE = credentialsFile;
+  process.env.BEAM_CREDENTIALS_FILE = credentialsFile;
 }
 
 beforeEach(() => {
-  process.env.PRISM_CREDENTIALS_FILE = credentialsFile;
+  process.env.BEAM_CREDENTIALS_FILE = credentialsFile;
 });
 
 afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
-  delete process.env.PRISM_CREDENTIALS_FILE;
+  delete process.env.BEAM_CREDENTIALS_FILE;
   try {
     unlinkSync(credentialsFile);
   } catch {}
 });
 
 describe("feedback service — no credentials", () => {
-  it("requires a registered Prism account", async () => {
+  it("requires a registered Beam account", async () => {
     const layer = buildLayer("");
     const program = Effect.gen(function* () {
       const fb = yield* FeedbackService;
@@ -207,7 +206,7 @@ describe("feedback service — no credentials", () => {
 
     const result = await Effect.runPromise(program);
     expect(result.kind).toBe("error");
-    if (result.kind === "error") expect(result.error).toContain("prism register");
+    if (result.kind === "error") expect(result.error).toContain("beam register");
   });
 
   it("still works when no feedback context is provided (builds a default)", async () => {
@@ -277,7 +276,7 @@ describe("feedback service — cloud fallback", () => {
 
 describe("feedback service — opt-out", () => {
   it("returns opt_out when agent has disabled feedback", async () => {
-    const layer = buildLayer("", "irfndi/prism-liquidity-agent", true);
+    const layer = buildLayer("", "irfndi/beam-clmm", true);
     const program = Effect.gen(function* () {
       const fb = yield* FeedbackService;
       const result = yield* fb.submit(makeFeedback());

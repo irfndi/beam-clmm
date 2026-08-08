@@ -290,7 +290,7 @@ describe("migration v18 (multi-position)", () => {
   let tmpDir: string;
 
   beforeEach(() => {
-    tmpDir = mkdtempSync(join(tmpdir(), "prism-multi-pos-migration-"));
+    tmpDir = mkdtempSync(join(tmpdir(), "beam-multi-pos-migration-"));
   });
   afterEach(() => {
     rmSync(tmpDir, { recursive: true, force: true });
@@ -891,8 +891,8 @@ function makeLiveAdapter() {
     hasWallet: () => true,
     getWalletAddress: () => "mock-wallet",
     getWalletBalanceUsd: () => Effect.succeed(10_000),
-    getNativeSolBalance: () => Effect.succeed(1_000_000_000n),
-    swapUSDCForSOL: () => Effect.void,
+    getNativeBalance: () => Effect.succeed(1_000_000_000n),
+    swapUSDCForNative: () => Effect.void,
     enterPosition: (_pool, _lower, _upper, sizeUsd) =>
       Effect.succeed({
         positionPubKey: pubkeys.shift() ?? `live-pos-${randomUUID()}`,
@@ -934,7 +934,7 @@ describe("executeLive — two positions on one pool", () => {
       revenueConfigSvc: revenueConfigSvc as never,
       trackedPositions,
       entryPrep: { prepareEntryTokens: () => Effect.succeed(undefined) } as never,
-      solPriceUsd: 150,
+      nativePriceUsd: 150,
       entryStrategyShape: "spot" as const,
     };
 
@@ -972,7 +972,7 @@ function makeReconcileAdapter(overrides: Partial<AdapterApi>): AdapterApi {
     hasWallet: () => true,
     getWalletAddress: () => "Wallet111",
     getWalletBalanceUsd: () => Effect.succeed(0),
-    getNativeSolBalance: () => Effect.succeed(0n),
+    getNativeBalance: () => Effect.succeed(0n),
     getTokenBalance: () => Effect.succeed(0n),
     getTokenPrices: () => Effect.succeed({}),
     getTokenDecimals: () => Effect.succeed(6),
@@ -992,7 +992,7 @@ function makeReconcileAdapter(overrides: Partial<AdapterApi>): AdapterApi {
       Effect.succeed({ skipped: true, skipReason: "none", txSignatures: [], rewards: [] }),
     discoverPools: () => Effect.succeed([]),
     reportFeeCollection: () => Effect.void,
-    swapUSDCForSOL: () => Effect.void,
+    swapUSDCForNative: () => Effect.void,
     ...overrides,
   } as AdapterApi;
 }
@@ -1149,16 +1149,16 @@ describe("per-position alert cooldowns", () => {
   let savedConfigDir: string | undefined;
 
   beforeEach(() => {
-    tmpDir = mkdtempSync(join(tmpdir(), "prism-multi-pos-alert-"));
-    savedConfigDir = process.env.PRISM_CONFIG_DIR;
-    process.env.PRISM_CONFIG_DIR = tmpDir;
+    tmpDir = mkdtempSync(join(tmpdir(), "beam-multi-pos-alert-"));
+    savedConfigDir = process.env.BEAM_CONFIG_DIR;
+    process.env.BEAM_CONFIG_DIR = tmpDir;
     writeFileSync(join(tmpDir, "credentials.json"), JSON.stringify({ apiKey: "sk-test" }), {
       mode: 0o600,
     });
   });
   afterEach(() => {
-    if (savedConfigDir === undefined) delete process.env.PRISM_CONFIG_DIR;
-    else process.env.PRISM_CONFIG_DIR = savedConfigDir;
+    if (savedConfigDir === undefined) delete process.env.BEAM_CONFIG_DIR;
+    else process.env.BEAM_CONFIG_DIR = savedConfigDir;
     rmSync(tmpDir, { recursive: true, force: true });
   });
 
@@ -1266,7 +1266,7 @@ function makeProgramAdapter(
     hasWallet: () => false,
     getWalletAddress: () => null,
     getWalletBalanceUsd: () => Effect.succeed(10_000),
-    getNativeSolBalance: () => Effect.succeed(0n),
+    getNativeBalance: () => Effect.succeed(0n),
     getPoolState: (addr: string) => {
       const pool = pools[addr];
       return pool ? Effect.succeed(pool) : Effect.fail(new Error(`unknown pool ${addr}`));
@@ -1306,7 +1306,7 @@ function makeProgramAdapter(
       Effect.succeed({ skipped: true, skipReason: "none", txSignatures: [], rewards: [] }),
     discoverPools: () => Effect.succeed([]),
     reportFeeCollection: () => Effect.void,
-    swapUSDCForSOL: () => Effect.void,
+    swapUSDCForNative: () => Effect.void,
     getTokenBalance: () => Effect.succeed(0n),
     getTokenPrices: () => Effect.succeed({}),
     getTokenDecimals: () => Effect.succeed(9),

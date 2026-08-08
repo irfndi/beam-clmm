@@ -1,7 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { Effect } from "effect";
-import { Keypair } from "@solana/web3.js";
-import bs58 from "bs58";
+import { privateKeyToAccount } from "viem/accounts";
 import { mkdtempSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
@@ -104,7 +103,7 @@ async function seedAutonomousState(
         poolAddress: "pool-1",
         tokenMint: "mint-1",
         amountAtomic: "99",
-        destinationAsset: "SOL",
+        destinationAsset: "ETH",
         status: "retryable",
         attempts: 2,
         nextRetryAt: 4_000,
@@ -129,7 +128,7 @@ async function seedAutonomousState(
         poolAddress: "",
         tokenMint: "mint-2",
         amountAtomic: "15413",
-        destinationAsset: "SOL",
+        destinationAsset: "ETH",
         status: "terminal",
         attempts: 6,
         nextRetryAt: null,
@@ -155,7 +154,7 @@ async function seedAutonomousState(
           poolAddress: "",
           tokenMint: "mint-2",
           amountAtomic: "15413",
-          destinationAsset: "SOL",
+          destinationAsset: "ETH",
           status: "confirmed",
           attempts: 1,
           nextRetryAt: null,
@@ -182,7 +181,7 @@ async function seedAutonomousState(
           poolAddress: "",
           tokenMint: "mint-2",
           amountAtomic: "15413",
-          destinationAsset: "SOL",
+          destinationAsset: "ETH",
           status: "confirmed",
           attempts: 1,
           nextRetryAt: null,
@@ -212,10 +211,10 @@ async function seedAutonomousState(
 describe("autonomous CLI operator surface", () => {
   it("shows current-wallet candidate, operation, settlement, and active pause state in JSON", async () => {
     // Given
-    testDirectory = mkdtempSync(join(tmpdir(), "prism-cli-autonomous-status-"));
-    const dbPath = join(testDirectory, "prism.db");
-    const walletKeypair = Keypair.generate();
-    const wallet = walletKeypair.publicKey.toBase58();
+    testDirectory = mkdtempSync(join(tmpdir(), "beam-cli-autonomous-status-"));
+    const dbPath = join(testDirectory, "beam.db");
+    const account = privateKeyToAccount(`0x${"ab".repeat(32)}`);
+    const wallet = account.address;
     const agentInstanceId = "operator-test";
     await seedAutonomousState(dbPath, wallet, agentInstanceId);
 
@@ -223,7 +222,7 @@ describe("autonomous CLI operator surface", () => {
     const result = runCli(["status", "--json"], {
       SQLITE_DB_PATH: dbPath,
       AGENT_INSTANCE_ID: agentInstanceId,
-      WALLET_PRIVATE_KEY: bs58.encode(walletKeypair.secretKey),
+      WALLET_PRIVATE_KEY: `0x${"ab".repeat(32)}`,
     });
 
     // Then
@@ -251,10 +250,10 @@ describe("autonomous CLI operator surface", () => {
 
   it("flags terminal settlements with unspent balance in text output", async () => {
     // Given
-    testDirectory = mkdtempSync(join(tmpdir(), "prism-cli-autonomous-stranded-"));
-    const dbPath = join(testDirectory, "prism.db");
-    const walletKeypair = Keypair.generate();
-    const wallet = walletKeypair.publicKey.toBase58();
+    testDirectory = mkdtempSync(join(tmpdir(), "beam-cli-autonomous-stranded-"));
+    const dbPath = join(testDirectory, "beam.db");
+    const account = privateKeyToAccount(`0x${"ab".repeat(32)}`);
+    const wallet = account.address;
     const agentInstanceId = "operator-test";
     await seedAutonomousState(dbPath, wallet, agentInstanceId);
 
@@ -262,7 +261,7 @@ describe("autonomous CLI operator surface", () => {
     const result = runCli(["status"], {
       SQLITE_DB_PATH: dbPath,
       AGENT_INSTANCE_ID: agentInstanceId,
-      WALLET_PRIVATE_KEY: bs58.encode(walletKeypair.secretKey),
+      WALLET_PRIVATE_KEY: `0x${"ab".repeat(32)}`,
     });
 
     // Then (issue #183): the unpriceable terminal is surfaced on the
@@ -278,10 +277,10 @@ describe("autonomous CLI operator surface", () => {
   it("hides terminal settlements whose mint was later recovered by a confirmed settlement", async () => {
     // Given a terminal job for mint-2 plus a confirmed orphan-sweep sale of
     // the same mint (the recovery path from issue #166).
-    testDirectory = mkdtempSync(join(tmpdir(), "prism-cli-autonomous-recovered-"));
-    const dbPath = join(testDirectory, "prism.db");
-    const walletKeypair = Keypair.generate();
-    const wallet = walletKeypair.publicKey.toBase58();
+    testDirectory = mkdtempSync(join(tmpdir(), "beam-cli-autonomous-recovered-"));
+    const dbPath = join(testDirectory, "beam.db");
+    const account = privateKeyToAccount(`0x${"ab".repeat(32)}`);
+    const wallet = account.address;
     const agentInstanceId = "operator-test";
     await seedAutonomousState(dbPath, wallet, agentInstanceId, { recovered: true });
 
@@ -289,7 +288,7 @@ describe("autonomous CLI operator surface", () => {
     const result = runCli(["status"], {
       SQLITE_DB_PATH: dbPath,
       AGENT_INSTANCE_ID: agentInstanceId,
-      WALLET_PRIVATE_KEY: bs58.encode(walletKeypair.secretKey),
+      WALLET_PRIVATE_KEY: `0x${"ab".repeat(32)}`,
     });
 
     // Then the historical terminal record is not reported as stranded.
@@ -301,10 +300,10 @@ describe("autonomous CLI operator surface", () => {
   it("still reports a terminal settlement newer than any confirmed recovery", async () => {
     // Given a confirmed sale of mint-2 that PREDATES the terminal row — a
     // recurring stranding (sold once, then stranded again) must stay visible.
-    testDirectory = mkdtempSync(join(tmpdir(), "prism-cli-autonomous-recurring-"));
-    const dbPath = join(testDirectory, "prism.db");
-    const walletKeypair = Keypair.generate();
-    const wallet = walletKeypair.publicKey.toBase58();
+    testDirectory = mkdtempSync(join(tmpdir(), "beam-cli-autonomous-recurring-"));
+    const dbPath = join(testDirectory, "beam.db");
+    const account = privateKeyToAccount(`0x${"ab".repeat(32)}`);
+    const wallet = account.address;
     const agentInstanceId = "operator-test";
     await seedAutonomousState(dbPath, wallet, agentInstanceId, { recurring: true });
 
@@ -312,7 +311,7 @@ describe("autonomous CLI operator surface", () => {
     const result = runCli(["status"], {
       SQLITE_DB_PATH: dbPath,
       AGENT_INSTANCE_ID: agentInstanceId,
-      WALLET_PRIVATE_KEY: bs58.encode(walletKeypair.secretKey),
+      WALLET_PRIVATE_KEY: `0x${"ab".repeat(32)}`,
     });
 
     // Then the newer terminal record stays visible (issue #183): unpriceable
@@ -326,16 +325,16 @@ describe("autonomous CLI operator surface", () => {
 
   it("marks the current wallet's active safety pause resolved without live execution", async () => {
     // Given
-    testDirectory = mkdtempSync(join(tmpdir(), "prism-cli-autonomous-resume-"));
-    const dbPath = join(testDirectory, "prism.db");
-    const walletKeypair = Keypair.generate();
-    const wallet = walletKeypair.publicKey.toBase58();
+    testDirectory = mkdtempSync(join(tmpdir(), "beam-cli-autonomous-resume-"));
+    const dbPath = join(testDirectory, "beam.db");
+    const account = privateKeyToAccount(`0x${"ab".repeat(32)}`);
+    const wallet = account.address;
     const agentInstanceId = "operator-test";
     await seedAutonomousState(dbPath, wallet, agentInstanceId);
     const environment = {
       SQLITE_DB_PATH: dbPath,
       AGENT_INSTANCE_ID: agentInstanceId,
-      WALLET_PRIVATE_KEY: bs58.encode(walletKeypair.secretKey),
+      WALLET_PRIVATE_KEY: `0x${"ab".repeat(32)}`,
     };
 
     // When

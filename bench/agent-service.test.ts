@@ -34,9 +34,8 @@ function makeDecision(overrides: Partial<AgentDecision> = {}): AgentDecision {
 function makeConfig(overrides: Partial<AppConfig> = {}): AppConfig {
   return {
     walletPrivateKey: "",
-    heliusApiKey: "",
-    solanaRpcUrl: "",
-    solanaRpcFallbackUrl: "",
+    rpcUrl: "",
+    rpcFallbackUrl: "",
     paperTrading: true,
     ...AUTONOMOUS_TOKEN_CONFIG_DEFAULTS,
     scanIntervalMs: 600_000,
@@ -77,8 +76,8 @@ function makeConfig(overrides: Partial<AppConfig> = {}): AppConfig {
     paperModeExitLive: false,
     meteoraPoolsUrl: "",
     meteoraDatapiBaseUrl: "",
-    rebalanceGasCostSol: 0.01,
-    solPriceUsd: 150,
+    rebalanceGasCostNative: 0.01,
+    nativePriceUsd: 150,
     gasAwareMinDaysOfFeesPaidAhead: 3,
     volatilityExitStddev: 5,
     volatilityLookbackSnapshots: 12,

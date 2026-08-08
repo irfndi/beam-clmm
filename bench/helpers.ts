@@ -95,11 +95,11 @@ export function defaultAppConfig(overrides: Partial<AppConfig> = {}): AppConfig 
   return {
     walletPrivateKey: "",
     heliusApiKey: "",
-    solanaRpcUrl: "",
-    solanaRpcFallbackUrl: "",
+    rpcUrl: "",
+    rpcFallbackUrl: "",
     paperTrading: true,
     autonomousTokenMode: "off",
-    settlementAsset: "SOL",
+    settlementAsset: "ETH",
     candidateMinHealthyScans: 6,
     candidateMinObservationMs: 3_600_000,
     candidateScanLimit: 20,
@@ -181,7 +181,7 @@ export function defaultAppConfig(overrides: Partial<AppConfig> = {}): AppConfig 
     // tests opt in explicitly.
     geckoTerminalEnabled: false,
     rebalanceGasCostSol: 0.01,
-    solPriceUsd: 150,
+    nativePriceUsd: 150,
     gasAwareMinDaysOfFeesPaidAhead: 3,
     volatilityExitStddev: 5,
     volatilityLookbackSnapshots: 12,

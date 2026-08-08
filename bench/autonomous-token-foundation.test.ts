@@ -61,7 +61,7 @@ describe("autonomous token configuration", () => {
       agentInstanceId: config.agentInstanceId,
     }).toEqual({
       mode: "off",
-      settlementAsset: "SOL",
+      settlementAsset: "ETH",
       candidateMinHealthyScans: 6,
       candidateMinObservationMs: 3_600_000,
       candidateScanLimit: 20,
@@ -117,8 +117,8 @@ describe("migration v20 autonomous token durability", () => {
 
   it("creates all autonomous lifecycle tables and remains idempotent on restart", () => {
     // Given
-    testDir = mkdtempSync(join(tmpdir(), "prism-autonomous-foundation-"));
-    const dbPath = join(testDir, "prism.db");
+    testDir = mkdtempSync(join(tmpdir(), "beam-autonomous-foundation-"));
+    const dbPath = join(testDir, "beam.db");
 
     // When
     createDatabase(dbPath).close();
@@ -153,8 +153,8 @@ describe("migration v20 autonomous token durability", () => {
 
   it("upgrades a v19 database to v20 without losing existing data", () => {
     // Given
-    testDir = mkdtempSync(join(tmpdir(), "prism-autonomous-v19-upgrade-"));
-    const dbPath = join(testDir, "prism.db");
+    testDir = mkdtempSync(join(tmpdir(), "beam-autonomous-v19-upgrade-"));
+    const dbPath = join(testDir, "beam.db");
     const legacy = new Database(dbPath);
     legacy.exec(`
       CREATE TABLE _migrations (
@@ -260,8 +260,8 @@ describe("DbService autonomous token records", () => {
 
   it("round-trips candidate, operation, settlement, and safety-pause records", async () => {
     // Given
-    testDir = mkdtempSync(join(tmpdir(), "prism-autonomous-records-"));
-    const dbPath = join(testDir, "prism.db");
+    testDir = mkdtempSync(join(tmpdir(), "beam-autonomous-records-"));
+    const dbPath = join(testDir, "beam.db");
     const candidate: TokenCandidateRecord = {
       id: "candidate-1",
       walletAddress: "wallet-1",
@@ -303,7 +303,7 @@ describe("DbService autonomous token records", () => {
       poolAddress: "pool-1",
       tokenMint: "mint-1",
       amountAtomic: "1250000",
-      destinationAsset: "SOL",
+      destinationAsset: "ETH",
       status: "retryable",
       attempts: 1,
       nextRetryAt: 300,

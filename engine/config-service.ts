@@ -1,25 +1,25 @@
 import { Config, ConfigProvider, Context, Effect, Layer } from "effect";
+import { isAddress } from "viem";
 import { ConfigError } from "./errors.js";
-import { getPrismDbPath } from "./paths.js";
-import { loadKeystoreSecretKeyBase58 } from "./wallet-keystore.js";
+import { getBeamDbPath } from "./paths.js";
+import { loadKeystoreSecretKeyHex } from "./wallet-keystore.js";
 import type {
   AgentProposalMode,
   AutonomousTokenMode,
   EntryStrategyType,
   SettlementAsset,
 } from "./types.js";
-import { PublicKey } from "@solana/web3.js";
 import { createLogger } from "./logger.js";
 import { applyDbConfigOverrides, readDbConfigOverrides } from "./db-config.js";
 import { ENTRY_SIZE_CAP_USD, ENTRY_SIZE_FLOOR_USD } from "./entry-sizing.js";
 
 const logger = createLogger("ConfigService");
 
-export type FeeDestination = "compound" | "accumulate-quote" | "accumulate-sol";
+export type FeeDestination = "compound" | "accumulate-quote" | "accumulate-native";
 
 export const AUTONOMOUS_TOKEN_CONFIG_DEFAULTS = {
   autonomousTokenMode: "off",
-  settlementAsset: "SOL",
+  settlementAsset: "ETH",
   candidateMinHealthyScans: 6,
   candidateMinObservationMs: 3_600_000,
   candidateScanLimit: 20,
@@ -34,82 +34,10 @@ export const AUTONOMOUS_TOKEN_CONFIG_DEFAULTS = {
   agentInstanceId: "primary",
 } as const;
 
-export function maskHeliusUrl(u: string): string {
-  return u.replace(/(api[-_]key=)[^&\s]*/g, "$1[REDACTED]");
-}
-
-function isHeliusHost(url: string): boolean {
-  try {
-    const parsed = new URL(url);
-    if (parsed.protocol !== "https:") return false;
-    const hostname = parsed.hostname;
-    return hostname === "helius-rpc.com" || hostname.endsWith(".helius-rpc.com");
-  } catch {
-    return false;
-  }
-}
-
-/**
- * Normalize a Helius RPC URL: fix the common `api_key` → `api-key` typo,
- * replace empty `api-key=` values with the configured key, and append the
- * key when the parameter is missing entirely.
- *
- * Helius currently accepts both spellings, but `api-key` is the documented
- * form and the one every code-generated URL uses.  User-edited `.env` files
- * often contain `api_key`, which is a latent breakage waiting for a Helius
- * API tightening.
- *
- * Security: hostname is validated via URL parsing (not substring match) to
- * prevent credential leakage to attacker-controlled domains such as
- * `helius-rpc.com.attacker.example`.  API key values are redacted in logs.
- */
-export function normalizeHeliusUrl(
-  url: string,
-  heliusApiKey: string,
-): { readonly url: string; readonly normalized: boolean } {
-  const trimmed = url.trim();
-  if (!trimmed || !isHeliusHost(trimmed)) {
-    return { url: trimmed, normalized: false };
-  }
-
-  let result = trimmed;
-  let normalized = false;
-
-  if (result.includes("api_key=")) {
-    result = result.replace(/api_key=/g, "api-key=");
-    normalized = true;
-    logger.warn("Normalized Helius URL: replaced api_key= with api-key=", {
-      original: maskHeliusUrl(trimmed),
-      corrected: maskHeliusUrl(result),
-    });
-  }
-
-  if (heliusApiKey) {
-    const emptyKeyMatch = result.match(/api-key=(&|$)/);
-    if (emptyKeyMatch) {
-      result = result.replace(/api-key=(&|$)/, `api-key=${heliusApiKey}$1`);
-      normalized = true;
-      logger.warn("Helius URL had empty api-key value; replaced with configured key", {
-        corrected: maskHeliusUrl(result),
-      });
-    } else if (!result.includes("api-key=")) {
-      const separator = result.includes("?") ? "&" : "?";
-      result = `${result}${separator}api-key=${heliusApiKey}`;
-      normalized = true;
-      logger.warn("Helius URL was missing api-key parameter; appended configured key", {
-        corrected: maskHeliusUrl(result),
-      });
-    }
-  }
-
-  return { url: result, normalized };
-}
-
 export interface AppConfig {
   readonly walletPrivateKey: string;
-  readonly heliusApiKey: string;
-  readonly solanaRpcUrl: string;
-  readonly solanaRpcFallbackUrl: string;
+  readonly rpcUrl: string;
+  readonly rpcFallbackUrl: string;
   readonly paperTrading: boolean;
   readonly autonomousTokenMode: AutonomousTokenMode;
   readonly settlementAsset: SettlementAsset;
@@ -174,7 +102,7 @@ export interface AppConfig {
   readonly marketScanTopK?: number;
   /** Hard cap on market-scan pools in the active scan set. */
   readonly marketScanMaxPools?: number;
-  /** Minimum holders for a non-stable, non-SOL leg to pass the market gate
+  /** Minimum holders for a non-stable, non-native leg to pass the market gate
    *  (rug/IL-safety pre-filter; the per-pool token-risk overlay still runs). */
   readonly marketScanMinHolders?: number;
   /** Skip pools with bin step below this (ultra-fine bins churn). Default 2. */
@@ -203,11 +131,6 @@ export interface AppConfig {
   readonly feedbackOptOut: boolean;
   // Allow paper mode to exit live positions (opt-in escape hatch)
   readonly paperModeExitLive: boolean;
-  // Meteora DLMM pool-discovery API URL. Override with METEORA_POOLS_URL
-  // env var; falls back to the official DLMM Data API (dlmm.datapi.meteora.ag)
-  // if the env var is unset or empty.
-  readonly meteoraPoolsUrl: string;
-  readonly meteoraDatapiBaseUrl: string;
   readonly stablecoinMints?: ReadonlySet<string>;
   readonly depegAbsoluteUsd?: number;
   readonly depegRelativePct?: number;
@@ -269,10 +192,10 @@ export interface AppConfig {
   readonly pythBaseUrl?: string;
 
   // ─── F1: Gas-aware rebalancing ──────────────────────────────────────────────
-  /** Estimated SOL cost of a single rebalance tx (entry + close). */
-  readonly rebalanceGasCostSol: number;
-  /** USD price of 1 SOL, used to convert gas to USD. */
-  readonly solPriceUsd: number;
+  /** Estimated native-ETH cost of a single rebalance tx (entry + close). */
+  readonly rebalanceGasCostNative: number;
+  /** USD price of 1 native ETH, used to convert gas to USD. */
+  readonly nativePriceUsd: number;
   /** Skip REBALANCE when gas cost > daysOfFeesPaidAhead × position's 24h fees. */
   readonly gasAwareMinDaysOfFeesPaidAhead: number;
 
@@ -358,7 +281,7 @@ export interface AppConfig {
   readonly feeDensityLowPct: number;
 
   // ─── Agentic mode / agent runtime overlay ────────────────────────────
-  /** Enable non-deterministic agent reasoning overlay. Only active when Prism runs under an agent runtime (Hermes/OpenClaw). Default false. */
+  /** Enable non-deterministic agent reasoning overlay. Only active when Beam runs under an agent runtime (Hermes/OpenClaw). Default false. */
   readonly agentiveMode: boolean;
   /** Which agent runtime to use. `auto` detects Hermes or OpenClaw; `none` disables agent overlay. Default "auto". */
   readonly agentRuntime: "auto" | "hermes" | "openclaw" | "none";
@@ -412,7 +335,7 @@ export interface AppConfig {
   /** Auth token for agent proposal enqueue (`/propose`). Empty = disabled. Default "". */
   readonly agentProposalToken: string;
   /**
-   * Auth token for `/approve` and MCP `prism_approve_proposals`. Required for
+   * Auth token for `/approve` and MCP `beam_approve_proposals`. Required for
    * supervised approvals; does not fall back to `agentProposalToken` (fail-closed).
    * Default "".
    */
@@ -452,7 +375,7 @@ export interface AppConfig {
   readonly signalWeightFloor: number;
   readonly signalWeightCeiling: number;
   readonly weightedEntryScoreThreshold: number;
-  // Auto-swap USDC into missing pool tokens before live ENTER
+  // Auto-swap stablecoin into missing pool tokens before live ENTER
   readonly autoSwapEntry: boolean;
   /**
    * DLMM deposit distribution for position creation (ENTRY_STRATEGY_TYPE).
@@ -469,7 +392,7 @@ export interface AppConfig {
    *  verbatim on the redeploy (caps can reject or shrink, never bypassed). */
   readonly idleRedeployEnabled: boolean;
   /** Idle capital (USD) that must sit un-deployed before the redeploy pass
-   *  considers acting. Live: USDC wallet balance; paper: the paper portfolio
+   *  considers acting. Live: stablecoin wallet balance; paper: the paper portfolio
    *  seed minus open-position value. Default 500. */
   readonly idleRedeployThresholdUsd: number;
   /** Hard ceiling (USD) on a single idle-redeploy entry, on top of the
@@ -524,7 +447,7 @@ export interface AppConfig {
    *  token, not an oversold gem. */
   readonly fallenAngelVolBaselineMax?: number;
   /** Maximum RugCheck score_normalised (0..100 RISK index — higher = riskier:
-   *  SOL≈1, BONK≈7, a dangerous LP-unlocked token ≈56, mint-authority-enabled
+   *  ETH≈1, BONK≈7, a dangerous LP-unlocked token ≈56, mint-authority-enabled
    *  ≈71; verified live 2026-08-05) for a fallen-angel token. Default 60.
    *  The hard security gate is the `risks[].level === "danger"` check; this is
    *  the secondary floor. Fail-closed: a missing/unknown score rejects. */
@@ -577,32 +500,19 @@ const loadConfig = Effect.gen(function* () {
   const isTest = process.env.NODE_ENV === "test" || process.env.VITEST === "true";
 
   // WALLET_PRIVATE_KEY (env / .env) takes precedence; otherwise fall back to the local
-  // keystore written by `prism wallet generate|import`, so a generated wallet actually
+  // keystore written by `beam wallet generate|import`, so a generated wallet actually
   // enables live trading (engine/adapter-service.ts decodes this base58 key).
   const walletPrivateKey = yield* Config.string("WALLET_PRIVATE_KEY").pipe(
-    Effect.orElseSucceed(() => loadKeystoreSecretKeyBase58() ?? ""),
+    Effect.orElseSucceed(() => loadKeystoreSecretKeyHex() ?? ""),
   );
-  const heliusApiKey = yield* Config.string("HELIUS_API_KEY").pipe(
-    Effect.orElseSucceed(() => (isTest ? "test-helius-key" : "")),
-  );
-  let solanaRpcUrl = yield* Config.string("SOLANA_RPC_URL").pipe(
+  let rpcUrl = yield* Config.string("RPC_URL").pipe(
     Effect.orElseSucceed(() =>
-      isTest ? "https://example.com" : "https://api.mainnet-beta.solana.com",
+      isTest ? "https://example.com" : "https://rpc.mainnet.chain.robinhood.com",
     ),
   );
-  const solanaRpcFallbackUrlRaw = yield* Config.string("SOLANA_RPC_FALLBACK_URL").pipe(
+  const rpcFallbackUrl = yield* Config.string("RPC_FALLBACK_URL").pipe(
     Effect.orElseSucceed(() => ""),
   );
-
-  // If no SOLANA_RPC_URL is configured but a Helius key is present, prefer
-  // Helius over the public Solana RPC for reliability.
-  if (!isTest && !process.env.SOLANA_RPC_URL && heliusApiKey.length > 0) {
-    solanaRpcUrl = `https://mainnet.helius-rpc.com/?api-key=${heliusApiKey}`;
-  }
-
-  const solanaRpcUrlNormalized = normalizeHeliusUrl(solanaRpcUrl, heliusApiKey);
-  solanaRpcUrl = solanaRpcUrlNormalized.url;
-  const solanaRpcFallbackUrl = normalizeHeliusUrl(solanaRpcFallbackUrlRaw, heliusApiKey).url;
   const paperTrading = yield* Config.boolean("PAPER_TRADING").pipe(
     Effect.orElseSucceed(() => true),
   );
@@ -633,10 +543,10 @@ const loadConfig = Effect.gen(function* () {
   const settlementAssetRaw = yield* Config.string("SETTLEMENT_ASSET").pipe(
     Effect.orElseSucceed(() => AUTONOMOUS_TOKEN_CONFIG_DEFAULTS.settlementAsset),
   );
-  if (settlementAssetRaw !== "SOL") {
+  if (settlementAssetRaw !== "ETH") {
     return yield* Effect.die(
       new ConfigError({
-        message: "SETTLEMENT_ASSET must be SOL",
+        message: "SETTLEMENT_ASSET must be ETH",
         issues: [{ path: "SETTLEMENT_ASSET", message: `Unsupported asset: ${settlementAssetRaw}` }],
       }),
     );
@@ -753,7 +663,7 @@ const loadConfig = Effect.gen(function* () {
   const watchlistPoolsRaw = yield* Config.string("WATCHLIST_POOLS").pipe(
     Effect.orElseSucceed(() => ""),
   );
-  // Default = the verified stablecoin mints (USDC, USDT, PYUSD). An explicit
+  // Default = the verified stablecoin mints. An explicit
   // empty value (STABLECOIN_MINTS=) is present, not absent, so it disables the
   // allowlist (empty set). Entries are pubkey-validated below, fail-closed.
   const stablecoinMintsRaw = yield* Config.string("STABLECOIN_MINTS").pipe(
@@ -803,8 +713,8 @@ const loadConfig = Effect.gen(function* () {
   );
 
   // ─── F1: Gas-aware rebalancing ──────────────────────────────────────────────
-  const rebalanceGasCostSol = yield* validatedNumber("REBALANCE_GAS_COST_SOL", 0, 0.01);
-  const solPriceUsd = yield* validatedNumber("SOL_PRICE_USD", 0, 150, 10_000);
+  const rebalanceGasCostNative = yield* validatedNumber("REBALANCE_GAS_COST_NATIVE", 0, 0.01);
+  const nativePriceUsd = yield* validatedNumber("NATIVE_PRICE_USD", 0, 150, 10_000);
   const gasAwareMinDaysOfFeesPaidAhead = yield* validatedNumber(
     "GAS_AWARE_MIN_DAYS_OF_FEES_PAID_AHEAD",
     0,
@@ -843,11 +753,11 @@ const loadConfig = Effect.gen(function* () {
   const feeDestination: FeeDestination = yield* Config.string("FEE_DESTINATION").pipe(
     Config.withDefault("compound"),
     Effect.flatMap((value) =>
-      value === "compound" || value === "accumulate-quote" || value === "accumulate-sol"
+      value === "compound" || value === "accumulate-quote" || value === "accumulate-native"
         ? Effect.succeed(value)
         : Effect.fail(
             new ConfigError({
-              message: `FEE_DESTINATION must be compound, accumulate-quote, or accumulate-sol; got ${value}`,
+              message: `FEE_DESTINATION must be compound, accumulate-quote, or accumulate-native; got ${value}`,
             }),
           ),
     ),
@@ -1306,7 +1216,7 @@ const loadConfig = Effect.gen(function* () {
     Effect.orElseSucceed(() => "./engine/data/token-blacklist.json"),
   );
   const sqliteDbPath = yield* Config.string("SQLITE_DB_PATH").pipe(
-    Effect.orElseSucceed(() => getPrismDbPath()),
+    Effect.orElseSucceed(() => getBeamDbPath()),
   );
   const enableSnapshotCapture = yield* Config.boolean("ENABLE_SNAPSHOT_CAPTURE").pipe(
     Effect.orElseSucceed(() => false),
@@ -1328,7 +1238,7 @@ const loadConfig = Effect.gen(function* () {
     ? (updateChannelRaw as (typeof validChannels)[number])
     : "stable";
   const updateGithubRepo = yield* Config.string("UPDATE_GITHUB_REPO").pipe(
-    Effect.orElseSucceed(() => "irfndi/prism-liquidity-agent"),
+    Effect.orElseSucceed(() => "irfndi/beam-clmm"),
   );
   const updateAllowDirty = yield* Config.boolean("UPDATE_ALLOW_DIRTY").pipe(
     Effect.orElseSucceed(() => false),
@@ -1343,9 +1253,9 @@ const loadConfig = Effect.gen(function* () {
 
   const githubToken = yield* Config.string("GITHUB_TOKEN").pipe(Effect.orElseSucceed(() => ""));
   const githubRepo = yield* Config.string("GITHUB_REPO").pipe(
-    Effect.orElseSucceed(() => "irfndi/prism-liquidity-agent"),
+    Effect.orElseSucceed(() => "irfndi/beam-clmm"),
   );
-  const feedbackOptOut = yield* Config.boolean("PRISM_FEEDBACK_OPT_OUT").pipe(
+  const feedbackOptOut = yield* Config.boolean("BEAM_FEEDBACK_OPT_OUT").pipe(
     Effect.orElseSucceed(() => false),
   );
   const paperModeExitLive = yield* Config.boolean("PAPER_MODE_EXIT_LIVE").pipe(
@@ -1367,8 +1277,7 @@ const loadConfig = Effect.gen(function* () {
     .filter(Boolean);
   const invalidPools = watchlistPools.filter((pool) => {
     try {
-      new PublicKey(pool);
-      return false;
+      return isAddress(pool);
     } catch {
       return true;
     }
@@ -1376,7 +1285,7 @@ const loadConfig = Effect.gen(function* () {
   if (invalidPools.length > 0) {
     return yield* Effect.die(
       new ConfigError({
-        message: `WATCHLIST_POOLS contains invalid Solana public keys: ${invalidPools.join(", ")}`,
+        message: `WATCHLIST_POOLS contains invalid EVM addresses: ${invalidPools.join(", ")}`,
         issues: invalidPools.map((pool) => ({
           path: "WATCHLIST_POOLS",
           message: `Invalid public key: ${pool}`,
@@ -1391,8 +1300,7 @@ const loadConfig = Effect.gen(function* () {
     .filter(Boolean);
   const invalidStablecoinMints = stablecoinMintsList.filter((mint) => {
     try {
-      new PublicKey(mint);
-      return false;
+      return isAddress(mint);
     } catch {
       return true;
     }
@@ -1400,7 +1308,7 @@ const loadConfig = Effect.gen(function* () {
   if (invalidStablecoinMints.length > 0) {
     return yield* Effect.die(
       new ConfigError({
-        message: `STABLECOIN_MINTS contains invalid Solana public keys: ${invalidStablecoinMints.join(", ")}`,
+        message: `STABLECOIN_MINTS contains invalid EVM addresses: ${invalidStablecoinMints.join(", ")}`,
         issues: invalidStablecoinMints.map((mint) => ({
           path: "STABLECOIN_MINTS",
           message: `Invalid public key: ${mint}`,
@@ -1412,9 +1320,8 @@ const loadConfig = Effect.gen(function* () {
 
   const cfg: AppConfig = {
     walletPrivateKey,
-    heliusApiKey,
-    solanaRpcUrl,
-    solanaRpcFallbackUrl,
+    rpcUrl,
+    rpcFallbackUrl,
     paperTrading,
     autonomousTokenMode,
     settlementAsset,
@@ -1498,8 +1405,8 @@ const loadConfig = Effect.gen(function* () {
     pythMaxStalenessMs,
     pythBaseUrl,
 
-    rebalanceGasCostSol,
-    solPriceUsd,
+    rebalanceGasCostNative,
+    nativePriceUsd,
     gasAwareMinDaysOfFeesPaidAhead,
     volatilityExitStddev,
     volatilityLookbackSnapshots,

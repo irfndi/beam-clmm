@@ -26,7 +26,7 @@ import type {
   AgentRuntimeCheckin,
   AgentRuntimeAlert,
 } from "./agent-transport.js";
-import type { PrismStateSnapshot } from "./state-service.js";
+import type { BeamStateSnapshot } from "./state-service.js";
 import type { GeckoPoolStats } from "./gecko-terminal-service.js";
 import type { EvolvableThresholds, OutcomeRecord } from "./strategy-service.js";
 import type { ClaimedReward } from "./rewards.js";
@@ -124,7 +124,7 @@ export interface AdapterApi {
     ReadonlyMap<string, { readonly amountAtomic: bigint; readonly decimals: number }>,
     Error
   >;
-  readonly getNativeSolBalance: () => Effect.Effect<bigint, Error>;
+  readonly getNativeBalance: () => Effect.Effect<bigint, Error>;
   readonly getPoolState: (poolAddress: string) => Effect.Effect<PoolState, Error>;
   readonly getBinArray: (poolAddress: string) => Effect.Effect<BinArray, Error>;
   /**
@@ -323,12 +323,12 @@ export interface AdapterApi {
   >;
   readonly convertClaimedFees?: (
     poolAddress: string,
-    destination: "accumulate-quote" | "accumulate-sol",
+    destination: "accumulate-quote" | "accumulate-native",
     feeX: number,
     feeY: number,
   ) => Effect.Effect<
     {
-      destination: "accumulate-quote" | "accumulate-sol";
+      destination: "accumulate-quote" | "accumulate-native";
       outputAtomic: bigint;
       outputUsd: number | null;
       txSignatures: ReadonlyArray<string>;
@@ -375,7 +375,7 @@ export interface AdapterApi {
     txSignature: string;
     feeTransferTxSignature?: string;
   }) => Effect.Effect<void, never>;
-  readonly swapUSDCForSOL: (
+  readonly swapUSDCForNative: (
     minSolThreshold?: number,
     swapAmountUSDC?: number,
   ) => Effect.Effect<void, never>;
@@ -1111,7 +1111,7 @@ export interface DbApi {
   >;
   readonly getMetadata: (key: string) => Effect.Effect<string | null, Error>;
   readonly setMetadata: (key: string, value: string) => Effect.Effect<void, Error>;
-  /** Delete a metadata row if present (used by `prism config unset`). */
+  /** Delete a metadata row if present (used by `beam config unset`). */
   readonly deleteMetadata: (key: string) => Effect.Effect<void, Error>;
   readonly setMetadataBatch: (
     entries: ReadonlyArray<{ key: string; value: string }>,
@@ -1237,7 +1237,7 @@ export type FeedbackCategory = "friction" | "suggestion" | "observation" | "prai
 export type FeedbackSeverity = "low" | "medium" | "high";
 
 export interface FeedbackContext {
-  readonly prismVersion: string;
+  readonly beamVersion: string;
   readonly installMethod: string;
   readonly platform: string;
   readonly runtime: string;
@@ -1379,8 +1379,8 @@ export type EnqueueProposalResult =
     };
 
 export interface AgentStateApi {
-  readonly getSnapshot: () => Effect.Effect<PrismStateSnapshot, never>;
-  readonly updateSnapshot: (patch: Partial<PrismStateSnapshot>) => Effect.Effect<void, never>;
+  readonly getSnapshot: () => Effect.Effect<BeamStateSnapshot, never>;
+  readonly updateSnapshot: (patch: Partial<BeamStateSnapshot>) => Effect.Effect<void, never>;
   readonly setAgentPolicy: (patch: Partial<AgentPolicySnapshot>) => Effect.Effect<void, never>;
   readonly enqueueProposal: (
     proposal: AgentProposal,
@@ -1424,7 +1424,7 @@ export interface EngineAlert {
 
 export interface AlertApi {
   /**
-   * Send an alert to the user's linked Telegram via Prism Cloud. Applies
+   * Send an alert to the user's linked Telegram via Beam Cloud. Applies
    * per-rule cooldowns (persisted in SQLite) and never fails: delivery errors
    * are logged and swallowed so a scan cycle is never blocked on alerts.
    */

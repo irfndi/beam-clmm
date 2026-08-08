@@ -4,14 +4,13 @@ import { HttpStatusServer } from "../engine/http-status-server.js";
 import { AUTONOMOUS_TOKEN_CONFIG_DEFAULTS, type AppConfig } from "../engine/config-service.js";
 import type { AgentStateApi } from "../engine/services.js";
 import type { AgentProposal } from "../engine/types.js";
-import type { PrismStateSnapshot } from "../engine/state-service.js";
+import type { BeamStateSnapshot } from "../engine/state-service.js";
 
 function baseConfig(overrides: Partial<AppConfig> = {}): AppConfig {
   return {
     walletPrivateKey: "",
-    heliusApiKey: "",
-    solanaRpcUrl: "",
-    solanaRpcFallbackUrl: "",
+    rpcUrl: "",
+    rpcFallbackUrl: "",
     paperTrading: true,
     ...AUTONOMOUS_TOKEN_CONFIG_DEFAULTS,
     scanIntervalMs: 600_000,
@@ -52,8 +51,8 @@ function baseConfig(overrides: Partial<AppConfig> = {}): AppConfig {
     paperModeExitLive: false,
     meteoraPoolsUrl: "",
     meteoraDatapiBaseUrl: "",
-    rebalanceGasCostSol: 0.01,
-    solPriceUsd: 150,
+    rebalanceGasCostNative: 0.01,
+    nativePriceUsd: 150,
     gasAwareMinDaysOfFeesPaidAhead: 3,
     volatilityExitStddev: 5,
     volatilityLookbackSnapshots: 12,
@@ -145,7 +144,7 @@ function mockState(snapshot: Record<string, unknown> = {}) {
   };
 }
 
-function baseSnapshot(overrides: Partial<PrismStateSnapshot> = {}): PrismStateSnapshot {
+function baseSnapshot(overrides: Partial<BeamStateSnapshot> = {}): BeamStateSnapshot {
   return {
     programStartTime: Date.now(),
     scanCount: 0,
@@ -179,7 +178,7 @@ function baseSnapshot(overrides: Partial<PrismStateSnapshot> = {}): PrismStateSn
 }
 
 function mockAgentState(
-  snapshot: PrismStateSnapshot,
+  snapshot: BeamStateSnapshot,
   enqueued: AgentProposal[] = [],
 ): AgentStateApi {
   return {
@@ -311,7 +310,6 @@ describe("HttpStatusServer", () => {
       const body = (await response.json()) as { paperTrading: boolean };
       expect(body.paperTrading).toBe(true);
       expect(body).not.toHaveProperty("walletPrivateKey");
-      expect(body).not.toHaveProperty("heliusApiKey");
       expect(body).not.toHaveProperty("agentPolicy");
       expect(body).not.toHaveProperty("agentProposalToken");
     } finally {

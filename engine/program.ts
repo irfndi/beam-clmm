@@ -38,7 +38,7 @@ import { shouldDiscoverPools } from "./pool-policy.js";
 import { advanceScreenedCandidates } from "./candidate-discovery.js";
 import { gateAndRankMarketPools, type MarketPoolRank } from "./market-gate.js";
 import { transitionCandidate } from "./candidate-policy.js";
-import { getPrismUserConfigDir } from "./paths.js";
+import { getBeamUserConfigDir } from "./paths.js";
 
 import { checkForAutoUpdate } from "./update-check.js";
 import { existsSync, readFileSync } from "fs";
@@ -55,11 +55,11 @@ import {
 } from "./errors.js";
 import {
   GAS_TOP_UP_USDC,
-  SOL_GAS_TOP_UP_THRESHOLD_LAMPORTS,
-  MIN_SOL_FOR_GAS_LAMPORTS,
-  MIN_SOL_FOR_ENTRY_LAMPORTS,
-  SOL_MINT,
-  USDC_MINT,
+  SOL_GAS_TOP_UP_THRESHOLD_WEI,
+  MIN_SOL_FOR_GAS_WEI,
+  MIN_SOL_FOR_ENTRY_WEI,
+  NATIVE_MINT,
+  STABLECOIN_MINT,
 } from "./constants.js";
 import {
   computeEntrySizeUsd,
@@ -192,13 +192,13 @@ function persist<T>(
 }
 
 /**
- * Read the Prism Cloud API key from the on-disk credentials file. Returns null
+ * Read the Beam Cloud API key from the on-disk credentials file. Returns null
  * when the user has not registered — a normal condition, not an error, so status
  * reporting simply no-ops.
  */
 const readEngineStatusApiKey = (): string | null => {
   try {
-    const credentialsFile = join(getPrismUserConfigDir(), "credentials.json");
+    const credentialsFile = join(getBeamUserConfigDir(), "credentials.json");
     if (!existsSync(credentialsFile)) return null;
     const value: unknown = JSON.parse(readFileSync(credentialsFile, "utf-8"));
     if (
@@ -215,7 +215,7 @@ const readEngineStatusApiKey = (): string | null => {
 };
 
 /**
- * Post the engine's current status to the Prism Cloud API so the Telegram bot's
+ * Post the engine's current status to the Beam Cloud API so the Telegram bot's
  * /status command can serve real data. Runs fully inside the Effect boundary
  * (filesystem read + HTTP request) and never fails — a missing API key or a
  * transient network error is logged and swallowed so it can never block the scan
@@ -227,10 +227,10 @@ function postEngineStatus(
   positions: number,
   unrealizedPnlUsd: number,
 ): Effect.Effect<void> {
-  const DEFAULT_API_BASE_URL = "https://prism-api.irfndi.workers.dev";
+  const DEFAULT_API_BASE_URL = "https://beam-api.irfndi.workers.dev";
   const TIMEOUT_MS = 5_000;
   return Effect.gen(function* () {
-    const baseUrl = process.env.PRISM_API_URL ?? DEFAULT_API_BASE_URL;
+    const baseUrl = process.env.BEAM_API_URL ?? DEFAULT_API_BASE_URL;
     const apiKey = yield* Effect.sync(readEngineStatusApiKey);
     if (apiKey == null) return;
     const response = yield* Effect.tryPromise(() =>
@@ -1219,7 +1219,7 @@ export function executeLive(
     revenueConfigSvc: RevenueConfigApi;
     trackedPositions: Map<string, PositionRecord>;
     entryPrep: EntryPrepApi;
-    solPriceUsd: number;
+    nativePriceUsd: number;
     entryStrategyShape: EntryStrategyShape;
     entryRangeHalfWidth?: number;
     reconcileRequestedPools?: Set<string>;
@@ -1249,7 +1249,7 @@ export function executeLive(
       revenueConfigSvc,
       trackedPositions,
       entryPrep,
-      solPriceUsd,
+      nativePriceUsd,
       entryStrategyShape,
       entryRangeHalfWidth,
     } = deps;
@@ -1297,39 +1297,39 @@ export function executeLive(
       // swap to the ACTUAL DEFICIT (plus a slippage/fee buffer), not the full
       // reserve: swapping the whole reserve when the wallet is only slightly
       // below it wastes USDC that token preparation downstream still needs, and
-      // can fail an otherwise fundable ENTER. SOL_GAS_TOP_UP_THRESHOLD_LAMPORTS
+      // can fail an otherwise fundable ENTER. SOL_GAS_TOP_UP_THRESHOLD_WEI
       // aliases the reserve, so the swap trigger and the entry gate share one
       // value. When the balance read fails (null), skip the top-up entirely —
       // the post-swap recheck below will independently reject the ENTER if the
       // SOL balance cannot be confirmed.
-      const entryReserveSol = Number(SOL_GAS_TOP_UP_THRESHOLD_LAMPORTS) / 1e9;
-      const preSwapSol = yield* adapter.getNativeSolBalance().pipe(
+      const entryReserveNative = Number(SOL_GAS_TOP_UP_THRESHOLD_WEI) / 1e9;
+      const preSwapSol = yield* adapter.getNativeBalance().pipe(
         Effect.map((lamports) => Number(lamports) / 1e9),
         Effect.catch(() => Effect.succeed(null)),
       );
-      if (preSwapSol !== null && preSwapSol < entryReserveSol) {
-        const deficitSol = entryReserveSol - preSwapSol;
-        // Prefer a live SOL price from the adapter's price chain over the static
-        // config fallback: when the market price exceeds solPriceUsd (default
+      if (preSwapSol !== null && preSwapSol < entryReserveNative) {
+        const deficitSol = entryReserveNative - preSwapSol;
+        // Prefer a live NATIVE price from the adapter's price chain over the static
+        // config fallback: when the market price exceeds nativePriceUsd (default
         // $150) by more than the 20% buffer, the static value underfunds the
         // swap and the post-swap balance check rejects an otherwise-fundable
         // ENTER. A failed price lookup falls back to the config value.
-        const liveSolPrice = yield* adapter.getTokenPrices([SOL_MINT], { useFallback: false }).pipe(
-          Effect.map((prices) => prices[SOL_MINT]),
+        const liveNativePrice = yield* adapter.getTokenPrices([NATIVE_MINT], { useFallback: false }).pipe(
+          Effect.map((prices) => prices[NATIVE_MINT]),
           Effect.catch(() => Effect.succeed(undefined)),
         );
         const effectiveSolPrice =
-          typeof liveSolPrice === "number" && liveSolPrice > 0 ? liveSolPrice : solPriceUsd;
+          typeof liveNativePrice === "number" && liveNativePrice > 0 ? liveNativePrice : nativePriceUsd;
         const topUpUsdc =
           effectiveSolPrice > 0
             ? Math.max(GAS_TOP_UP_USDC, Math.ceil(deficitSol * effectiveSolPrice * 1.2))
             : GAS_TOP_UP_USDC;
         yield* adapter
-          .swapUSDCForSOL(entryReserveSol, topUpUsdc)
+          .swapUSDCForNative(entryReserveNative, topUpUsdc)
           .pipe(Effect.catch(() => Effect.void));
       }
 
-      const nativeBalance = yield* adapter.getNativeSolBalance().pipe(
+      const nativeBalance = yield* adapter.getNativeBalance().pipe(
         Effect.map((lamports) => ({ value: lamports, error: undefined as string | undefined })),
         Effect.catch((err) =>
           Effect.succeed({
@@ -1357,17 +1357,17 @@ export function executeLive(
         }
         return { executed: false, error };
       }
-      const solBalance = nativeBalance.value;
-      if (solBalance < MIN_SOL_FOR_ENTRY_LAMPORTS) {
-        const availableLamports = Number(solBalance);
-        const neededLamports = Number(MIN_SOL_FOR_ENTRY_LAMPORTS);
-        const reserve = neededLamports - Number(MIN_SOL_FOR_GAS_LAMPORTS);
+      const nativeBalance = nativeBalance.value;
+      if (nativeBalance < MIN_SOL_FOR_ENTRY_WEI) {
+        const availableLamports = Number(nativeBalance);
+        const neededLamports = Number(MIN_SOL_FOR_ENTRY_WEI);
+        const reserve = neededLamports - Number(MIN_SOL_FOR_GAS_WEI);
         const availableHuman = (availableLamports / 1e9).toFixed(4);
         const neededHuman = (neededLamports / 1e9).toFixed(4);
         const reserveHuman = (reserve / 1e9).toFixed(4);
         console.warn(
           `Insufficient SOL for ENTER — available ${availableHuman} SOL, need ${neededHuman} SOL ` +
-            `(gas ${(Number(MIN_SOL_FOR_GAS_LAMPORTS) / 1e9).toFixed(4)} + rent/fee reserve ${reserveHuman})`,
+            `(gas ${(Number(MIN_SOL_FOR_GAS_WEI) / 1e9).toFixed(4)} + rent/fee reserve ${reserveHuman})`,
         );
         const error =
           `Insufficient SOL for ENTER — available: ${availableHuman} SOL, ` +
@@ -2357,9 +2357,9 @@ export const program = Effect.gen(function* () {
   // fail-closed — never commit SOL the engine cannot confirm exists.
   let entrySolBudgetLamports = 0n;
   let entrySolBudgetKnown = false;
-  // Live SOL price the estimate keys off (0 = unknown → budget unknown →
+  // Live NATIVE price the estimate keys off (0 = unknown → budget unknown →
   // entries skipped fail-closed). Set together with the budget at cycle start.
-  let entrySolPriceUsd = 0;
+  let entryNativePriceUsd = 0;
   // SOL-funded entries (autonomous canary/live) buy pool-token deficits with
   // SOL swaps; plain live entries are USDC-funded and only need SOL for gas,
   // which the top-up mechanism handles per entry. The batch reserve gate
@@ -2742,11 +2742,11 @@ export const program = Effect.gen(function* () {
       const routeAvailableMints = new Set<string>();
       if (adapter.quoteSwap !== undefined) {
         const quoteSwap = adapter.quoteSwap;
-        const nonSolMints = mints.filter((mint) => mint !== SOL_MINT);
+        const nonSolMints = mints.filter((mint) => mint !== NATIVE_MINT);
         const prices = yield* adapter
-          .getTokenPrices([SOL_MINT], { useFallback: false })
+          .getTokenPrices([NATIVE_MINT], { useFallback: false })
           .pipe(Effect.catch(() => Effect.succeed<Record<string, number>>({})));
-        const solPrice = prices[SOL_MINT] ?? 0;
+        const nativePrice = prices[NATIVE_MINT] ?? 0;
         const tokenPrices = new Map(
           priceEvidence.map((evidence) => [evidence.mint, evidence.priceUsd]),
         );
@@ -2760,14 +2760,14 @@ export const program = Effect.gen(function* () {
         const routeProbes = nonSolMints.map((mint) => {
           const tokenPrice = tokenPrices.get(mint) ?? 0;
           const decimals = decimalsByMint.get(mint);
-          const solAtomic = routeProbeAmountAtomic(solPrice, 9);
+          const solAtomic = routeProbeAmountAtomic(nativePrice, 9);
           const tokenAtomic =
             decimals === undefined ? 0n : routeProbeAmountAtomic(tokenPrice, decimals);
           if (solAtomic === 0n || tokenAtomic === 0n) return Effect.succeed(false);
           return Effect.all(
             [
               quoteSwap({
-                inputMint: SOL_MINT,
+                inputMint: NATIVE_MINT,
                 outputMint: mint,
                 amountAtomic: solAtomic,
                 slippageBps: config.maxSwapSlippageBps,
@@ -2777,7 +2777,7 @@ export const program = Effect.gen(function* () {
               ),
               quoteSwap({
                 inputMint: mint,
-                outputMint: SOL_MINT,
+                outputMint: NATIVE_MINT,
                 amountAtomic: tokenAtomic,
                 slippageBps: config.maxSwapSlippageBps,
               }).pipe(
@@ -2859,7 +2859,7 @@ export const program = Effect.gen(function* () {
           pool.tokenX,
           pool.tokenY,
           config.stablecoinMints,
-          SOL_MINT,
+          NATIVE_MINT,
         );
         const ohlcv: GeckoOhlcvSignals | null = await getGeckoPoolOhlcv(pool.address);
         let rugcheck: RugCheckReport | null = null;
@@ -2888,7 +2888,7 @@ export const program = Effect.gen(function* () {
             maxTop10HolderPct: config.fallenAngelMaxTop10HolderPct ?? 0.5,
           },
           config.stablecoinMints,
-          SOL_MINT,
+          NATIVE_MINT,
           fetchSignals,
         ),
       );
@@ -2940,7 +2940,7 @@ export const program = Effect.gen(function* () {
     config.agentApprovalToken.length === 0
   ) {
     logger.warn(
-      "Supervised proposal mode is enabled without AGENT_APPROVAL_TOKEN — /approve and MCP prism_approve_proposals will reject all approvals (fail-closed)",
+      "Supervised proposal mode is enabled without AGENT_APPROVAL_TOKEN — /approve and MCP beam_approve_proposals will reject all approvals (fail-closed)",
     );
   }
 
@@ -3057,7 +3057,7 @@ export const program = Effect.gen(function* () {
             );
           }),
         );
-        const usdcHolding = holdings.get(USDC_MINT);
+        const usdcHolding = holdings.get(STABLECOIN_MINT);
         idleCapitalUsd =
           usdcHolding === undefined
             ? 0
@@ -3725,7 +3725,7 @@ export const program = Effect.gen(function* () {
             if (redeploySizeUsd !== undefined) {
               const neededLamports = estimateEntrySolLamports({
                 positionSizeUsd: redeploySizeUsd,
-                solPriceUsd: entrySolPriceUsd,
+                nativePriceUsd: entryNativePriceUsd,
                 poolHasSolLeg: hasNativeSolLeg(candidate.pool),
                 solFunded: true,
               });
@@ -3766,7 +3766,7 @@ export const program = Effect.gen(function* () {
               revenueConfigSvc,
               trackedPositions,
               entryPrep,
-              solPriceUsd: config.solPriceUsd,
+              nativePriceUsd: config.nativePriceUsd,
               entryStrategyShape,
               entryRangeHalfWidth,
               reconcileRequestedPools,
@@ -3802,7 +3802,7 @@ export const program = Effect.gen(function* () {
           // SOL). Fail closed on read failure: budget 0 blocks further
           // SOL-funded entries this cycle.
           if (solFundedEntryMode) {
-            entrySolBudgetLamports = yield* adapter.getNativeSolBalance().pipe(
+            entrySolBudgetLamports = yield* adapter.getNativeBalance().pipe(
               Effect.map((lamports) => freeEntrySolLamports(lamports)),
               Effect.catch(() => Effect.succeed(0n)),
             );
@@ -4033,7 +4033,7 @@ export const program = Effect.gen(function* () {
           // Issue #166: a settlement_overdue pause must not outlive the
           // settlements that raised it — once nothing is in flight (429
           // retries finally sold the token, or the orphan sweep recovered
-          // it), auto-resolve instead of latching until `prism resume`.
+          // it), auto-resolve instead of latching until `beam resume`.
           activeSafetyPause = { ...activeSafetyPause, resolvedAt: settlementNow };
           yield* db.saveSafetyPause(activeSafetyPause).pipe(Effect.catch(() => Effect.void));
         }
@@ -4050,7 +4050,7 @@ export const program = Effect.gen(function* () {
       // to 0 after every quiet cycle (see the end-of-cycle decay below), so
       // "below the threshold" is the recovery signal for restarts AND
       // mid-run spikes; the end-of-cycle arm block re-arms only when a cycle
-      // genuinely breaches again. `prism resume` remains an operator override.
+      // genuinely breaches again. `beam resume` remains an operator override.
       if (
         autonomousExecution &&
         activeSafetyPause !== null &&
@@ -4124,43 +4124,43 @@ export const program = Effect.gen(function* () {
       // SOL budget for SOL-funded entries. One read, reused by every ENTER
       // gate this cycle; a failed read leaves the budget UNKNOWN and the gate
       // skips entries fail-closed (never commit SOL the engine cannot confirm).
-      // The USD→lamports estimate keys off the LIVE SOL price (conservatively
-      // floored at config.solPriceUsd): entry-prep sizes swaps at live prices,
+      // The USD→lamports estimate keys off the LIVE NATIVE price (conservatively
+      // floored at config.nativePriceUsd): entry-prep sizes swaps at live prices,
       // so a stale-high SOL_PRICE_USD would under-reserve and let entries past
       // the gate fail in prep instead of being skipped. A failed live price
       // read fails closed with the balance read (price-cache hit when the
       // cycle-top wallet snapshot already priced SOL).
       entrySolBudgetLamports = 0n;
-      entrySolPriceUsd = 0;
+      entryNativePriceUsd = 0;
       if (adapter.hasWallet() && !config.paperTrading && solFundedEntryMode) {
-        const nativeSol = yield* adapter.getNativeSolBalance().pipe(
+        const nativeSol = yield* adapter.getNativeBalance().pipe(
           Effect.map((lamports) => ({ ok: true as const, lamports })),
           Effect.catch(() => Effect.succeed({ ok: false as const, lamports: 0n })),
         );
-        const liveSolPrice = yield* adapter.getTokenPrices([SOL_MINT], { useFallback: false }).pipe(
-          Effect.map((prices) => prices[SOL_MINT]),
+        const liveNativePrice = yield* adapter.getTokenPrices([NATIVE_MINT], { useFallback: false }).pipe(
+          Effect.map((prices) => prices[NATIVE_MINT]),
           Effect.catch(() => Effect.succeed(undefined)),
         );
         const priceOk =
-          typeof liveSolPrice === "number" &&
-          Number.isFinite(liveSolPrice) &&
-          liveSolPrice > 0 &&
-          // config.solPriceUsd is validated with min 0 (0 = unset); a zero
+          typeof liveNativePrice === "number" &&
+          Number.isFinite(liveNativePrice) &&
+          liveNativePrice > 0 &&
+          // config.nativePriceUsd is validated with min 0 (0 = unset); a zero
           // config price would zero the USD→lamports reservation below and
           // let entries past the gate that consume the full position size.
-          config.solPriceUsd > 0;
+          config.nativePriceUsd > 0;
         if (nativeSol.ok && priceOk) {
           entrySolBudgetLamports = freeEntrySolLamports(nativeSol.lamports);
           // min(config, live) is the conservative direction: a lower price
           // prices the same USD entry at MORE lamports (over-estimate is safe).
-          entrySolPriceUsd = Math.min(config.solPriceUsd, liveSolPrice);
+          entryNativePriceUsd = Math.min(config.nativePriceUsd, liveNativePrice);
           entrySolBudgetKnown = true;
         } else {
           entrySolBudgetKnown = false;
           logger.warn(
             !nativeSol.ok
               ? "Native SOL balance unavailable — SOL-funded entries skipped this cycle (fail closed)"
-              : "SOL price unavailable or unset — SOL-funded entries skipped this cycle (fail closed)",
+              : "NATIVE price unavailable or unset — SOL-funded entries skipped this cycle (fail closed)",
           );
         }
       } else {
@@ -4177,7 +4177,7 @@ export const program = Effect.gen(function* () {
           Effect.gen(function* () {
             const raw = yield* Effect.all([
               adapter.getWalletHoldings().pipe(Effect.catch(() => Effect.succeed(null))),
-              adapter.getNativeSolBalance().pipe(Effect.catch(() => Effect.succeed(null))),
+              adapter.getNativeBalance().pipe(Effect.catch(() => Effect.succeed(null))),
             ]);
             const [holdings, nativeSolLamports] = raw;
             if (holdings === null || nativeSolLamports === null) {
@@ -4342,7 +4342,7 @@ export const program = Effect.gen(function* () {
         }
       }
 
-      // Report engine status to the Prism Cloud API after every scan cycle.
+      // Report engine status to the Beam Cloud API after every scan cycle.
       // PnL is the aggregate UNREALIZED figure across tracked positions and
       // INCLUDES claimed fees + claimed rewards (which live on PositionRecord, not
       // the reduced PositionSnapshot), matching the canonical unrealized-PnL
@@ -4428,8 +4428,8 @@ export const program = Effect.gen(function* () {
           content: w.content,
         })),
         market: {
-          solPriceUsd: config.solPriceUsd,
-          gasEstimateSol: config.rebalanceGasCostSol,
+          nativePriceUsd: config.nativePriceUsd,
+          gasEstimateNative: config.rebalanceGasCostNative,
           scanCount,
           uptimeMs: now - programStartTime,
         },
@@ -5480,7 +5480,7 @@ export const program = Effect.gen(function* () {
           : 0;
       // Issue #148: a latched daily_drawdown pause must not outlive the
       // condition that raised it. The daily baseline re-seeds on rollover but
-      // the pause itself only cleared via `prism resume` — auto-resolve it
+      // the pause itself only cleared via `beam resume` — auto-resolve it
       // mode-aware so a fresh-day baseline (or a recovered drawdown) does not
       // leave the agent silently paused. The trigger block below re-arms it
       // when the recomputed drawdown still breaches the threshold.
@@ -5644,8 +5644,8 @@ export const program = Effect.gen(function* () {
                 : 0;
             const positionDailyFeesUsd = pool.fees24hUsd * positionSharePct;
             const gasGate = evaluateGasGate({
-              rebalanceGasCostSol: config.rebalanceGasCostSol,
-              solPriceUsd: config.solPriceUsd,
+              rebalanceGasCostNative: config.rebalanceGasCostNative,
+              nativePriceUsd: config.nativePriceUsd,
               positionDailyFeesUsd,
               minDaysOfFeesPaidAhead: config.gasAwareMinDaysOfFeesPaidAhead,
             });
@@ -6579,8 +6579,8 @@ export const program = Effect.gen(function* () {
                   lastRebalanceAt: gatePos.lastRebalanceAt ?? 0,
                   minRebalanceIntervalMs: config.minRebalanceIntervalMs,
                   oorGraceExpired,
-                  rebalanceGasCostSol: config.rebalanceGasCostSol,
-                  solPriceUsd: config.solPriceUsd,
+                  rebalanceGasCostNative: config.rebalanceGasCostNative,
+                  nativePriceUsd: config.nativePriceUsd,
                   positionDailyFeesUsd,
                   minDaysOfFeesPaidAhead: config.gasAwareMinDaysOfFeesPaidAhead,
                   recoveryProbability: recoveryProb,
@@ -6979,7 +6979,7 @@ export const program = Effect.gen(function* () {
           if (entrySizeUsd !== undefined) {
             const neededLamports = estimateEntrySolLamports({
               positionSizeUsd: entrySizeUsd,
-              solPriceUsd: entrySolPriceUsd,
+              nativePriceUsd: entryNativePriceUsd,
               poolHasSolLeg: hasNativeSolLeg(pool),
               solFunded: true,
             });
@@ -7057,7 +7057,7 @@ export const program = Effect.gen(function* () {
               revenueConfigSvc,
               trackedPositions,
               entryPrep,
-              solPriceUsd: config.solPriceUsd,
+              nativePriceUsd: config.nativePriceUsd,
               entryStrategyShape,
               entryRangeHalfWidth: rangeHalfWidth,
               reconcileRequestedPools,
@@ -7107,7 +7107,7 @@ export const program = Effect.gen(function* () {
               revenueConfigSvc,
               trackedPositions,
               entryPrep,
-              solPriceUsd: config.solPriceUsd,
+              nativePriceUsd: config.nativePriceUsd,
               entryStrategyShape,
               entryRangeHalfWidth: rangeHalfWidth,
               reconcileRequestedPools,
@@ -7177,7 +7177,7 @@ export const program = Effect.gen(function* () {
         // cache hit otherwise. A failed read fails closed: budget 0 blocks
         // further SOL-funded entries this cycle rather than over-committing.
         if (!config.paperTrading && solFundedEntryMode && movedLiveFunds) {
-          entrySolBudgetLamports = yield* adapter.getNativeSolBalance().pipe(
+          entrySolBudgetLamports = yield* adapter.getNativeBalance().pipe(
             Effect.map((lamports) => freeEntrySolLamports(lamports)),
             Effect.catch(() => Effect.succeed(0n)),
           );
@@ -7561,7 +7561,7 @@ export const program = Effect.gen(function* () {
           // F3: fee compounding — if AUTO_COMPOUND_FEES is on and the net fees
           // cleared the cost threshold, redeposit them into the same range.
           if (config.autoCompoundFees && config.paperTrading === false) {
-            const rebalanceGasCostUsd = config.rebalanceGasCostSol * config.solPriceUsd;
+            const rebalanceGasCostUsd = config.rebalanceGasCostNative * config.nativePriceUsd;
             const compoundGate = evaluateCompoundGate({
               netFeesUsd,
               minCompoundFeesUsd: config.minCompoundFeesUsd,

@@ -24,7 +24,7 @@ describe("getTokenDecimals", () => {
 });
 
 describe("tokenAmountToUsd", () => {
-  it("converts SOL raw amount to USD using solPriceUsd", () => {
+  it("converts SOL raw amount to USD using nativePriceUsd", () => {
     // 1.5 SOL raw = 1.5e9 lamports; solPrice = $150 → $225
     expect(tokenAmountToUsd(1_500_000_000, "SOL", 150)).toBeCloseTo(225);
   });
@@ -56,7 +56,7 @@ describe("convertClaimFeesToUsd", () => {
       netFeeYRaw: 100_000_000,
       tokenXSymbol: "SOL",
       tokenYSymbol: "USDC",
-      solPriceUsd: 150,
+      nativePriceUsd: 150,
     });
     expect(usd).toBeCloseTo(175);
   });
@@ -68,7 +68,7 @@ describe("convertClaimFeesToUsd", () => {
       netFeeYRaw: 500_000_000,
       tokenXSymbol: "USDC",
       tokenYSymbol: "SOL",
-      solPriceUsd: 150,
+      nativePriceUsd: 150,
     });
     expect(usd).toBeCloseTo(175);
   });
@@ -80,7 +80,7 @@ describe("convertClaimFeesToUsd", () => {
         netFeeYRaw: 0,
         tokenXSymbol: "SOL",
         tokenYSymbol: "USDC",
-        solPriceUsd: 150,
+        nativePriceUsd: 150,
       }),
     ).toBe(0);
   });
@@ -94,7 +94,7 @@ describe("convertClaimFeesToUsd", () => {
       netFeeYRaw: 100_000_000,
       tokenXSymbol: "SOL",
       tokenYSymbol: "USDC",
-      solPriceUsd: 150,
+      nativePriceUsd: 150,
     });
     expect(usd).toBeLessThan(1000); // proves we're not producing billions
     expect(usd).toBeCloseTo(250);
@@ -106,7 +106,7 @@ describe("convertClaimFeesToUsd", () => {
       netFeeYRaw: 100_000_000,
       tokenXSymbol: "BONK",
       tokenYSymbol: "USDC",
-      solPriceUsd: 150,
+      nativePriceUsd: 150,
     });
     expect(usd).toBe(0);
   });
@@ -117,7 +117,7 @@ describe("convertClaimFeesToUsd", () => {
       netFeeYRaw: 100_000_000,
       tokenXSymbol: "SOL",
       tokenYSymbol: "WIF",
-      solPriceUsd: 150,
+      nativePriceUsd: 150,
     });
     expect(usd).toBe(0);
   });

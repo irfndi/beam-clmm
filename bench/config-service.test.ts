@@ -22,7 +22,7 @@ describe("ConfigService upper-bound clamping", () => {
   it("clamps SOL_PRICE_USD above 10000", async () => {
     vi.stubEnv("SOL_PRICE_USD", "50000");
     const cfg = await loadConfig();
-    expect(cfg.solPriceUsd).toBe(10_000);
+    expect(cfg.nativePriceUsd).toBe(10_000);
   });
 
   it("clamps MAX_PER_POOL_ALLOCATION_PCT above 1.0", async () => {
@@ -35,7 +35,7 @@ describe("ConfigService upper-bound clamping", () => {
     vi.stubEnv("SOL_PRICE_USD", "200");
     vi.stubEnv("MAX_PER_POOL_ALLOCATION_PCT", "0.5");
     const cfg = await loadConfig();
-    expect(cfg.solPriceUsd).toBe(200);
+    expect(cfg.nativePriceUsd).toBe(200);
     expect(cfg.maxPerPoolAllocationPct).toBe(0.5);
   });
 

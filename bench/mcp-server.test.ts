@@ -8,9 +8,8 @@ import { AUTONOMOUS_TOKEN_CONFIG_DEFAULTS, type AppConfig } from "../engine/conf
 function baseConfig(overrides: Partial<AppConfig> = {}): AppConfig {
   return {
     walletPrivateKey: "",
-    heliusApiKey: "",
-    solanaRpcUrl: "",
-    solanaRpcFallbackUrl: "",
+    rpcUrl: "",
+    rpcFallbackUrl: "",
     paperTrading: true,
     ...AUTONOMOUS_TOKEN_CONFIG_DEFAULTS,
     scanIntervalMs: 600_000,
@@ -51,8 +50,8 @@ function baseConfig(overrides: Partial<AppConfig> = {}): AppConfig {
     paperModeExitLive: false,
     meteoraPoolsUrl: "",
     meteoraDatapiBaseUrl: "",
-    rebalanceGasCostSol: 0.01,
-    solPriceUsd: 150,
+    rebalanceGasCostNative: 0.01,
+    nativePriceUsd: 150,
     gasAwareMinDaysOfFeesPaidAhead: 3,
     volatilityExitStddev: 5,
     volatilityLookbackSnapshots: 12,
@@ -220,18 +219,18 @@ describe("McpServer", () => {
     const tools = (response.result as { tools: ReadonlyArray<{ name: string }> }).tools;
     expect(tools.map((t) => t.name)).toEqual(
       expect.arrayContaining([
-        "prism_status",
-        "prism_positions",
-        "prism_decisions",
-        "prism_config",
-        "prism_agent_policy",
-        "prism_pending_proposals",
-        "prism_approve_proposals",
+        "beam_status",
+        "beam_positions",
+        "beam_decisions",
+        "beam_config",
+        "beam_agent_policy",
+        "beam_pending_proposals",
+        "beam_approve_proposals",
       ]),
     );
   });
 
-  it("returns status via prism_status tool", async () => {
+  it("returns status via beam_status tool", async () => {
     const server = new McpServer(
       baseConfig(),
       mockAgentState({
@@ -258,7 +257,7 @@ describe("McpServer", () => {
       jsonrpc: "2.0",
       id: 3,
       method: "tools/call",
-      params: { name: "prism_status", arguments: {} },
+      params: { name: "beam_status", arguments: {} },
     });
 
     expect(response.error).toBeUndefined();
@@ -269,7 +268,7 @@ describe("McpServer", () => {
     expect(status.portfolio.totalValueUsd).toBe(11_000);
   });
 
-  it("returns positions via prism_positions tool", async () => {
+  it("returns positions via beam_positions tool", async () => {
     const server = new McpServer(
       baseConfig(),
       mockAgentState({
@@ -303,7 +302,7 @@ describe("McpServer", () => {
       jsonrpc: "2.0",
       id: 4,
       method: "tools/call",
-      params: { name: "prism_positions", arguments: {} },
+      params: { name: "beam_positions", arguments: {} },
     });
 
     const content = (response.result as { content: ReadonlyArray<{ text: string }> }).content;
@@ -313,14 +312,14 @@ describe("McpServer", () => {
     expect(result.positions[0].tokenXSymbol).toBe("TKNA");
   });
 
-  it("returns sanitized config via prism_config tool", async () => {
+  it("returns sanitized config via beam_config tool", async () => {
     const server = new McpServer(baseConfig(), mockAgentState());
 
     const response = await sendRequest(server, {
       jsonrpc: "2.0",
       id: 5,
       method: "tools/call",
-      params: { name: "prism_config", arguments: {} },
+      params: { name: "beam_config", arguments: {} },
     });
 
     const content = (response.result as { content: ReadonlyArray<{ text: string }> }).content;
@@ -328,10 +327,9 @@ describe("McpServer", () => {
     const cfg = JSON.parse(content[0]!.text);
     expect(cfg.paperTrading).toBe(true);
     expect(cfg).not.toHaveProperty("walletPrivateKey");
-    expect(cfg).not.toHaveProperty("heliusApiKey");
   });
 
-  it("returns agent policy via prism_agent_policy tool", async () => {
+  it("returns agent policy via beam_agent_policy tool", async () => {
     const server = new McpServer(
       baseConfig(),
       mockAgentState({
@@ -372,7 +370,7 @@ describe("McpServer", () => {
       jsonrpc: "2.0",
       id: 6,
       method: "tools/call",
-      params: { name: "prism_agent_policy", arguments: {} },
+      params: { name: "beam_agent_policy", arguments: {} },
     });
 
     expect(response.error).toBeUndefined();
@@ -384,7 +382,7 @@ describe("McpServer", () => {
     expect(policy.circuitBreakerOpen).toBe(true);
   });
 
-  it("returns pending proposals via prism_pending_proposals tool", async () => {
+  it("returns pending proposals via beam_pending_proposals tool", async () => {
     const server = new McpServer(
       baseConfig(),
       mockAgentState({
@@ -441,7 +439,7 @@ describe("McpServer", () => {
       jsonrpc: "2.0",
       id: 7,
       method: "tools/call",
-      params: { name: "prism_pending_proposals", arguments: {} },
+      params: { name: "beam_pending_proposals", arguments: {} },
     });
 
     expect(response.error).toBeUndefined();
@@ -458,7 +456,7 @@ describe("McpServer", () => {
       jsonrpc: "2.0",
       id: 8,
       method: "tools/call",
-      params: { name: "prism_pending_proposals", arguments: { pool: "PoolB" } },
+      params: { name: "beam_pending_proposals", arguments: { pool: "PoolB" } },
     });
     expect(filtered.error).toBeUndefined();
     const filteredContent = (filtered.result as { content: ReadonlyArray<{ text: string }> })
@@ -497,10 +495,10 @@ describe("McpServer", () => {
       jsonrpc: "2.0",
       id,
       method: "tools/call",
-      params: { name: "prism_approve_proposals", arguments: args },
+      params: { name: "beam_approve_proposals", arguments: args },
     });
 
-  it("approves proposals via prism_approve_proposals tool", async () => {
+  it("approves proposals via beam_approve_proposals tool", async () => {
     const approvedIds: string[] = [];
     const server = new McpServer(
       baseConfig({ agentApprovalToken: "secret-approval" }),
@@ -519,7 +517,7 @@ describe("McpServer", () => {
     expect(approvedIds).toEqual(["id-1", "id-2"]);
   });
 
-  it("rejects prism_approve_proposals with an invalid approval token", async () => {
+  it("rejects beam_approve_proposals with an invalid approval token", async () => {
     const approvedIds: string[] = [];
     const server = new McpServer(
       baseConfig({ agentApprovalToken: "secret-approval" }),
@@ -536,7 +534,7 @@ describe("McpServer", () => {
     expect(approvedIds).toEqual([]);
   });
 
-  it("rejects prism_approve_proposals when no approval token is configured", async () => {
+  it("rejects beam_approve_proposals when no approval token is configured", async () => {
     const approvedIds: string[] = [];
     const server = new McpServer(baseConfig(), approveTestState(approvedIds));
 
@@ -584,7 +582,7 @@ describe("McpServer", () => {
     expect(approvedIds).toEqual([]);
   });
 
-  it("rejects prism_approve_proposals batches that exceed the configured limit", async () => {
+  it("rejects beam_approve_proposals batches that exceed the configured limit", async () => {
     const approvedIds: string[] = [];
     const server = new McpServer(
       baseConfig({ agentApprovalToken: "secret-approval", agentProposalMaxBatchSize: 2 }),

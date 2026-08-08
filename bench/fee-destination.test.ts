@@ -11,7 +11,7 @@ describe("fee destination routing", () => {
     expect(routeClaimedFees("compound")).toEqual({ kind: "compound" });
   });
 
-  it.each(["accumulate-quote", "accumulate-sol"] as const)(
+  it.each(["accumulate-quote", "accumulate-native"] as const)(
     "routes %s without compounding",
     (destination) => {
       expect(routeClaimedFees(destination)).toEqual({ kind: "accumulate", destination });
@@ -28,7 +28,7 @@ describe("fee destination routing", () => {
   it("summarizes successful Jupiter conversions", () => {
     expect(
       summarizeAccumulation(
-        "accumulate-sol",
+        "accumulate-native",
         [
           { inputMint: "token-x", amountAtomic: 10n, outputAtomic: 8n, signature: "sig-x" },
           { inputMint: "token-y", amountAtomic: 20n, outputAtomic: 16n, signature: "sig-y" },
@@ -36,7 +36,7 @@ describe("fee destination routing", () => {
         "sol",
       ),
     ).toEqual({
-      destination: "accumulate-sol",
+      destination: "accumulate-native",
       outputAtomic: 24n,
       txSignatures: ["sig-x", "sig-y"],
     });

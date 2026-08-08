@@ -17,7 +17,7 @@ function makeMockAdapter(overrides: Partial<AdapterApi> = {}): AdapterApi {
     getWalletBalanceUsd: () => Effect.succeed(0),
     getWalletHoldings: () =>
       Effect.succeed(new Map<string, { amountAtomic: bigint; decimals: number }>()),
-    getNativeSolBalance: () => Effect.succeed(0n),
+    getNativeBalance: () => Effect.succeed(0n),
     getTokenBalance: () => Effect.succeed(0n),
     getTokenPrices: () => Effect.succeed({}),
     getTokenDecimals: () => Effect.succeed(6),
@@ -42,7 +42,7 @@ function makeMockAdapter(overrides: Partial<AdapterApi> = {}): AdapterApi {
       }),
     discoverPools: () => Effect.succeed([]),
     reportFeeCollection: () => Effect.void,
-    swapUSDCForSOL: () => Effect.void,
+    swapUSDCForNative: () => Effect.void,
     ...overrides,
   };
 }

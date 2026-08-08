@@ -261,7 +261,7 @@ describe("migration v16 — pnl_accounting", () => {
   });
 
   it("adds PnL columns and position_events to an old-schema DB, preserving rows", () => {
-    const dir = mkdtempSync(join(tmpdir(), "prism-pnl-migration-"));
+    const dir = mkdtempSync(join(tmpdir(), "beam-pnl-migration-"));
     tmpDirs.push(dir);
     const dbPath = join(dir, "old.db");
 
@@ -657,7 +657,7 @@ function makeLiveAdapter(overrides: Partial<AdapterApi> = {}): AdapterApi {
     hasWallet: () => true,
     getWalletAddress: () => "Wallet111",
     getWalletBalanceUsd: () => Effect.succeed(10_000),
-    getNativeSolBalance: () => Effect.succeed(10_000_000_000n),
+    getNativeBalance: () => Effect.succeed(10_000_000_000n),
     getPoolState: () => Effect.fail(new Error("not used")),
     getBinArray: () => Effect.fail(new Error("not used")),
     getPositions: () => Effect.succeed([]),
@@ -707,7 +707,7 @@ function makeLiveAdapter(overrides: Partial<AdapterApi> = {}): AdapterApi {
       }),
     discoverPools: () => Effect.succeed([]),
     reportFeeCollection: () => Effect.void,
-    swapUSDCForSOL: () => Effect.void,
+    swapUSDCForNative: () => Effect.void,
     getTokenBalance: () => Effect.succeed(0n),
     getTokenPrices: () => Effect.succeed({}),
     getTokenDecimals: () => Effect.succeed(9),
@@ -810,7 +810,7 @@ describe("live lifecycle PnL accounting", () => {
           revenueConfigSvc: liveRevenueConfig,
           trackedPositions,
           entryPrep: liveEntryPrep,
-          solPriceUsd: 150,
+          nativePriceUsd: 150,
           entryStrategyShape: "spot" as const,
         };
 
@@ -922,7 +922,7 @@ describe("live lifecycle PnL accounting", () => {
           revenueConfigSvc: liveRevenueConfig,
           trackedPositions,
           entryPrep: liveEntryPrep,
-          solPriceUsd: 150,
+          nativePriceUsd: 150,
           entryStrategyShape: "spot" as const,
         };
         const enter = yield* executeLive(
@@ -1160,7 +1160,7 @@ describe("live lifecycle PnL accounting", () => {
             revenueConfigSvc: liveRevenueConfig,
             trackedPositions,
             entryPrep: liveEntryPrep,
-            solPriceUsd: 150,
+            nativePriceUsd: 150,
             entryStrategyShape: "spot" as const,
             reconcileRequestedPools,
           },

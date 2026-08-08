@@ -218,7 +218,7 @@ describe("DbService — atomic settlement finalization", () => {
       poolAddress: position.poolAddress,
       tokenMint: "mint-1",
       amountAtomic: "1000000",
-      destinationAsset: "SOL",
+      destinationAsset: "ETH",
       status: "confirmed",
       attempts: 1,
       nextRetryAt: null,

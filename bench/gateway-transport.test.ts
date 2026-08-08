@@ -183,12 +183,12 @@ describe("GatewayTransport (OpenClaw protocol v4)", () => {
         positions: [],
         recentDecisions: [],
         warnings: [],
-        market: { solPriceUsd: 150, gasEstimateSol: 0.01, scanCount: 1, uptimeMs: 1000 },
+        market: { nativePriceUsd: 150, gasEstimateNative: 0.01, scanCount: 1, uptimeMs: 1000 },
       };
       await Effect.runPromise(transport.sendCheckin(checkin));
 
       expect(typeof received.systemEvent?.text).toBe("string");
-      expect(String(received.systemEvent?.text)).toContain("Prism check-in (periodic)");
+      expect(String(received.systemEvent?.text)).toContain("Beam check-in (periodic)");
 
       await Effect.runPromise(transport.disconnect());
     } finally {

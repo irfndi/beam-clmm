@@ -5,8 +5,8 @@ describe("evaluateGasGate (F1 gas-aware rebalancing)", () => {
   it("approves rebalance when gas cost is small vs 3 days of fees", () => {
     // gas=$1.50, daily fees=$2 → gas < 3 * 2 = $6 → approve
     const result = evaluateGasGate({
-      rebalanceGasCostSol: 0.01,
-      solPriceUsd: 150,
+      rebalanceGasCostNative: 0.01,
+      nativePriceUsd: 150,
       positionDailyFeesUsd: 2,
       minDaysOfFeesPaidAhead: 3,
     });
@@ -17,8 +17,8 @@ describe("evaluateGasGate (F1 gas-aware rebalancing)", () => {
   it("rejects rebalance when gas cost exceeds 3 days of fees", () => {
     // gas=$1.50, daily fees=$0.40 → 3*0.40 = $1.20 < $1.50 → reject
     const result = evaluateGasGate({
-      rebalanceGasCostSol: 0.01,
-      solPriceUsd: 150,
+      rebalanceGasCostNative: 0.01,
+      nativePriceUsd: 150,
       positionDailyFeesUsd: 0.4,
       minDaysOfFeesPaidAhead: 3,
     });
@@ -31,8 +31,8 @@ describe("evaluateGasGate (F1 gas-aware rebalancing)", () => {
   it("rejects when daily fees are zero (fail-closed for zero-fee pools)", () => {
     // 3 * 0 = 0, gas = $1.50 → reject (don't rebalance for zero-fee pool)
     const result = evaluateGasGate({
-      rebalanceGasCostSol: 0.01,
-      solPriceUsd: 150,
+      rebalanceGasCostNative: 0.01,
+      nativePriceUsd: 150,
       positionDailyFeesUsd: 0,
       minDaysOfFeesPaidAhead: 3,
     });
@@ -42,8 +42,8 @@ describe("evaluateGasGate (F1 gas-aware rebalancing)", () => {
   it("respects custom minDaysOfFeesPaidAhead", () => {
     // gas=$1.50, daily fees=$1, min=2 → 2*1 = $2 > $1.50 → approve
     const result = evaluateGasGate({
-      rebalanceGasCostSol: 0.01,
-      solPriceUsd: 150,
+      rebalanceGasCostNative: 0.01,
+      nativePriceUsd: 150,
       positionDailyFeesUsd: 1,
       minDaysOfFeesPaidAhead: 2,
     });
@@ -52,8 +52,8 @@ describe("evaluateGasGate (F1 gas-aware rebalancing)", () => {
 
   it("computes gas cost from SOL price correctly", () => {
     const result = evaluateGasGate({
-      rebalanceGasCostSol: 0.05,
-      solPriceUsd: 200,
+      rebalanceGasCostNative: 0.05,
+      nativePriceUsd: 200,
       positionDailyFeesUsd: 100,
       minDaysOfFeesPaidAhead: 3,
     });

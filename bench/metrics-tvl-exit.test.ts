@@ -43,7 +43,7 @@ describe("evaluatePool TVL-drop EXIT (integration)", () => {
       getWalletBalanceUsd: () => Effect.succeed(10_000),
       getWalletHoldings: () =>
         Effect.succeed(new Map<string, { amountAtomic: bigint; decimals: number }>()),
-      getNativeSolBalance: () => Effect.succeed(0n),
+      getNativeBalance: () => Effect.succeed(0n),
       getPoolState: () =>
         Effect.succeed(
           makePool({ address: POOL, tvlUsd: 60_000, currentPrice: 150, fees24hUsd: 300 }),
@@ -93,7 +93,7 @@ describe("evaluatePool TVL-drop EXIT (integration)", () => {
         }),
       discoverPools: () => Effect.succeed([]),
       reportFeeCollection: () => Effect.void,
-      swapUSDCForSOL: () => Effect.void,
+      swapUSDCForNative: () => Effect.void,
       getTokenBalance: () => Effect.succeed(0n),
       getTokenPrices: () => Effect.succeed({}),
       getTokenDecimals: () => Effect.succeed(9),

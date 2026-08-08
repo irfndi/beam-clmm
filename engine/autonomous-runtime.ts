@@ -1,6 +1,6 @@
 import { randomUUID } from "crypto";
 import { Effect } from "effect";
-import { SOL_MINT } from "./constants.js";
+import { NATIVE_MINT } from "./constants.js";
 import { createLogger } from "./logger.js";
 import { computeNetRealizedPnlUsd } from "./pnl.js";
 import type { AdapterApi, DbApi } from "./services.js";
@@ -106,7 +106,7 @@ export function decayExecutionFailureCounter(
  * (issue #182). The trigger is a session-local counter that resets on
  * restart, on every successful execution, and (via
  * decayExecutionFailureCounter) after every quiet cycle — but an armed
- * pause was a permanent one-way latch that only `prism resume` could
+ * pause was a permanent one-way latch that only `beam resume` could
  * clear, so a single transient failure spike (rate limits, RPC blips, a
  * pre-fix batch of doomed entries) halted the agent forever, surviving
  * restarts (fresh counter) and fixed releases. Mirrors the issue #148
@@ -144,7 +144,7 @@ export function shouldAutoResolveExecutionFailuresPause(
 /**
  * Mode-aware auto-resolution for a latched `daily_drawdown` safety pause
  * (issue #148). The daily equity baseline re-seeds every day, but nothing
- * ever re-evaluated an existing pause — only `prism resume` could clear it,
+ * ever re-evaluated an existing pause — only `beam resume` could clear it,
  * so the pause silently latched into new days. This mirrors the autonomy
  * contract:
  *
@@ -186,7 +186,7 @@ export function nextSettlementRetryAt(now: number, attempts: number): number {
  * Age in ms of the oldest ACTIVE settlement job. `confirmed` and `terminal`
  * are final states: a dead-end terminal job (e.g. a failed rollback) must not
  * keep the `settlement_overdue` safety pause latched forever after
- * `prism resume` (issue #167). Returns 0 when no active jobs remain.
+ * `beam resume` (issue #167). Returns 0 when no active jobs remain.
  */
 export function oldestActiveSettlementAgeMs(
   jobs: ReadonlyArray<SettlementJobRecord>,
@@ -280,7 +280,7 @@ const TRANSIENT_NETWORK =
 export function isTransientSettlementError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
   // Anchored to HTTP-status context — a bare \b\d{3}\b would classify
-  // deterministic messages like "need 500 lamports" as transient and retry
+  // deterministic RPC/execution messages as transient and retry
   // them forever instead of terminalizing.
   return TRANSIENT_HTTP_STATUS.test(message) || TRANSIENT_NETWORK.test(message);
 }
@@ -363,8 +363,8 @@ export function processSettlementJobs(
             if (input.adapter.getConfirmedSwapOutput) {
               const evidence = yield* input.adapter.getConfirmedSwapOutput(job.txSignature);
               if (evidence && evidence.outputAtomic > 0n) {
-                const prices = yield* input.adapter.getTokenPrices([SOL_MINT]);
-                const solPriceUsd = prices[SOL_MINT] ?? 0;
+                const prices = yield* input.adapter.getTokenPrices([NATIVE_MINT]);
+                const solPriceUsd = prices[NATIVE_MINT] ?? 0;
                 if (solPriceUsd > 0) {
                   const outputUsd = atomicUsd(evidence.outputAtomic, 9, solPriceUsd);
                   const executionCostUsd = atomicUsd(evidence.feeAtomic, 9, solPriceUsd);
@@ -436,10 +436,10 @@ export function processSettlementJobs(
           );
         }
         const amountAtomic = BigInt(job.amountAtomic);
-        const prices = yield* input.adapter.getTokenPrices([job.tokenMint, SOL_MINT]);
-        const solPriceUsd = prices[SOL_MINT] ?? 0;
+        const prices = yield* input.adapter.getTokenPrices([job.tokenMint, NATIVE_MINT]);
+        const solPriceUsd = prices[NATIVE_MINT] ?? 0;
         if (!(solPriceUsd > 0)) return yield* Effect.fail(new Error("SOL price unavailable"));
-        if (job.tokenMint === SOL_MINT) {
+        if (job.tokenMint === NATIVE_MINT) {
           return {
             ...job,
             status: "confirmed" as const,
@@ -479,7 +479,7 @@ export function processSettlementJobs(
         // must not be dust-confirmed, because finalizing its group would book
         // a full PnL loss while the tokens still sit in the wallet. Real
         // positions fall through to the quote path (bounded retries, then
-        // terminal on expiry — operator-visible via prism status), and the
+        // terminal on expiry — operator-visible via beam status), and the
         // orphan sweep skips unpriceable holdings, so the 400 loop stays dead.
         const syntheticSettlementGroup =
           job.positionId.startsWith("orphan:") || job.positionId.startsWith("rollback:");
@@ -505,13 +505,13 @@ export function processSettlementJobs(
         }
         const quote = yield* quoteSwap({
           inputMint: job.tokenMint,
-          outputMint: SOL_MINT,
+          outputMint: NATIVE_MINT,
           amountAtomic,
           slippageBps: input.maxSwapSlippageBps,
         });
         const prepared = yield* prepareSwap(quote);
         yield* simulateSwap(prepared);
-        const nativeBefore = yield* input.adapter.getNativeSolBalance();
+        const nativeBefore = yield* input.adapter.getNativeBalance();
         yield* input.db.saveSettlementJob({
           ...job,
           status: "prepared",
@@ -535,7 +535,7 @@ export function processSettlementJobs(
         });
         submitted = true;
         capturedSignature = signature;
-        const nativeAfter = yield* input.adapter.getNativeSolBalance();
+        const nativeAfter = yield* input.adapter.getNativeBalance();
         const confirmedOutputAtomic = nativeAfter > nativeBefore ? nativeAfter - nativeBefore : 0n;
         capturedConfirmedOutputAtomic = confirmedOutputAtomic;
         if (confirmedOutputAtomic <= 0n) {
@@ -657,7 +657,7 @@ export function sweepOrphanSettlements(
         ),
       );
     const candidates = [...holdings.entries()].filter(
-      ([mint, holding]) => mint !== SOL_MINT && holding.amountAtomic > 0n,
+      ([mint, holding]) => mint !== NATIVE_MINT && holding.amountAtomic > 0n,
     );
     if (candidates.length === 0) return [];
     const existingJobs = yield* input.db
@@ -728,7 +728,7 @@ export function sweepOrphanSettlements(
     );
     const jobs: SettlementJobRecord[] = [];
     for (const [mint, holding] of holdings) {
-      if (mint === SOL_MINT || holding.amountAtomic <= 0n) continue;
+      if (mint === NATIVE_MINT || holding.amountAtomic <= 0n) continue;
       if (backedMints.has(mint)) continue;
       const priceUsd = prices[mint] ?? 0;
       if (

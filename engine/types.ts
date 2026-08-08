@@ -1,6 +1,6 @@
 export type AutonomousTokenMode = "off" | "shadow" | "canary" | "live";
 
-export type SettlementAsset = "SOL";
+export type SettlementAsset = "ETH";
 
 export type TokenCandidateState =
   | "discovered"

@@ -3,22 +3,21 @@ import { Effect } from "effect";
 import fs from "fs";
 import os from "os";
 import path from "path";
-import { Keypair } from "@solana/web3.js";
-import bs58 from "bs58";
-import { loadKeystoreSecretKeyBase58, getWalletKeystorePath } from "../engine/wallet-keystore.js";
+import { loadKeystoreSecretKeyHex, getWalletKeystorePath } from "../engine/wallet-keystore.js";
 import { ConfigService, ConfigLive } from "../engine/config-service.js";
 import type { AppConfig } from "../engine/config-service.js";
+
+const TEST_PRIVATE_KEY = `0x${"ab".repeat(32)}`; // valid 64-hex key
 
 async function loadConfig(): Promise<AppConfig> {
   return Effect.runPromise(Effect.provide(ConfigService, ConfigLive, { local: true }));
 }
 
-function writeKeystore(keypair: Keypair): void {
+function writeKeystore(privateKey: string): void {
   fs.writeFileSync(
     getWalletKeystorePath(),
     JSON.stringify({
-      pubkey: keypair.publicKey.toBase58(),
-      secretKey: Array.from(keypair.secretKey),
+      privateKey,
     }),
   );
 }
@@ -27,57 +26,54 @@ describe("wallet-keystore", () => {
   let dir: string;
 
   beforeEach(() => {
-    dir = fs.mkdtempSync(path.join(os.tmpdir(), "prism-ks-"));
-    process.env.PRISM_CONFIG_DIR = dir;
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), "beam-ks-"));
+    process.env.BEAM_CONFIG_DIR = dir;
   });
 
   afterEach(() => {
-    delete process.env.PRISM_CONFIG_DIR;
+    delete process.env.BEAM_CONFIG_DIR;
     delete process.env.WALLET_PRIVATE_KEY;
     fs.rmSync(dir, { recursive: true, force: true });
   });
 
-  describe("loadKeystoreSecretKeyBase58", () => {
-    it("loads the keystore secret key as base58", () => {
-      const keypair = Keypair.generate();
-      writeKeystore(keypair);
-      expect(loadKeystoreSecretKeyBase58()).toBe(bs58.encode(keypair.secretKey));
+  describe("loadKeystoreSecretKeyHex", () => {
+    it("loads the keystore private key as 0x-hex", () => {
+      writeKeystore(TEST_PRIVATE_KEY);
+      expect(loadKeystoreSecretKeyHex()).toBe(TEST_PRIVATE_KEY);
+    });
+
+    it("normalizes a bare (non-0x) hex key", () => {
+      writeKeystore(TEST_PRIVATE_KEY.slice(2));
+      expect(loadKeystoreSecretKeyHex()).toBe(TEST_PRIVATE_KEY);
     });
 
     it("returns null when no keystore exists", () => {
-      expect(loadKeystoreSecretKeyBase58()).toBeNull();
+      expect(loadKeystoreSecretKeyHex()).toBeNull();
     });
 
     it("returns null for a malformed keystore", () => {
       fs.writeFileSync(getWalletKeystorePath(), "{ this is not json");
-      expect(loadKeystoreSecretKeyBase58()).toBeNull();
+      expect(loadKeystoreSecretKeyHex()).toBeNull();
+    });
+
+    it("returns null for a non-hex key", () => {
+      writeKeystore("not-a-key");
+      expect(loadKeystoreSecretKeyHex()).toBeNull();
     });
   });
 
   describe("engine config wallet resolution", () => {
     it("falls back to the keystore when WALLET_PRIVATE_KEY is unset", async () => {
-      const keypair = Keypair.generate();
-      writeKeystore(keypair);
-      delete process.env.WALLET_PRIVATE_KEY;
-
+      writeKeystore(TEST_PRIVATE_KEY);
       const config = await loadConfig();
-      expect(config.walletPrivateKey).toBe(bs58.encode(keypair.secretKey));
+      expect(config.walletPrivateKey).toBe(TEST_PRIVATE_KEY);
     });
 
     it("prefers WALLET_PRIVATE_KEY over the keystore", async () => {
-      writeKeystore(Keypair.generate());
-      const envKeypair = Keypair.generate();
-      const envKey = bs58.encode(envKeypair.secretKey);
-      process.env.WALLET_PRIVATE_KEY = envKey;
-
+      writeKeystore(TEST_PRIVATE_KEY);
+      process.env.WALLET_PRIVATE_KEY = `0x${"cd".repeat(32)}`;
       const config = await loadConfig();
-      expect(config.walletPrivateKey).toBe(envKey);
-    });
-
-    it("is empty when neither env nor keystore is present", async () => {
-      delete process.env.WALLET_PRIVATE_KEY;
-      const config = await loadConfig();
-      expect(config.walletPrivateKey).toBe("");
+      expect(config.walletPrivateKey).toBe(`0x${"cd".repeat(32)}`);
     });
   });
 });

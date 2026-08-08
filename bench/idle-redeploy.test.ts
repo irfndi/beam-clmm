@@ -43,7 +43,7 @@ import {
   type MeteoraPoolStats,
 } from "../engine/services.js";
 import type { PoolState } from "../engine/types.js";
-import { USDC_MINT } from "../engine/constants.js";
+import { STABLECOIN_MINT } from "../engine/constants.js";
 import { defaultAppConfig, makePool, makeBinArray } from "./helpers.js";
 
 // ─── Pure entry sizing ───────────────────────────────────────────────────────
@@ -189,7 +189,7 @@ function makeProgramAdapter(
     getWalletBalanceUsd: () => Effect.succeed(10_000),
     getWalletHoldings: () =>
       Effect.succeed(new Map<string, { amountAtomic: bigint; decimals: number }>()),
-    getNativeSolBalance: () => Effect.succeed(0n),
+    getNativeBalance: () => Effect.succeed(0n),
     getPoolState: (addr: string) => {
       const pool = pools[addr];
       return pool ? Effect.succeed(pool) : Effect.fail(new Error(`unknown pool ${addr}`));
@@ -229,7 +229,7 @@ function makeProgramAdapter(
       Effect.succeed({ skipped: true, skipReason: "none", txSignatures: [], rewards: [] }),
     discoverPools: () => Effect.succeed([]),
     reportFeeCollection: () => Effect.void,
-    swapUSDCForSOL: () => Effect.void,
+    swapUSDCForNative: () => Effect.void,
     getTokenBalance: () => Effect.succeed(0n),
     getTokenPrices: () => Effect.succeed({}),
     getTokenDecimals: () => Effect.succeed(9),
@@ -447,7 +447,7 @@ describe("program — idle-capital auto-redeploy gate", () => {
           getWalletHoldings: () =>
             Effect.succeed(
               new Map<string, { amountAtomic: bigint; decimals: number }>([
-                [USDC_MINT, { amountAtomic: 20_000_000_000n, decimals: 6 }], // $20k idle
+                [STABLECOIN_MINT, { amountAtomic: 20_000_000_000n, decimals: 6 }], // $20k idle
               ]),
             ),
         },
@@ -854,14 +854,14 @@ describe("program — idle-redeploy entry-backoff guard (P2)", () => {
     // isInsufficientTokenBalanceError match) — arming the backoff THIS cycle,
     // after the candidate was captured at decision-build time.
     const usdcHoldings = new Map<string, { amountAtomic: bigint; decimals: number }>();
-    usdcHoldings.set(USDC_MINT, { amountAtomic: 9_500_000_000n, decimals: 6 }); // $9,500 idle
+    usdcHoldings.set(STABLECOIN_MINT, { amountAtomic: 9_500_000_000n, decimals: 6 }); // $9,500 idle
     const layer = makeProgramLayer({
       adapter: makeProgramAdapter(
         { [POOL]: makePool({ address: POOL }) },
         {
           hasWallet: () => true,
           getWalletHoldings: () => Effect.succeed(usdcHoldings),
-          getNativeSolBalance: () => Effect.succeed(0n),
+          getNativeBalance: () => Effect.succeed(0n),
         },
       ),
       datapi: { getPoolData: () => Effect.succeed(makeDatapiStats()) },

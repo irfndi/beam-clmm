@@ -19,9 +19,8 @@ function buildLayer(
 ) {
   const mockConfig = Layer.succeed(ConfigService, {
     walletPrivateKey: "",
-    heliusApiKey: "",
-    solanaRpcUrl: "",
-    solanaRpcFallbackUrl: "",
+    rpcUrl: "",
+    rpcFallbackUrl: "",
     paperTrading: true,
     ...AUTONOMOUS_TOKEN_CONFIG_DEFAULTS,
     scanIntervalMs: 600_000,
@@ -63,8 +62,8 @@ function buildLayer(
     meteoraPoolsUrl:
       "https://dlmm.datapi.meteora.ag/pools?page=1&page_size=1000&filter_by=is_blacklisted=false&sort_by=tvl:desc",
     meteoraDatapiBaseUrl: "https://dlmm.datapi.meteora.ag",
-    rebalanceGasCostSol: 0.01,
-    solPriceUsd: 150,
+    rebalanceGasCostNative: 0.01,
+    nativePriceUsd: 150,
     gasAwareMinDaysOfFeesPaidAhead: 3,
     volatilityExitStddev: 5,
     volatilityLookbackSnapshots: 12,
