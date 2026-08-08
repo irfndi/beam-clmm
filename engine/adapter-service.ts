@@ -73,7 +73,7 @@ const v3PoolAbi = parseAbi([
   "function liquidity() view returns (uint128)",
 ]);
 const tickLensAbi = parseAbi([
-  "function getPopulatedTicksInWord(address pool, int16 tickBitmapIndex) view returns (tuple(int24,int128,uint128)[])",
+  "function getPopulatedTicksInWord(address pool, int16 tickBitmapIndex) view returns ((int24,int128,uint128)[])",
 ]);
 const v3NpmAbi = parseAbi([
   "function balanceOf(address) view returns (uint256)",
@@ -81,9 +81,9 @@ const v3NpmAbi = parseAbi([
   "function positions(uint256) view returns (uint96 nonce, address operator, address token0, address token1, uint24 fee, int24 tickLower, int24 tickUpper, uint128 liquidity, uint256 feeGrowthInside0LastX128, uint256 feeGrowthInside1LastX128, uint128 tokensOwed0, uint128 tokensOwed1)",
 ]);
 const v4PoolManagerAbi = parseAbi([
-  "function getSlot0(tuple(address,address,uint24,int24,address) key) view returns (uint160,int24,uint16,uint24)",
-  "function getLiquidity(tuple(address,address,uint24,int24,address) key) view returns (uint128)",
-  "function getPool(tuple(address,address,uint24,int24,address) key) view returns (uint256)",
+  "function getSlot0((address,address,uint24,int24,address) key) view returns (uint160,int24,uint16,uint24)",
+  "function getLiquidity((address,address,uint24,int24,address) key) view returns (uint128)",
+  "function getPool((address,address,uint24,int24,address) key) view returns (uint256)",
 ]);
 const v4PositionManagerAbi = parseAbi([
   "function balanceOf(address) view returns (uint256)",

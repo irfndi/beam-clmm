@@ -13,16 +13,16 @@ let customSQLiteConfigured = false;
 
 /**
  * Actionable remediation for sqlite-vec load failures. Shared by the runtime
- * warn paths below and the loud `prism doctor` memory check (cli/doctor.ts).
+ * warn paths below and the loud `beam doctor` memory check (cli/doctor.ts).
  */
 export function vecRemediationHint(platform: string = process.platform): string {
   if (platform === "darwin") {
-    return "Install an extension-capable SQLite (macOS: `brew install sqlite`) and restart; release bundles ship lib/vec0.dylib, so verify PRISM_VEC0_PATH (set by the prism wrapper) and run `prism doctor`.";
+    return "Install an extension-capable SQLite (macOS: `brew install sqlite`) and restart; release bundles ship lib/vec0.dylib, so verify BEAM_VEC0_PATH (set by the beam wrapper) and run `beam doctor`.";
   }
   if (platform === "linux") {
-    return "Install an extension-capable SQLite (Linux: `apt-get install -y libsqlite3-0` or `dnf install -y sqlite-libs`) and restart; release bundles ship lib/vec0.so, so verify PRISM_VEC0_PATH and run `prism doctor`.";
+    return "Install an extension-capable SQLite (Linux: `apt-get install -y libsqlite3-0` or `dnf install -y sqlite-libs`) and restart; release bundles ship lib/vec0.so, so verify BEAM_VEC0_PATH and run `beam doctor`.";
   }
-  return "Install an extension-capable SQLite (compiled with loadable-extension support) and restart; verify PRISM_VEC0_PATH and run `prism doctor`.";
+  return "Install an extension-capable SQLite (compiled with loadable-extension support) and restart; verify BEAM_VEC0_PATH and run `beam doctor`.";
 }
 
 function setupCustomSQLite() {
@@ -37,7 +37,7 @@ function setupCustomSQLite() {
     // Apple's /usr/lib library: Homebrew first, then MacPorts /opt/local (a real
     // extension-capable install). Apple's /usr/lib library is the LAST RESORT — it
     // has no on-disk file (dyld shared cache) yet still dlopens, only to fail vec0
-    // loading, which prism doctor then reports loudly. Probing Apple first would win
+    // loading, which beam doctor then reports loudly. Probing Apple first would win
     // the one-shot selection on a MacPorts-only box and kill vector memory.
     const brewPrefix = process.arch === "arm64" ? "/opt/homebrew" : "/usr/local";
     const otherBrewPrefix = process.arch === "arm64" ? "/usr/local" : "/opt/homebrew";
@@ -96,7 +96,7 @@ function setupCustomSQLite() {
   }
 }
 
-export function createDatabase(dbPath = "./prism.db"): Database {
+export function createDatabase(dbPath = "./beam.db"): Database {
   setupCustomSQLite();
   fs.mkdirSync(path.dirname(path.resolve(dbPath)), { recursive: true });
   const db = new Database(dbPath);
@@ -112,13 +112,13 @@ export function createDatabase(dbPath = "./prism.db"): Database {
       loadVec(db);
       vecLoaded = true;
     } catch (e) {
-      const envPath = process.env.PRISM_VEC0_PATH;
+      const envPath = process.env.BEAM_VEC0_PATH;
       if (envPath) {
         try {
           db.loadExtension(envPath);
           vecLoaded = true;
         } catch (envErr) {
-          logger.warn("PRISM_VEC0_PATH sqlite-vec extension could not be loaded", {
+          logger.warn("BEAM_VEC0_PATH sqlite-vec extension could not be loaded", {
             error: envErr instanceof Error ? envErr.message : String(envErr),
             hint: vecRemediationHint(),
           });
@@ -165,7 +165,7 @@ export function createDatabase(dbPath = "./prism.db"): Database {
   return db;
 }
 
-// ─── sqlite-vec availability probe (prism doctor) ───────────────────────────
+// ─── sqlite-vec availability probe (beam doctor) ───────────────────────────
 
 export interface VecProbeResult {
   readonly available: boolean;
@@ -194,7 +194,7 @@ function vecTableCreateAndQueryError(db: Database): string | null {
 /**
  * Probe sqlite-vec availability without touching any on-disk database file.
  * Mirrors createDatabase()'s extension chain — sqlite-vec npm package, then
- * PRISM_VEC0_PATH, then the embedded base64 fallback — against a throwaway
+ * BEAM_VEC0_PATH, then the embedded base64 fallback — against a throwaway
  * :memory: database and verifies vec_memory can be created and queried.
  * Deliberately ignores (and does not set) the sqliteVecEverFailed latch, so
  * it can run in the doctor CLI process independently of the engine.
@@ -227,7 +227,7 @@ export function probeVecAvailability(): VecProbeResult {
       failures.push(`npm: ${probeErrorMessage(err)}`);
     }
 
-    const envPath = process.env.PRISM_VEC0_PATH;
+    const envPath = process.env.BEAM_VEC0_PATH;
     if (envPath) {
       try {
         db.loadExtension(envPath);
@@ -865,7 +865,7 @@ const MIGRATIONS: ReadonlyArray<Migration> = [
           pool_address TEXT NOT NULL,
           token_mint TEXT NOT NULL,
           amount_atomic TEXT NOT NULL,
-          destination_asset TEXT NOT NULL CHECK (destination_asset = 'SOL'),
+          destination_asset TEXT NOT NULL CHECK (destination_asset = 'ETH'),
           status TEXT NOT NULL CHECK (
             status IN ('pending', 'prepared', 'submitted', 'confirmed', 'retryable', 'terminal')
           ),
@@ -930,6 +930,62 @@ const MIGRATIONS: ReadonlyArray<Migration> = [
       }
       if (hasTable(db, "positions") && !hasColumn(db, "positions", "invalidation_stop_price")) {
         db.exec("ALTER TABLE positions ADD COLUMN invalidation_stop_price REAL");
+      }
+    },
+  },
+  {
+    version: 23,
+    name: "settlement_destination_eth",
+    up(db) {
+      // v22 and earlier constrained destination_asset to 'SOL' (Solana era).
+      // SQLite cannot alter a CHECK constraint — rebuild the table. The new
+      // CHECK accepts the native gas token of Robinhood Chain (ETH).
+      const existing = db.query("SELECT sql FROM sqlite_master WHERE type='table' AND name='settlement_jobs'").get() as { sql: string } | undefined;
+      if (existing && existing.sql.includes("'SOL'")) {
+        db.exec("ALTER TABLE settlement_jobs RENAME TO settlement_jobs_old");
+        db.exec(`
+          CREATE TABLE settlement_jobs (
+            id TEXT PRIMARY KEY,
+            wallet_address TEXT NOT NULL,
+            agent_instance_id TEXT NOT NULL,
+            position_id TEXT NOT NULL,
+            pool_address TEXT NOT NULL,
+            token_mint TEXT NOT NULL,
+            amount_atomic TEXT NOT NULL,
+            destination_asset TEXT NOT NULL CHECK (destination_asset = 'ETH'),
+            status TEXT NOT NULL CHECK (
+              status IN ('pending', 'prepared', 'submitted', 'confirmed', 'retryable', 'terminal')
+            ),
+            attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+            next_retry_at INTEGER,
+            tx_signature TEXT,
+            expires_at INTEGER NOT NULL,
+            created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+            updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
+            confirmed_output_atomic TEXT,
+            output_usd REAL,
+            execution_cost_usd REAL,
+            finalized_at INTEGER,
+            realized_pnl_usd REAL
+          )
+        `);
+        db.exec(`
+          INSERT INTO settlement_jobs (
+            id, wallet_address, agent_instance_id, position_id, pool_address,
+            token_mint, amount_atomic, destination_asset, status, attempts,
+            next_retry_at, tx_signature, expires_at, created_at, updated_at,
+            confirmed_output_atomic, output_usd, execution_cost_usd,
+            finalized_at, realized_pnl_usd
+          )
+          SELECT
+            id, wallet_address, agent_instance_id, position_id, pool_address,
+            token_mint, amount_atomic, 'ETH', status, attempts,
+            next_retry_at, tx_signature, expires_at, created_at, updated_at,
+            confirmed_output_atomic, output_usd, execution_cost_usd,
+            finalized_at, realized_pnl_usd
+          FROM settlement_jobs_old
+        `);
+        db.exec("DROP TABLE settlement_jobs_old");
       }
     },
   },
