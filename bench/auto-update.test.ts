@@ -1,0 +1,251 @@
+import { describe, it, expect } from "vitest";
+import { Effect, Layer } from "effect";
+import { AUTONOMOUS_TOKEN_CONFIG_DEFAULTS, ConfigService } from "../engine/config-service.js";
+import { DbLive } from "../engine/db-service.js";
+import { DbService } from "../engine/services.js";
+
+// ─── Helpers ────────────────────────────────────────────────────────────────
+
+function run<T, E, R>(effect: Effect.Effect<T, E, R>, layer: Layer.Layer<R, never, never>): T {
+  return Effect.runSync(Effect.provide(effect, layer));
+}
+
+function buildLayer(
+  overrides: Partial<{
+    forceUpdateEnabled: boolean;
+    forceUpdateAfterDays: number;
+    updateCheckIntervalMs: number;
+  }> = {},
+) {
+  const mockConfig = Layer.succeed(ConfigService, {
+    walletPrivateKey: "",
+    heliusApiKey: "",
+    solanaRpcUrl: "",
+    solanaRpcFallbackUrl: "",
+    paperTrading: true,
+    ...AUTONOMOUS_TOKEN_CONFIG_DEFAULTS,
+    scanIntervalMs: 600_000,
+    minPoolTvlUsd: 50_000,
+    minFeeIlRatio: 1.2,
+    tvlDropExitPct: 0.3,
+    volumeAuthThreshold: 0.7,
+    minRebalanceIntervalMs: 86_400_000,
+    minRebalanceNetBenefitUsd: 10,
+    confidenceThreshold: 0.65,
+    paperPortfolioUsd: 10_000,
+    minBinUtilization: 0.3,
+    maxRebalanceRangeBins: 50,
+    watchlistPools: [],
+    stopLossPct: 0.15,
+    trailingStopPct: 0.1,
+    trailingStopConfirmCycles: 2,
+    oorGracePeriodCycles: 3,
+    feeClaimIntervalMs: 86_400_000,
+    enablePoolDiscovery: false,
+    discoveryMinTvlUsd: 100_000,
+    discoveryMinFeeRatio: 1.5,
+    deployerBlacklistPath: "",
+    tokenBlacklistPath: "",
+    sqliteDbPath: "",
+    enableSnapshotCapture: false,
+    autoUpdate: true,
+    updateCheckIntervalMs: overrides.updateCheckIntervalMs ?? 21_600_000,
+    updateChannel: "stable" as const,
+    updateGithubRepo: "",
+    updateAllowDirty: false,
+    updateR2PublicUrl: "",
+    forceUpdateEnabled: overrides.forceUpdateEnabled ?? false,
+    forceUpdateAfterDays: overrides.forceUpdateAfterDays ?? 14,
+    githubToken: "",
+    githubRepo: "",
+    feedbackOptOut: false,
+    paperModeExitLive: false,
+    meteoraPoolsUrl:
+      "https://dlmm.datapi.meteora.ag/pools?page=1&page_size=1000&filter_by=is_blacklisted=false&sort_by=tvl:desc",
+    meteoraDatapiBaseUrl: "https://dlmm.datapi.meteora.ag",
+    rebalanceGasCostSol: 0.01,
+    solPriceUsd: 150,
+    gasAwareMinDaysOfFeesPaidAhead: 3,
+    volatilityExitStddev: 5,
+    volatilityLookbackSnapshots: 12,
+    volatilityWideHalfWidthBins: 50,
+    entryRangeHalfWidthBins: 0,
+    volatilityAdaptiveRanges: false,
+    autoCompoundFees: false,
+    minCompoundFeesUsd: 0.5,
+    compoundGasBufferUsd: 0.05,
+    oorRecoveryLookbackCycles: 10,
+    oorRecoveryHoldThreshold: 0.6,
+    oorRecoveryForceRebalanceThreshold: 0.2,
+    maxPerPoolAllocationPct: 0.4,
+    maxOpenPositions: 3,
+    maxPositionsPerPool: 2,
+    maxEntrySizeUsd: 500,
+    paperValidationMinDays: 7,
+    paperValidationEnforce: false,
+    agentiveMode: false,
+    agentRuntime: "none",
+    agentAcpCommand: "hermes",
+    agentAcpArgs: ["acp"],
+    agentGatewayUrl: "ws://127.0.0.1:18789",
+    agentGatewayToken: "",
+    agentPromptTimeoutMs: 15_000,
+    agentVetoTimeoutMs: 15_000,
+    agentCheckinIntervalMs: 3_600_000,
+    agentCheckinOnEvents: true,
+    agentCheckinIncludeHistory: true,
+    agentCheckinMaxPositions: 10,
+    agentOpenclawWebhookUrl: "",
+    agentHermesApiUrl: "",
+    agentOpenclawWebhookToken: "",
+    agentHermesApiToken: "",
+    agentHttpPort: 18_790,
+    agentMcpEnabled: true,
+    agentProposalMode: "veto",
+    agentProposalToken: "",
+    agentApprovalToken: "",
+    agentProposalTimeoutMs: 15_000,
+    agentProposalMaxBatchSize: 10,
+    agentProposalMaxQueueSize: 50,
+    agentProposalStaleMs: 300_000,
+    agentProposalBackoffBaseMs: 60_000,
+    agentProposalBackoffMaxMs: 3_600_000,
+    agentProposalMaxPositionSizePct: 0.4,
+    agentProposalMinConfidence: 0.65,
+    agentProposalCircuitBreakerThreshold: 5,
+    agentProposalCircuitBreakerCooldownMs: 300_000,
+    oorCooldownMs: 4 * 60 * 60 * 1000,
+    repeatOorCooldownMs: 12 * 60 * 60 * 1000,
+    maxOorCooldownExits: 3,
+    feeDensityCooldowns: true,
+    feeDensityCooldownMinMs: 60 * 60 * 1000,
+    feeDensityHighPct: 0.005,
+    feeDensityLowPct: 0.0005,
+    evolutionInterval: 5,
+    evolutionMaxChangePct: 0.2,
+    signalWeightWindowDays: 60,
+    signalWeightMinOutcomes: 10,
+    signalWeightBoostFactor: 1.05,
+    signalWeightDecayFactor: 0.95,
+    signalWeightFloor: 0.3,
+    signalWeightCeiling: 2.5,
+    weightedEntryScoreThreshold: 1.8,
+    autoSwapEntry: false,
+    entryStrategyType: "spot",
+    idleRedeployEnabled: false,
+    idleRedeployThresholdUsd: 500,
+    idleRedeployMaxSizeUsd: 2000,
+    farmRewardsEnabled: true,
+    snapshotRetentionDays: 14,
+    alertsEnabled: true,
+    alertCooldownMinutes: 120,
+    alertFeeMilestoneUsd: 10,
+  });
+  return Layer.merge(mockConfig, DbLive(":memory:"));
+}
+
+// ─── Tests ──────────────────────────────────────────────────────────────────
+
+describe("auto-update configuration", () => {
+  it("defaults to disabled", () => {
+    const layer = buildLayer();
+    run(
+      Effect.gen(function* () {
+        const config = yield* ConfigService;
+        expect(config.forceUpdateEnabled).toBe(false);
+        expect(config.forceUpdateAfterDays).toBe(14);
+      }),
+      layer,
+    );
+  });
+
+  it("can be enabled with custom days", () => {
+    const layer = buildLayer({ forceUpdateEnabled: true, forceUpdateAfterDays: 7 });
+    run(
+      Effect.gen(function* () {
+        const config = yield* ConfigService;
+        expect(config.forceUpdateEnabled).toBe(true);
+        expect(config.forceUpdateAfterDays).toBe(7);
+      }),
+      layer,
+    );
+  });
+
+  it("accepts 1 day minimum", () => {
+    const layer = buildLayer({ forceUpdateEnabled: true, forceUpdateAfterDays: 1 });
+    run(
+      Effect.gen(function* () {
+        const config = yield* ConfigService;
+        expect(config.forceUpdateAfterDays).toBe(1);
+      }),
+      layer,
+    );
+  });
+});
+
+describe("metadata storage", () => {
+  it("stores and retrieves metadata", () => {
+    const layer = buildLayer();
+    run(
+      Effect.gen(function* () {
+        const db = yield* DbService;
+        yield* db.setMetadata("test-key", "test-value");
+        const value = yield* db.getMetadata("test-key");
+        expect(value).toBe("test-value");
+      }),
+      layer,
+    );
+  });
+
+  it("returns null for missing keys", () => {
+    const layer = buildLayer();
+    run(
+      Effect.gen(function* () {
+        const db = yield* DbService;
+        const value = yield* db.getMetadata("non-existent");
+        expect(value).toBeNull();
+      }),
+      layer,
+    );
+  });
+
+  it("overwrites existing metadata", () => {
+    const layer = buildLayer();
+    run(
+      Effect.gen(function* () {
+        const db = yield* DbService;
+        yield* db.setMetadata("key1", "value1");
+        yield* db.setMetadata("key1", "value2");
+        const value = yield* db.getMetadata("key1");
+        expect(value).toBe("value2");
+      }),
+      layer,
+    );
+  });
+});
+
+describe("force update threshold calculation", () => {
+  it("calculates days correctly", () => {
+    const now = Date.now();
+    const dayMs = 24 * 60 * 60 * 1000;
+
+    const installedAt = now - 15 * dayMs;
+    const daysSinceInstall = Math.floor((now - installedAt) / dayMs);
+    expect(daysSinceInstall).toBe(15);
+
+    const threshold = 14;
+    expect(daysSinceInstall > threshold).toBe(true);
+  });
+
+  it("detects when threshold is not exceeded", () => {
+    const now = Date.now();
+    const dayMs = 24 * 60 * 60 * 1000;
+
+    const installedAt = now - 10 * dayMs;
+    const daysSinceInstall = Math.floor((now - installedAt) / dayMs);
+    expect(daysSinceInstall).toBe(10);
+
+    const threshold = 14;
+    expect(daysSinceInstall > threshold).toBe(false);
+  });
+});

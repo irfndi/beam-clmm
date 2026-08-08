@@ -1,0 +1,424 @@
+#!/usr/bin/env bash
+# One-liner installer for prism-liquidity-agent.
+# Usage: curl -fsSL https://raw.githubusercontent.com/irfndi/prism-liquidity-agent/main/scripts/install.sh | bash
+set -euo pipefail
+
+export HOME="${HOME:-/tmp}"
+SHELL_NAME="${SHELL##*/}"
+SHELL_NAME="${SHELL_NAME:-sh}"
+
+REPO="${PRISM_REPO:-irfndi/prism-liquidity-agent}"
+BIN_DIR="${PRISM_BIN_DIR:-$HOME/.local/bin}"
+INSTALL_DIR="${PRISM_INSTALL_DIR:-$HOME/.prism}"
+CONFIG_DIR="${PRISM_CONFIG_DIR:-$HOME/.config/prism}"
+DATA_DIR="${PRISM_DATA_DIR:-$HOME/.local/share/prism}"
+R2_BASE_URL="${PRISM_R2_URL:-https://pub-2f55c98709e74d1d900b89ec20f8f1fc.r2.dev}"
+VERSION="${PRISM_VERSION:-}"
+CHANNEL="${PRISM_CHANNEL:-stable}"
+SKIP_SETUP="${PRISM_SKIP_SETUP:-}"
+IS_OPTED_OUT=0
+case "$(printf '%s' "${PRISM_FEEDBACK_OPT_OUT:-}" | tr '[:upper:]' '[:lower:]')" in
+  1|true|yes|on) IS_OPTED_OUT=1 ;;
+esac
+
+log_step()  { printf "→ %s\n" "$*"; }
+log_warn()  { printf "⚠ %s\n" "$*"; }
+log_error() { printf "✘ %s\n" "$*" >&2; }
+log_done()  { printf "✓ %s\n" "$*"; }
+
+# INSTALL_DIR is passed to rm -rf and interpolated into the generated wrapper
+# heredoc, so it must be a safe absolute path (never empty, /, or $HOME) with
+# no shell metacharacters before any destructive operation runs.
+validate_install_dir() {
+  local dir="$1"
+  # Normalize trailing slashes so "$HOME/" is caught by the "$HOME" check below.
+  while [ "$dir" != "/" ] && [ "${dir%/}" != "$dir" ]; do
+    dir="${dir%/}"
+  done
+  if [ -z "$dir" ] || [ "$dir" = "/" ] || [ "$dir" = "$HOME" ]; then
+    log_error "Refusing to install to unsafe PRISM_INSTALL_DIR: ${INSTALL_DIR}"
+    log_error "PRISM_INSTALL_DIR must be an absolute path, not empty, /, or \$HOME."
+    return 1
+  fi
+  # Reject "." and ".." path components so a path like /tmp/../home/user
+  # cannot alias $HOME and bypass the check above.
+  if printf '%s' "$dir" | grep -qE '/(\.\.?)(/|$)'; then
+    log_error "Refusing to install to unsafe PRISM_INSTALL_DIR: ${INSTALL_DIR}"
+    log_error "PRISM_INSTALL_DIR must not contain '.' or '..' path components."
+    return 1
+  fi
+  # Must be an absolute path with at least two components (a named directory below the root).
+  if [[ "$dir" != /* ]] || [ "$(dirname "$dir")" = "/" ]; then
+    log_error "Refusing to install to unsafe PRISM_INSTALL_DIR: ${INSTALL_DIR}"
+    log_error "PRISM_INSTALL_DIR must be an absolute path with at least two components (e.g. \$HOME/.prism)."
+    return 1
+  fi
+  # The value is embedded in the generated wrapper heredoc; reject shell metacharacters.
+  if ! printf '%s' "$dir" | grep -qE '^[A-Za-z0-9_./-]+$'; then
+    log_error "Refusing to install to unsafe PRISM_INSTALL_DIR: ${INSTALL_DIR}"
+    log_error "PRISM_INSTALL_DIR contains shell metacharacters; only [A-Za-z0-9_./-] are allowed."
+    return 1
+  fi
+  INSTALL_DIR="$dir"
+  return 0
+}
+
+if ! validate_install_dir "$INSTALL_DIR"; then
+  exit 1
+fi
+
+normalize_version() {
+  local base pre
+  base="${1#v}"
+  pre=""
+  if [[ "$base" == *-* ]]; then
+    pre="${base#*-}"
+    base="${base%%-*}"
+  fi
+  printf '%s' "$base" \
+    | awk -F. -v pre="$pre" '{ printf("%d.%d.%d%s\n", $1+0, ($2 ? $2 : 0)+0, ($3 ? $3 : 0)+0, (pre != "" ? "-" pre : "")) }'
+}
+
+version_gte() {
+  local installed min
+  installed="$(normalize_version "$1")"
+  min="$(normalize_version "$2")"
+  # Portable dotted-version comparison (awk, no GNU sort -V on macOS).
+  # Prerelease-aware: X.Y.Z compares numerically; when equal, a version with a
+  # prerelease is lower than one without, and prerelease labels compare
+  # lexicographically (canary.1 >= canary.0).
+  awk -v a="$installed" -v b="$min" 'BEGIN {
+    split(a, A, "."); split(b, B, ".");
+    for (i = 1; i <= 3; i++) {
+      na = (i in A) ? A[i] + 0 : 0;
+      nb = (i in B) ? B[i] + 0 : 0;
+      if (na < nb) exit 1;
+      if (na > nb) exit 0;
+    }
+    pa = (index(a, "-") > 0) ? substr(a, index(a, "-") + 1) : "";
+    pb = (index(b, "-") > 0) ? substr(b, index(b, "-") + 1) : "";
+    if (pa == "" && pb != "") exit 0;
+    if (pa != "" && pb == "") exit 1;
+    if (pa < pb) exit 1;
+    if (pa > pb) exit 0;
+    exit 0;
+  }'
+}
+
+ensure_bun() {
+  if command -v bun >/dev/null 2>&1; then
+    BUN_BIN="$(command -v bun)"
+  else
+    log_step "Bun not found; installing to \$HOME/.bun"
+    if ! curl -fsSL https://bun.sh/install | bash >/dev/null 2>&1; then
+      log_error "Failed to install Bun from bun.sh. Install it manually:"
+      log_error "  curl -fsSL https://bun.sh/install | bash"
+      return 1
+    fi
+    export BUN_INSTALL="$HOME/.bun"
+    export PATH="$BUN_INSTALL/bin:$PATH"
+    if ! command -v bun >/dev/null 2>&1; then
+      log_error "Bun installer completed but 'bun' is still not on PATH."
+      return 1
+    fi
+    BUN_BIN="$(command -v bun)"
+  fi
+
+  local current
+  current="$("$BUN_BIN" --version 2>/dev/null || echo "unknown")"
+  if ! version_gte "$current" "1.4.0-canary.1"; then
+    log_error "Bun $current is installed but >= 1.4.0-canary.1 is required."
+    log_error "Upgrade with:  curl -fsSL https://bun.sh/install | bash -s -- bun-v1.4.0-canary.1"
+    return 1
+  fi
+  log_step "Bun $current at $BUN_BIN"
+  return 0
+}
+
+# Agent memory (sqlite-vec) needs a system libsqlite3 on Linux because bun:sqlite's
+# bundled SQLite cannot load extensions. The Docker image installs libsqlite3-0, but
+# the bare-metal one-liner does not, so detect it here: install it when running as
+# root (containers/CI/agents), otherwise print the exact command for the distro.
+ensure_sqlite_linux() {
+  case "$PLATFORM" in
+    linux*) ;;
+    *) return 0 ;;
+  esac
+  # sqlite-vec ships glibc-only binaries (see Dockerfile). On musl-based systems
+  # (Alpine) the bundled vec0 cannot load even with a system libsqlite3 present, so
+  # agent memory is unavailable regardless — don't install or report it as enabled.
+  if [ -f /etc/alpine-release ] || ldd --version 2>&1 | grep -qi musl; then
+    log_warn "musl/Alpine detected: the bundled sqlite-vec extension is glibc-only, so agent memory is unavailable on this system."
+    return 0
+  fi
+  local candidates=(
+    /usr/lib/x86_64-linux-gnu/libsqlite3.so.0
+    /usr/lib/x86_64-linux-gnu/libsqlite3.so
+    /usr/lib/aarch64-linux-gnu/libsqlite3.so.0
+    /usr/lib/aarch64-linux-gnu/libsqlite3.so
+    /usr/lib/libsqlite3.so.0
+    /usr/lib/libsqlite3.so
+    /usr/lib64/libsqlite3.so.0
+    /usr/lib64/libsqlite3.so
+    /lib/x86_64-linux-gnu/libsqlite3.so.0
+    /lib/x86_64-linux-gnu/libsqlite3.so
+    /lib/aarch64-linux-gnu/libsqlite3.so.0
+    /lib/aarch64-linux-gnu/libsqlite3.so
+  )
+  local p
+  for p in "${candidates[@]}"; do
+    if [ -e "$p" ]; then
+      return 0
+    fi
+  done
+
+  local pkgs="" install_cmd=""
+  if command -v apt-get >/dev/null 2>&1; then
+    pkgs="libsqlite3-0"; install_cmd="apt-get install -y"
+  elif command -v dnf >/dev/null 2>&1; then
+    pkgs="sqlite-libs"; install_cmd="dnf install -y"
+  elif command -v yum >/dev/null 2>&1; then
+    pkgs="sqlite-libs"; install_cmd="yum install -y"
+  elif command -v pacman >/dev/null 2>&1; then
+    pkgs="sqlite"; install_cmd="pacman -S --noconfirm"
+  elif command -v apk >/dev/null 2>&1; then
+    pkgs="sqlite-libs"; install_cmd="apk add"
+  fi
+
+  if [ -z "$pkgs" ]; then
+    log_warn "No system libsqlite3 found; agent memory (sqlite-vec) will be disabled."
+    log_warn "Install your distro's libsqlite3 (libsqlite3-0 / sqlite-libs / sqlite) to enable it."
+    return 0
+  fi
+
+  if [ "$(id -u 2>/dev/null || echo 1)" = "0" ]; then
+    log_step "No system libsqlite3 found; installing $pkgs for agent memory..."
+    if [ "$install_cmd" = "apt-get install -y" ]; then
+      apt-get update >/dev/null 2>&1 || true
+    fi
+    if $install_cmd $pkgs >/dev/null 2>&1; then
+      for p in "${candidates[@]}"; do
+        if [ -e "$p" ]; then
+          log_done "libsqlite3 installed; agent memory enabled."
+          return 0
+        fi
+      done
+    fi
+    log_warn "Could not install libsqlite3 automatically; agent memory will be disabled."
+    log_warn "Install it manually: $install_cmd $pkgs"
+    return 0
+  fi
+
+  log_warn "No system libsqlite3 found; agent memory (sqlite-vec) will be disabled."
+  log_warn "Enable it with: sudo $install_cmd $pkgs"
+  return 0
+}
+
+detect_platform() {
+  local os arch
+  os="$(uname -s | tr '[:upper:]' '[:lower:]')"
+  arch="$(uname -m)"
+  case "$arch" in
+    x86_64|amd64) arch="x64" ;;
+    arm64|aarch64) arch="arm64" ;;
+  esac
+  printf '%s-%s' "$os" "$arch"
+}
+
+extension_suffix() {
+  case "$1" in
+    darwin*) printf 'dylib' ;;
+    linux*)  printf 'so' ;;
+    windows*) printf 'dll' ;;
+    *)       printf 'so' ;;
+  esac
+}
+
+sha256_of() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$1" | awk '{print $1}'
+  elif command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "$1" | awk '{print $1}'
+  else
+    log_error "Neither sha256sum nor shasum found; cannot verify checksum."
+    exit 1
+  fi
+}
+
+PLATFORM="$(detect_platform)"
+EXT_SUFFIX="$(extension_suffix "$PLATFORM")"
+
+if [ -z "$VERSION" ]; then
+  log_step "Detecting latest ${CHANNEL} release..."
+  LATEST_URL="${R2_BASE_URL}/releases/latest.json"
+  if [ "$CHANNEL" != "stable" ]; then
+    LATEST_URL="${R2_BASE_URL}/releases/channel/${CHANNEL}.json"
+  fi
+  VERSION="$(curl -fsSL "$LATEST_URL" 2>/dev/null | grep '"version":' | sed -E 's/.*"version": *"([^"]+)".*/\1/' || true)"
+  if [ -z "$VERSION" ]; then
+    log_error "Could not detect latest version from ${LATEST_URL}"
+    exit 1
+  fi
+  log_step "Latest ${CHANNEL}: v${VERSION}"
+fi
+
+# Reject shell metacharacters in VERSION before it reaches URLs, tar, or telemetry
+if [ -n "${VERSION:-}" ] && ! printf '%s' "$VERSION" | grep -qE '^[0-9][0-9a-zA-Z._-]*$'; then
+  log_error "Invalid VERSION format: $VERSION"
+  exit 1
+fi
+
+TARBALL_NAME="prism-v${VERSION}-${PLATFORM}.tar.gz"
+TARBALL_URL="${R2_BASE_URL}/releases/v${VERSION}/${TARBALL_NAME}"
+SHA256_URL="${TARBALL_URL}.sha256"
+
+TMP_DIR="$(mktemp -d -t prism-install-XXXXXX)"
+trap 'rm -rf "$TMP_DIR"' EXIT
+
+log_step "Downloading ${TARBALL_NAME}"
+if ! curl -fsSL "$TARBALL_URL" -o "${TMP_DIR}/${TARBALL_NAME}"; then
+  log_error "Failed to download ${TARBALL_URL}"
+  exit 1
+fi
+
+log_step "Verifying SHA-256 checksum..."
+if ! curl -fsSL "$SHA256_URL" -o "${TMP_DIR}/${TARBALL_NAME}.sha256"; then
+  log_error "Failed to download checksum from ${SHA256_URL}"
+  exit 1
+fi
+EXPECTED_HASH="$(awk '{print $1}' "${TMP_DIR}/${TARBALL_NAME}.sha256")"
+ACTUAL_HASH="$(sha256_of "${TMP_DIR}/${TARBALL_NAME}")"
+if [ "$EXPECTED_HASH" != "$ACTUAL_HASH" ]; then
+  log_error "SHA-256 mismatch: expected ${EXPECTED_HASH}, got ${ACTUAL_HASH}"
+  exit 1
+fi
+log_done "Checksum verified"
+
+log_step "Installing Prism to ${INSTALL_DIR}"
+mkdir -p "$BIN_DIR" "$INSTALL_DIR"
+PRESERVE_DIR="${TMP_DIR}/preserve"
+mkdir -p "$PRESERVE_DIR"
+for _state_file in .env prism.db; do
+  if [ -e "${INSTALL_DIR}/${_state_file}" ]; then
+    cp -p "${INSTALL_DIR}/${_state_file}" "${PRESERVE_DIR}/${_state_file}"
+  fi
+done
+if [ -d "${INSTALL_DIR}/logs" ]; then
+  cp -R "${INSTALL_DIR}/logs" "${PRESERVE_DIR}/logs"
+fi
+rm -rf "$INSTALL_DIR"
+mkdir -p "$INSTALL_DIR"
+tar -xzf "${TMP_DIR}/${TARBALL_NAME}" -C "$INSTALL_DIR"
+for _state_file in .env prism.db; do
+  if [ -e "${PRESERVE_DIR}/${_state_file}" ]; then
+    cp -p "${PRESERVE_DIR}/${_state_file}" "${INSTALL_DIR}/${_state_file}"
+  fi
+done
+if [ -d "${PRESERVE_DIR}/logs" ]; then
+  rm -rf "${INSTALL_DIR}/logs"
+  cp -R "${PRESERVE_DIR}/logs" "${INSTALL_DIR}/"
+fi
+
+mkdir -p "$CONFIG_DIR" "$DATA_DIR"
+if [ ! -e "${CONFIG_DIR}/.env" ] && [ -e "${INSTALL_DIR}/.env" ]; then
+  cp -p "${INSTALL_DIR}/.env" "${CONFIG_DIR}/.env"
+fi
+if [ ! -e "${DATA_DIR}/prism.db" ] && [ -e "${INSTALL_DIR}/prism.db" ]; then
+  cp -p "${INSTALL_DIR}/prism.db" "${DATA_DIR}/prism.db"
+fi
+if [ ! -d "${DATA_DIR}/logs" ] && [ -d "${INSTALL_DIR}/logs" ]; then
+  cp -R "${INSTALL_DIR}/logs" "${DATA_DIR}/logs"
+fi
+
+if ! ensure_bun; then
+  exit 1
+fi
+
+ensure_sqlite_linux
+
+log_step "Writing wrapper ${BIN_DIR}/prism"
+WRAPPER="$BIN_DIR/prism"
+cat > "$WRAPPER" <<EOF
+#!/usr/bin/env bash
+# Auto-generated by Prism installer. Runs the compiled bundle.
+export PRISM_INSTALL_DIR="$INSTALL_DIR"
+export PRISM_VEC0_PATH="$INSTALL_DIR/lib/vec0.${EXT_SUFFIX}"
+# Mirror scripts/prism.sh: record the caller's directory so relative paths
+# (e.g. "prism wallet import ./kp.json") resolve against it.
+export PRISM_CALLER_CWD="\$PWD"
+# The Bun installer (bun.sh/install) puts bun under ~/.bun/bin but does not
+# always persist it to a shell rc, so a fresh shell or systemd unit may not have
+# it on PATH. Resolve PATH first, then the standard install location.
+BUN_BIN="\$(command -v bun || true)"
+if [ -z "\$BUN_BIN" ] && [ -x "\$HOME/.bun/bin/bun" ]; then
+  BUN_BIN="\$HOME/.bun/bin/bun"
+fi
+if [ -z "\$BUN_BIN" ]; then
+  echo "ERROR: bun not found on PATH or at \$HOME/.bun/bin/bun" >&2
+  echo "Install it with: curl -fsSL https://bun.sh/install | bash" >&2
+  exit 1
+fi
+exec "\$BUN_BIN" "$INSTALL_DIR/dist/cli/index.mjs" "\$@"
+EOF
+chmod +x "$WRAPPER"
+
+mkdir -p "$CONFIG_DIR" "$DATA_DIR"
+
+PATH_HAS_BIN_DIR=0
+IFS=':' read -r -a _path_entries <<<"${PATH:-}"
+for _entry in "${_path_entries[@]}"; do
+  if [ "$_entry" = "$BIN_DIR" ]; then
+    PATH_HAS_BIN_DIR=1
+    break
+  fi
+done
+
+echo ""
+log_done "Install complete."
+echo "  - Location: ${INSTALL_DIR}"
+echo "  - Run:      ${BIN_DIR}/prism --version"
+echo ""
+if [ "$PATH_HAS_BIN_DIR" -eq 0 ]; then
+  log_warn "$BIN_DIR is not on your current PATH."
+  log_warn "Add it to your shell rc:"
+  echo "    echo 'export PATH=\"\$PATH:$BIN_DIR\"' >> \"\$HOME/.${SHELL_NAME}rc\""
+  echo "    export PATH=\"\$PATH:$BIN_DIR\""
+  echo ""
+fi
+
+if [ -z "$SKIP_SETUP" ]; then
+  CREDENTIALS_FILE="$CONFIG_DIR/credentials.json"
+  CONFIG_ENV_FILE="$CONFIG_DIR/.env"
+  if [ -s "$CONFIG_ENV_FILE" ] || [ -s "${INSTALL_DIR}/.env" ]; then
+    log_step "Existing Prism environment preserved; setup not requested."
+  elif [ -s "$CREDENTIALS_FILE" ]; then
+    log_step "Running Prism setup..."
+    "$WRAPPER" setup
+  else
+    log_step "Setup deferred until registration. Run 'prism register' then 'prism setup'."
+  fi
+fi
+
+# Anonymous install telemetry (opt-out via PRISM_FEEDBACK_OPT_OUT).
+INSTALL_ID_FILE="$CONFIG_DIR/install-id"
+if [ ! -s "$INSTALL_ID_FILE" ]; then
+  INSTALL_ID="$(bun -e 'console.log(crypto.randomUUID())' 2>/dev/null || echo "")"
+  if [ -z "$INSTALL_ID" ]; then
+    UUID_HEX="$(od -An -tx1 -N16 /dev/urandom 2>/dev/null | tr -d ' \n')"
+    if [ "${#UUID_HEX}" -eq 32 ]; then
+      INSTALL_ID="${UUID_HEX:0:8}-${UUID_HEX:8:4}-${UUID_HEX:12:4}-${UUID_HEX:16:4}-${UUID_HEX:20:12}"
+    fi
+  fi
+  if [ -n "$INSTALL_ID" ]; then
+    echo "$INSTALL_ID" > "$INSTALL_ID_FILE"
+    chmod 600 "$INSTALL_ID_FILE" 2>/dev/null || true
+  fi
+fi
+INSTALL_ID="$(cat "$INSTALL_ID_FILE" 2>/dev/null || echo "")"
+if [ -n "$INSTALL_ID" ] && [ "$IS_OPTED_OUT" -eq 0 ]; then
+  PRISM_PLATFORM="$(uname -s | tr A-Z a-z)"
+  PRISM_PAYLOAD="{\"installId\":\"$INSTALL_ID\",\"event\":\"install\",\"channel\":\"$CHANNEL\",\"platform\":\"$PRISM_PLATFORM\",\"version\":\"$VERSION\"}"
+  curl -fsS --max-time 5 -X POST "${PRISM_API_URL:-https://prism-api.irfndi.workers.dev}/v1/installs/ping" \
+    -H "Content-Type: application/json" \
+    -d "$PRISM_PAYLOAD" >/dev/null 2>&1 &
+fi

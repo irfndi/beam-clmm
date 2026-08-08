@@ -1,0 +1,81 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+
+# Environment
+.env
+.env.local
+.env.backup.*
+
+# Logs
+logs/
+*.log
+
+# Chroma data
+chroma-data/
+
+# SQLite
+*.db
+*.db-shm
+*.db-wal
+/data/
+
+# Editor
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Test coverage
+coverage/
+site/
+# Local env overrides
+.env.*.local
+
+# Test and TypeScript caches
+.vitest/
+*.tsbuildinfo
+
+# Test artifacts
+bench/tmp-audit/
+
+# Bundle build artifacts
+prism-v*.tar.gz
+prism-v*.tar.gz.sha256
+.prism-bundle-stage/
+engine/sqlite-vec-embedded.ts
+
+# OpenCode internal state
+.omo/
+
+# Wrangler local state
+.wrangler/
+
+# Python build artifacts
+*.egg-info/
+__pycache__/
+*.pyc
+*.pyo
+*.egg
+build/
+dist/
+
+# mcp-server is an npm subproject; do not track its lockfile to avoid security
+# scanners flagging transitive dependencies (e.g. Hono CORS) we do not use.
+mcp-server/package-lock.json
+
+
+# Claude session files
+.claude/scheduled_tasks.lock
+
+# Security scanner tooling state
+.clawpatch/
+.deepsec/
+
+# Agent preference/learning artifacts (regenerated per session)
+.commandcode/

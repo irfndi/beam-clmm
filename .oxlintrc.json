@@ -1,0 +1,22 @@
+{
+  "$schema": "./node_modules/@effect/tsgo/oxlint-schema.json",
+  "options": {
+    "typeAware": true
+  },
+  "plugins": ["effecttsgo", "typescript", "unicorn", "oxc"],
+  "categories": {
+    "correctness": "error"
+  },
+  "rules": {
+    "no-unused-vars": "off",
+    "require-yield": "off",
+    "effecttsgo/any-unknown-in-error-context": "error",
+    "typescript/no-base-to-string": "error",
+    "typescript/no-floating-promises": "error",
+    "typescript/unbound-method": "error",
+    "typescript/restrict-template-expressions": "error"
+  },
+  "env": {
+    "builtin": true
+  }
+}

@@ -1,0 +1,855 @@
+import { Layer } from "effect";
+import { RiskService, type RiskApi, type RiskContext, type RiskResult } from "./services.js";
+import type { AppConfig } from "./config-service.js";
+import type {
+  ActionType,
+  AgentDecision,
+  AgentProposal,
+  ProposalValidationResult,
+  RebalanceParams,
+} from "./types.js";
+import { shouldHoldForRecovery } from "./strategy-service.js";
+import { ENTRY_SIZE_FLOOR_USD } from "./entry-sizing.js";
+
+export interface RiskConfig {
+  readonly confidenceThreshold: number;
+  readonly maxRebalanceRangeBins: number;
+  readonly stopLossPct: number;
+  readonly maxPerPoolAllocationPct: number;
+  readonly maxPositionsPerPool: number;
+}
+
+export function evaluateRisk(
+  riskConfig: RiskConfig,
+  decision: AgentDecision,
+  ctx: RiskContext,
+): RiskResult {
+  // 1. EXIT always approved — capital protection must not be gated on
+  // confidence: a high CONFIDENCE_THRESHOLD would otherwise block
+  // capital-protection exits.
+  if (decision.action === "EXIT") {
+    return { approved: true, reason: "EXIT approved: capital protection" };
+  }
+
+  // 2. Confidence gate — a non-finite confidence (NaN/Infinity) must not pass
+  // the comparison (NaN < x is false), so reject it explicitly first.
+  if (!Number.isFinite(decision.confidence)) {
+    return {
+      approved: false,
+      reason: "Decision confidence is not finite — rejecting",
+    };
+  }
+  if (decision.confidence < riskConfig.confidenceThreshold) {
+    return {
+      approved: false,
+      reason: `Confidence ${decision.confidence.toFixed(2)} below threshold ${riskConfig.confidenceThreshold}`,
+    };
+  }
+
+  // 3. Concurrent positions cap is enforced upstream by evaluatePerPoolAllocation.
+
+  // 3a. Per-pool position cap (Wave 10): DLMM natively supports multiple
+  // positions per pool (tight+wide pairs), so the old duplicate-pool guard is
+  // now a count cap. Aggregate exposure stays bounded by gate 6 below.
+  if (decision.action === "ENTER" && decision.poolAddress) {
+    const poolPositionCount = ctx.openPositions.filter(
+      (p) => p.poolAddress === decision.poolAddress,
+    ).length;
+    if (poolPositionCount >= riskConfig.maxPositionsPerPool) {
+      return {
+        approved: false,
+        reason:
+          `Per-pool position cap reached (${poolPositionCount}/${riskConfig.maxPositionsPerPool}) ` +
+          `for pool ${decision.poolAddress}`,
+      };
+    }
+  }
+
+  // 4. Drawdown check
+  if (decision.action === "ENTER") {
+    if (!Number.isFinite(ctx.portfolioValueUsd) || !Number.isFinite(ctx.recentPnlUsd)) {
+      return {
+        approved: false,
+        reason: "Portfolio drawdown data is not finite — pausing new entries",
+      };
+    }
+    if (ctx.portfolioValueUsd > 0) {
+      const drawdownPct = Math.abs(ctx.recentPnlUsd) / ctx.portfolioValueUsd;
+      if (ctx.recentPnlUsd < 0 && drawdownPct > 0.1) {
+        return {
+          approved: false,
+          reason: `Portfolio drawdown ${(drawdownPct * 100).toFixed(1)}% exceeds 10% — pausing new entries`,
+        };
+      }
+    }
+  }
+
+  // 5. Stop-loss check — targets the decision's own position when identified
+  // (a pool may hold several positions with independent PnL). The decision's
+  // positionId is authoritative (deterministic decisions and agent proposals
+  // both carry it); ctx.positionId is only the legacy alias callers set.
+  if (decision.action === "HOLD" || decision.action === "REBALANCE") {
+    const targetId = decision.positionId ?? ctx.positionId;
+    const pos =
+      targetId !== undefined
+        ? ctx.openPositions.find((p) => p.id === targetId)
+        : ctx.openPositions.find((p) => p.poolAddress === decision.poolAddress);
+    if (pos && pos.depositedUsd > 0) {
+      const lossPct = (pos.currentValueUsd - pos.depositedUsd) / pos.depositedUsd;
+      if (lossPct < -riskConfig.stopLossPct) {
+        return {
+          approved: false,
+          reason: `Stop-loss triggered: position loss ${(Math.abs(lossPct) * 100).toFixed(1)}% exceeds ${(riskConfig.stopLossPct * 100).toFixed(0)}%`,
+        };
+      }
+    }
+  }
+
+  // 6. Position size validation — the cap is the configured per-pool
+  // allocation (single source of truth: MAX_PER_POOL_ALLOCATION_PCT) minus
+  // the pool's existing aggregate exposure across all its positions.
+  if (decision.action === "ENTER" && decision.positionSizeUsd !== undefined) {
+    // Absolute floor first: any ENTER below the minimum entry size is dust
+    // (covers agent proposals and any future sizing path, not just the
+    // headroom clamp below).
+    if (decision.positionSizeUsd < ENTRY_SIZE_FLOOR_USD) {
+      return {
+        approved: false,
+        reason:
+          `Entry size $${decision.positionSizeUsd.toFixed(2)} is below the ` +
+          `$${ENTRY_SIZE_FLOOR_USD.toFixed(0)} minimum entry size`,
+      };
+    }
+    const capPct = riskConfig.maxPerPoolAllocationPct;
+    const existingPoolExposureUsd = ctx.openPositions
+      .filter((p) => p.poolAddress === decision.poolAddress)
+      .reduce((sum, p) => sum + p.currentValueUsd, 0);
+    if (
+      !Number.isFinite(decision.positionSizeUsd) ||
+      !Number.isFinite(ctx.portfolioValueUsd) ||
+      !Number.isFinite(existingPoolExposureUsd)
+    ) {
+      return {
+        approved: false,
+        reason: "Position size or portfolio data is not finite — refusing entry",
+      };
+    }
+    const maxSize = Math.max(ctx.portfolioValueUsd * capPct - existingPoolExposureUsd, 0);
+    if (decision.positionSizeUsd > maxSize) {
+      if (maxSize <= 0) {
+        return {
+          approved: false,
+          reason:
+            `Pool exposure $${existingPoolExposureUsd.toFixed(0)} already fills the ` +
+            `${(capPct * 100).toFixed(0)}% per-pool allocation cap`,
+        };
+      }
+      const adjustedSizeUsd = maxSize;
+      // A clamped-to-headroom size below the entry floor is dust, not an
+      // entry: approving it creates a position that can never pay its way
+      // (and previously produced $0.26 residual positions that churned the
+      // trailing stop and occupied per-pool slots). Reject instead of
+      // approving a sub-floor clamp.
+      if (adjustedSizeUsd < ENTRY_SIZE_FLOOR_USD) {
+        return {
+          approved: false,
+          reason:
+            `Remaining per-pool headroom $${adjustedSizeUsd.toFixed(2)} is below the ` +
+            `$${ENTRY_SIZE_FLOOR_USD.toFixed(0)} minimum entry size — skipping dust entry`,
+        };
+      }
+      return {
+        approved: true,
+        reason: `Size capped to ${(capPct * 100).toFixed(0)}% of portfolio ($${adjustedSizeUsd.toFixed(0)})`,
+        adjustedSizeUsd,
+      };
+    }
+  }
+
+  // 7. REBALANCE: validate bin range
+  if (decision.action === "REBALANCE" && decision.rebalanceParams) {
+    const { newLowerBinId, newUpperBinId } = decision.rebalanceParams;
+    if (newUpperBinId <= newLowerBinId) {
+      return {
+        approved: false,
+        reason: "Invalid rebalance range: upperBinId must be > lowerBinId",
+      };
+    }
+    const rangeWidth = newUpperBinId - newLowerBinId;
+    if (rangeWidth > riskConfig.maxRebalanceRangeBins) {
+      return {
+        approved: false,
+        reason: `Rebalance range ${rangeWidth} bins exceeds max ${riskConfig.maxRebalanceRangeBins}`,
+      };
+    }
+    if (
+      ctx.activeBinId !== undefined &&
+      Number.isFinite(ctx.activeBinId) &&
+      (ctx.activeBinId < newLowerBinId || ctx.activeBinId > newUpperBinId)
+    ) {
+      return {
+        approved: false,
+        reason:
+          `Rebalance range [${newLowerBinId}, ${newUpperBinId}] does not contain ` +
+          `active bin ${ctx.activeBinId}`,
+      };
+    }
+  }
+
+  return { approved: true, reason: "All risk checks passed" };
+}
+
+const VALID_ACTIONS: ReadonlyArray<ActionType> = ["HOLD", "REBALANCE", "EXIT", "ENTER"];
+
+// Slippage is intentionally excluded: the proposal schema does not accept it
+// (buildProposal hardcodes 0 while deterministic decisions use 50), and it is
+// never read during execution — only the bin range alters execution.
+const rebalanceParamsEqual = (a: RebalanceParams, b: RebalanceParams): boolean =>
+  a.newLowerBinId === b.newLowerBinId && a.newUpperBinId === b.newUpperBinId;
+
+export function evaluateAgentProposal(
+  proposal: AgentProposal,
+  ctx: RiskContext,
+  config: AppConfig,
+): ProposalValidationResult {
+  // 1. Action must be a known decision action.
+  if (!VALID_ACTIONS.includes(proposal.action)) {
+    return { valid: false, reason: `Invalid action: ${proposal.action}` };
+  }
+
+  // 2. Proposal must target the pool currently being evaluated.
+  if (proposal.poolAddress !== ctx.poolAddress) {
+    return {
+      valid: false,
+      reason: `Proposal poolAddress ${proposal.poolAddress} does not match evaluated pool ${ctx.poolAddress}`,
+    };
+  }
+
+  // 3. Safety EXIT cannot be downgraded to a less-defensive action.
+  if (proposal.originalAction === "EXIT" && proposal.action !== "EXIT") {
+    return {
+      valid: false,
+      reason: "Cannot downgrade a safety EXIT to a non-EXIT action",
+    };
+  }
+
+  // 4. Non-ENTER actions may not be promoted to ENTER.
+  // HOLD→REBALANCE and HOLD→EXIT are intentionally allowed when a position
+  // exists (checked below). Callers in `full`/`supervised` must still re-run
+  // capital-protection gates (min interval, gas, recovery) before applying
+  // agent-originated REBALANCE — see evaluateAgentRebalanceCapitalGates.
+  if (
+    proposal.originalAction !== undefined &&
+    proposal.originalAction !== "ENTER" &&
+    proposal.action === "ENTER"
+  ) {
+    return {
+      valid: false,
+      reason: `Cannot promote ${proposal.originalAction} to ENTER`,
+    };
+  }
+
+  // 5. Confidence must be finite and within [minConfidence, 1], unless the proposal
+  //    preserves the original low-confidence decision unchanged — verified against
+  //    the trusted original decision (same action, same confidence, same
+  //    executable parameters). Without one, the waiver does not apply.
+  const original = ctx.originalDecision;
+  const preservesOriginalDecision =
+    original !== undefined &&
+    proposal.action === original.action &&
+    Math.abs(proposal.confidence - original.confidence) < 0.005 &&
+    (proposal.positionSizeUsd === undefined ||
+      proposal.positionSizeUsd === original.positionSizeUsd) &&
+    (proposal.rebalanceParams === undefined ||
+      (original.rebalanceParams !== undefined &&
+        rebalanceParamsEqual(proposal.rebalanceParams, original.rebalanceParams)));
+
+  if (
+    !preservesOriginalDecision &&
+    (!Number.isFinite(proposal.confidence) ||
+      proposal.confidence < config.agentProposalMinConfidence ||
+      proposal.confidence > 1)
+  ) {
+    return {
+      valid: false,
+      reason:
+        `Confidence ${proposal.confidence} must be finite and between ` +
+        `${config.agentProposalMinConfidence} and 1`,
+    };
+  }
+
+  // 7. Position size must be non-negative and capped to the stricter of the
+  //    agent proposal limit and the existing per-pool allocation cap.
+  let adjustedPositionSizeUsd = proposal.positionSizeUsd;
+
+  if (proposal.action === "ENTER" && proposal.positionSizeUsd === undefined) {
+    return { valid: false, reason: "ENTER proposals must include positionSizeUsd" };
+  }
+
+  if (proposal.action === "ENTER") {
+    if (
+      proposal.positionSizeUsd === undefined ||
+      !Number.isFinite(proposal.positionSizeUsd) ||
+      proposal.positionSizeUsd <= 0
+    ) {
+      return { valid: false, reason: "positionSizeUsd must be a positive finite number for ENTER" };
+    }
+  }
+
+  if (proposal.action === "REBALANCE") {
+    if (proposal.rebalanceParams === undefined) {
+      return { valid: false, reason: "REBALANCE proposals must include rebalanceParams" };
+    }
+    const hasPosition = ctx.openPositions.some((p) => p.poolAddress === proposal.poolAddress);
+    if (!hasPosition) {
+      return {
+        valid: false,
+        reason: `Cannot REBALANCE pool ${proposal.poolAddress} — no open position`,
+      };
+    }
+  }
+
+  if (proposal.action === "EXIT") {
+    const hasPosition = ctx.openPositions.some((p) => p.poolAddress === proposal.poolAddress);
+    // An echoed deterministic EXIT on an unheld pool is a no-op, not a bad
+    // proposal — only reject advisor-initiated exits with no position.
+    if (!hasPosition && proposal.originalAction !== "EXIT") {
+      return {
+        valid: false,
+        reason: `Cannot EXIT pool ${proposal.poolAddress} — no open position`,
+      };
+    }
+  }
+
+  if (proposal.positionSizeUsd !== undefined) {
+    if (!Number.isFinite(proposal.positionSizeUsd) || proposal.positionSizeUsd < 0) {
+      return { valid: false, reason: "positionSizeUsd must be a finite non-negative number" };
+    }
+
+    const agentMaxSizeUsd = ctx.portfolioValueUsd * config.agentProposalMaxPositionSizePct;
+    const perPoolCapUsd = ctx.portfolioValueUsd * config.maxPerPoolAllocationPct;
+    let cappedSizeUsd = Math.min(proposal.positionSizeUsd, agentMaxSizeUsd, perPoolCapUsd);
+
+    if (proposal.action === "ENTER") {
+      const allocationResult = evaluatePerPoolAllocation({
+        proposedDepositUsd: cappedSizeUsd,
+        portfolioValueUsd: ctx.portfolioValueUsd,
+        openPositions: ctx.openPositions,
+        maxPerPoolAllocationPct: config.maxPerPoolAllocationPct,
+        maxOpenPositions: config.maxOpenPositions,
+        poolAddress: proposal.poolAddress,
+        maxPositionsPerPool: config.maxPositionsPerPool,
+      });
+
+      if (!allocationResult.approved) {
+        return { valid: false, reason: allocationResult.reason };
+      }
+
+      cappedSizeUsd = allocationResult.adjustedDepositUsd;
+    }
+
+    if (cappedSizeUsd !== proposal.positionSizeUsd) {
+      adjustedPositionSizeUsd = cappedSizeUsd;
+    }
+  }
+
+  // 8. REBALANCE parameters must form a valid, bounded bin range with integer IDs
+  //    that contains the pool's current active bin when known — otherwise the
+  //    advisor can move liquidity completely out of range.
+  if (proposal.rebalanceParams !== undefined) {
+    const { newLowerBinId, newUpperBinId } = proposal.rebalanceParams;
+    if (!Number.isInteger(newLowerBinId) || !Number.isInteger(newUpperBinId)) {
+      return {
+        valid: false,
+        reason: "Rebalance bin IDs must be integers",
+      };
+    }
+    if (newUpperBinId <= newLowerBinId) {
+      return {
+        valid: false,
+        reason: "Invalid rebalance range: upperBinId must be > lowerBinId",
+      };
+    }
+    const rangeWidth = newUpperBinId - newLowerBinId;
+    if (rangeWidth > config.maxRebalanceRangeBins) {
+      return {
+        valid: false,
+        reason: `Rebalance range ${rangeWidth} bins exceeds max ${config.maxRebalanceRangeBins}`,
+      };
+    }
+    if (
+      ctx.activeBinId !== undefined &&
+      Number.isFinite(ctx.activeBinId) &&
+      (ctx.activeBinId < newLowerBinId || ctx.activeBinId > newUpperBinId)
+    ) {
+      return {
+        valid: false,
+        reason:
+          `Rebalance range [${newLowerBinId}, ${newUpperBinId}] does not contain ` +
+          `active bin ${ctx.activeBinId}`,
+      };
+    }
+  }
+
+  // Position targeting (Wave 10): position-bound actions must land on a
+  // specific position row when a pool holds several. The advisor may name one
+  // explicitly; otherwise inherit the deterministic decision's target; a pool
+  // with exactly one open position resolves to it. Anything else stays
+  // untargeted and fails closed at execution.
+  let positionId = proposal.positionId ?? ctx.originalDecision?.positionId;
+  if (positionId !== undefined) {
+    // A named position must resolve to an open position on the proposal's pool
+    // (gate 2 already pinned poolAddress to the evaluated pool) — an advisor
+    // must not be able to route execution at a position on a different pool
+    // than the proposal claims. Fail closed when the id is unknown or foreign.
+    const target = ctx.openPositions.find((p) => p.id === positionId);
+    if (target === undefined || target.poolAddress !== proposal.poolAddress) {
+      return {
+        valid: false,
+        reason: `Position ${positionId} does not belong to pool ${proposal.poolAddress}`,
+      };
+    }
+  } else if (proposal.action === "EXIT" || proposal.action === "REBALANCE") {
+    const poolPositions = ctx.openPositions.filter((p) => p.poolAddress === proposal.poolAddress);
+    if (poolPositions.length === 1) {
+      positionId = poolPositions[0]!.id;
+    }
+  }
+
+  const adjustedDecision: AgentDecision = {
+    action: proposal.action,
+    poolAddress: proposal.poolAddress,
+    // A preserve-original waiver keeps the trusted original confidence so a
+    // rounded prompt echo cannot promote a sub-threshold decision into an
+    // execution-approved one.
+    confidence: preservesOriginalDecision ? original.confidence : proposal.confidence,
+    reasoning: proposal.reasoning,
+    ...(adjustedPositionSizeUsd !== undefined && { positionSizeUsd: adjustedPositionSizeUsd }),
+    ...(proposal.rebalanceParams !== undefined && { rebalanceParams: proposal.rebalanceParams }),
+    ...(positionId !== undefined && { positionId }),
+  };
+
+  return {
+    valid: true,
+    reason: "Agent proposal validated",
+    adjustedDecision,
+  };
+}
+
+export const RiskLive = (riskConfig: RiskConfig) =>
+  Layer.succeed(
+    RiskService,
+    RiskService.of({
+      evaluate(decision: AgentDecision, ctx: RiskContext): RiskResult {
+        return evaluateRisk(riskConfig, decision, ctx);
+      },
+    } satisfies RiskApi),
+  );
+
+// ─── Agent-originated REBALANCE capital-protection gates ─────────────────────
+
+export interface AgentRebalanceCapitalGateInput {
+  readonly now: number;
+  readonly lastRebalanceAt: number;
+  readonly minRebalanceIntervalMs: number;
+  /** When true (OOR grace expired), min-interval may be bypassed. */
+  readonly oorGraceExpired: boolean;
+  readonly rebalanceGasCostSol: number;
+  readonly solPriceUsd: number;
+  readonly positionDailyFeesUsd: number;
+  readonly minDaysOfFeesPaidAhead: number;
+  readonly recoveryProbability: number;
+  readonly oorRecoveryHoldThreshold: number;
+}
+
+/**
+ * Re-apply the deterministic REBALANCE capital-protection gates to an
+ * agent-originated REBALANCE so advisors cannot bypass min-interval, gas, or
+ * OOR recovery holds that protect the deterministic path.
+ */
+export function evaluateAgentRebalanceCapitalGates(input: AgentRebalanceCapitalGateInput): {
+  readonly approved: boolean;
+  readonly reason: string;
+} {
+  const timeSinceRebal = input.now - input.lastRebalanceAt;
+  if (timeSinceRebal < input.minRebalanceIntervalMs && !input.oorGraceExpired) {
+    return {
+      approved: false,
+      reason:
+        `Agent REBALANCE blocked by min-interval: ${timeSinceRebal}ms < ` +
+        `${input.minRebalanceIntervalMs}ms`,
+    };
+  }
+
+  const gasGate = evaluateGasGate({
+    rebalanceGasCostSol: input.rebalanceGasCostSol,
+    solPriceUsd: input.solPriceUsd,
+    positionDailyFeesUsd: input.positionDailyFeesUsd,
+    minDaysOfFeesPaidAhead: input.minDaysOfFeesPaidAhead,
+  });
+  if (!gasGate.approved) {
+    return {
+      approved: false,
+      reason: `Agent REBALANCE blocked by gas-gate: ${gasGate.reason}`,
+    };
+  }
+
+  if (shouldHoldForRecovery(input.recoveryProbability, input.oorRecoveryHoldThreshold)) {
+    return {
+      approved: false,
+      reason:
+        `Agent REBALANCE blocked by recovery-gate: probability ` +
+        `${input.recoveryProbability.toFixed(2)} >= ${input.oorRecoveryHoldThreshold}`,
+    };
+  }
+
+  return { approved: true, reason: "Agent REBALANCE capital gates passed" };
+}
+
+// ─── F1: Gas-aware rebalancing gate ──────────────────────────────────────────
+
+export interface GasGateInput {
+  readonly rebalanceGasCostSol: number;
+  readonly solPriceUsd: number;
+  readonly positionDailyFeesUsd: number;
+  readonly minDaysOfFeesPaidAhead: number;
+}
+
+export interface GasGateResult {
+  readonly approved: boolean;
+  readonly reason: string;
+  readonly gasCostUsd: number;
+  readonly feesThresholdUsd: number;
+}
+
+/**
+ * Gate REBALANCE on a cost-vs-benefit check: only rebalance if the on-chain
+ * gas cost is recovered by N days of position fees. Zero-fee pools are always
+ * rejected (let downstream risk gates handle those).
+ */
+export function evaluateGasGate(input: GasGateInput): GasGateResult {
+  const gasCostUsd = input.rebalanceGasCostSol * input.solPriceUsd;
+  const feesThresholdUsd = input.positionDailyFeesUsd * input.minDaysOfFeesPaidAhead;
+
+  if (!Number.isFinite(gasCostUsd) || !Number.isFinite(feesThresholdUsd)) {
+    return {
+      approved: false,
+      reason: "Gas-gate inputs are not finite — refusing rebalance",
+      gasCostUsd,
+      feesThresholdUsd,
+    };
+  }
+
+  if (gasCostUsd <= 0) {
+    return {
+      approved: false,
+      reason: `Gas cost must be positive (configured ${input.rebalanceGasCostSol} SOL) — refusing rebalance`,
+      gasCostUsd,
+      feesThresholdUsd,
+    };
+  }
+
+  if (input.positionDailyFeesUsd <= 0) {
+    return {
+      approved: false,
+      reason: `Position earns no fees ($${input.positionDailyFeesUsd.toFixed(4)}/day) — rebalance gas not justified`,
+      gasCostUsd,
+      feesThresholdUsd,
+    };
+  }
+
+  if (gasCostUsd > feesThresholdUsd) {
+    return {
+      approved: false,
+      reason:
+        `Gas cost $${gasCostUsd.toFixed(2)} > ${input.minDaysOfFeesPaidAhead}d fees $${feesThresholdUsd.toFixed(2)} ` +
+        `— wait for accrued fees before rebalancing`,
+      gasCostUsd,
+      feesThresholdUsd,
+    };
+  }
+
+  return {
+    approved: true,
+    reason: `Gas $${gasCostUsd.toFixed(2)} <= ${input.minDaysOfFeesPaidAhead}d fees $${feesThresholdUsd.toFixed(2)}`,
+    gasCostUsd,
+    feesThresholdUsd,
+  };
+}
+
+// ─── F3: Fee compounding gate ────────────────────────────────────────────────
+
+export interface CompoundGateInput {
+  readonly netFeesUsd: number;
+  readonly minCompoundFeesUsd: number;
+  readonly compoundGasBufferUsd: number;
+  readonly rebalanceGasCostUsd: number;
+}
+
+export interface CompoundGateResult {
+  readonly approved: boolean;
+  readonly reason: string;
+  readonly thresholdUsd: number;
+  readonly savingsUsd: number;
+}
+
+/**
+ * Decide whether the accrued fees are worth claiming + re-depositing into the
+ * same position. Reject if fees don't clear the gas cost + buffer + minimum
+ * threshold. Threshold = minCompound + buffer + rebalanceGas (compound tx costs
+ * roughly a rebalance's worth of gas).
+ */
+export function evaluateCompoundGate(input: CompoundGateInput): CompoundGateResult {
+  const thresholdUsd =
+    input.minCompoundFeesUsd + input.compoundGasBufferUsd + input.rebalanceGasCostUsd;
+  const savingsUsd = input.netFeesUsd - thresholdUsd;
+
+  if (
+    !Number.isFinite(input.netFeesUsd) ||
+    !Number.isFinite(input.minCompoundFeesUsd) ||
+    !Number.isFinite(input.compoundGasBufferUsd) ||
+    !Number.isFinite(input.rebalanceGasCostUsd)
+  ) {
+    return {
+      approved: false,
+      reason: "Compound-gate inputs are not finite — nothing to compound",
+      thresholdUsd,
+      savingsUsd,
+    };
+  }
+
+  if (input.netFeesUsd <= 0) {
+    return {
+      approved: false,
+      reason: `Net fees $${input.netFeesUsd.toFixed(4)} — nothing to compound`,
+      thresholdUsd,
+      savingsUsd,
+    };
+  }
+
+  if (savingsUsd <= 0) {
+    return {
+      approved: false,
+      reason:
+        `Net fees $${input.netFeesUsd.toFixed(2)} ≤ compound cost $${thresholdUsd.toFixed(2)} ` +
+        `(min $${input.minCompoundFeesUsd.toFixed(2)} + buffer $${input.compoundGasBufferUsd.toFixed(2)} + gas $${input.rebalanceGasCostUsd.toFixed(2)})`,
+      thresholdUsd,
+      savingsUsd,
+    };
+  }
+
+  return {
+    approved: true,
+    reason: `Net fees $${input.netFeesUsd.toFixed(2)} cover compound cost $${thresholdUsd.toFixed(2)} — savings $${savingsUsd.toFixed(2)}`,
+    thresholdUsd,
+    savingsUsd,
+  };
+}
+
+// ─── F5: Multi-pool allocation gate ──────────────────────────────────────────
+
+import type { Position } from "./types.js";
+
+export interface PerPoolAllocationInput {
+  readonly proposedDepositUsd: number;
+  readonly portfolioValueUsd: number;
+  readonly openPositions: ReadonlyArray<Position>;
+  readonly maxPerPoolAllocationPct: number;
+  readonly maxOpenPositions: number;
+  /** Pool the ENTER targets — per-pool count and exposure are measured against it. */
+  readonly poolAddress: string;
+  /** Max simultaneous positions allowed on the target pool. */
+  readonly maxPositionsPerPool: number;
+}
+
+export interface PerPoolAllocationResult {
+  readonly approved: boolean;
+  readonly reason: string;
+  readonly adjustedDepositUsd: number;
+}
+
+/**
+ * Decide whether a proposed ENTER fits the per-pool position-count cap, the
+ * hard cap on simultaneously open positions, and the per-pool allocation cap.
+ * The allocation cap is measured against the pool's AGGREGATE exposure (the
+ * sum of all its positions' current values), so a second position on the
+ * same pool only gets the headroom its siblings leave. The deposit is
+ * capped to the remaining headroom; ENTER is rejected when a count cap is
+ * reached or the headroom rounds the deposit to zero.
+ */
+export function evaluatePerPoolAllocation(input: PerPoolAllocationInput): PerPoolAllocationResult {
+  const poolPositions = input.openPositions.filter((p) => p.poolAddress === input.poolAddress);
+  if (poolPositions.length >= input.maxPositionsPerPool) {
+    return {
+      approved: false,
+      reason:
+        `Per-pool position cap reached (${poolPositions.length}/${input.maxPositionsPerPool}) ` +
+        `for pool ${input.poolAddress}`,
+      adjustedDepositUsd: 0,
+    };
+  }
+
+  if (input.openPositions.length >= input.maxOpenPositions) {
+    return {
+      approved: false,
+      reason: `Max open positions reached (${input.openPositions.length}/${input.maxOpenPositions}) — split across ${input.maxOpenPositions} pools max`,
+      adjustedDepositUsd: 0,
+    };
+  }
+
+  const existingPoolExposureUsd = poolPositions.reduce((sum, p) => sum + p.currentValueUsd, 0);
+  if (
+    !Number.isFinite(input.proposedDepositUsd) ||
+    !Number.isFinite(input.portfolioValueUsd) ||
+    !Number.isFinite(input.maxPerPoolAllocationPct) ||
+    !Number.isFinite(existingPoolExposureUsd)
+  ) {
+    return {
+      approved: false,
+      reason: "Per-pool allocation inputs are not finite — refusing entry",
+      adjustedDepositUsd: 0,
+    };
+  }
+
+  const perPoolCapUsd = Math.max(input.portfolioValueUsd * input.maxPerPoolAllocationPct, 0);
+  const headroomUsd = Math.max(perPoolCapUsd - existingPoolExposureUsd, 0);
+  const adjusted = Math.min(input.proposedDepositUsd, headroomUsd);
+
+  if (adjusted <= 0) {
+    return {
+      approved: false,
+      reason:
+        `Per-pool cap $${perPoolCapUsd.toFixed(2)} is already filled by the pool's existing ` +
+        `$${existingPoolExposureUsd.toFixed(2)} exposure — proposed $${input.proposedDepositUsd.toFixed(2)} deposit rounds to zero`,
+      adjustedDepositUsd: 0,
+    };
+  }
+
+  return {
+    approved: true,
+    reason:
+      adjusted < input.proposedDepositUsd
+        ? `Capped to ${(input.maxPerPoolAllocationPct * 100).toFixed(0)}% of portfolio ($${adjusted.toFixed(0)})`
+        : "Within per-pool allocation cap",
+    adjustedDepositUsd: adjusted,
+  };
+}
+
+// ─── F6: Paper-trading validation gate ───────────────────────────────────────
+
+export interface PaperValidationInput {
+  readonly paperTrading: boolean;
+  readonly paperDaysAccumulated: number;
+  readonly minDays: number;
+  readonly enforce: boolean;
+}
+
+export interface PaperValidationResult {
+  readonly approved: boolean;
+  readonly reason: string;
+  readonly warning?: string;
+}
+
+/**
+ * Block live ENTER until the user has run the agent in paper mode for at
+ * least `minDays` accumulated days. Skipped entirely in paper mode. When
+ * enforce=false, the gate emits a warning instead of rejecting — useful for
+ * opt-in enforcement during initial deployment.
+ */
+export function evaluatePaperValidation(input: PaperValidationInput): PaperValidationResult {
+  if (input.paperTrading) {
+    return {
+      approved: true,
+      reason: "Paper trading — validation does not apply",
+    };
+  }
+
+  if (input.paperDaysAccumulated >= input.minDays) {
+    return {
+      approved: true,
+      reason: `Paper validation passed (${input.paperDaysAccumulated}/${input.minDays} days)`,
+    };
+  }
+
+  if (!input.enforce) {
+    return {
+      approved: true,
+      reason: "Paper validation not enforced",
+      warning:
+        `Live trading with only ${input.paperDaysAccumulated} paper days — ` +
+        `consider running paper for ${input.minDays} days before going live`,
+    };
+  }
+
+  return {
+    approved: false,
+    reason:
+      `Paper validation gate: only ${input.paperDaysAccumulated}/${input.minDays} paper days accumulated. ` +
+      `Live ENTER requires at least ${input.minDays} days of paper trading. ` +
+      `Set PAPER_VALIDATION_ENFORCE=false to override (not recommended).`,
+  };
+}
+
+// ─── F3 fix: token-amount → USD conversion helpers ──────────────────────────
+
+/**
+ * Standard token decimals for the symbols we recognize. Unknown tokens
+ * return the sentinel `-1` so callers can fail closed rather than guessing
+ * decimals for an unrecognized asset. Only SOL/WSOL and USDC/USDT are
+ * supported today; the agent is intentionally conservative about pricing
+ * anything else because mis-pricing fees can bypass the compound gate.
+ */
+export function getTokenDecimals(symbol: string): number {
+  const upper = symbol.toUpperCase();
+  if (upper === "SOL" || upper === "WSOL") return 9;
+  if (upper === "USDC" || upper === "USDT") return 6;
+  return -1;
+}
+
+/**
+ * Convert a raw token base-unit amount to a USD estimate. SOL uses
+ * solPriceUsd; USDC/USDT use par ($1). Unknown tokens return 0 (fail closed)
+ * so the compound gate rejects instead of compounding on a mis-priced fee.
+ */
+export function tokenAmountToUsd(
+  rawAmount: number,
+  tokenSymbol: string,
+  solPriceUsd: number,
+): number {
+  if (rawAmount === 0) return 0;
+  const decimals = getTokenDecimals(tokenSymbol);
+  if (decimals < 0) return 0;
+  const human = rawAmount / Math.pow(10, decimals);
+  const upper = tokenSymbol.toUpperCase();
+  if (upper === "USDC" || upper === "USDT") return human;
+  return human * solPriceUsd;
+}
+
+export interface ClaimFeesUsdInput {
+  readonly netFeeXRaw: number;
+  readonly netFeeYRaw: number;
+  readonly tokenXSymbol: string;
+  readonly tokenYSymbol: string;
+  readonly solPriceUsd: number;
+}
+
+/**
+ * Convert both sides of a fee claim to USD using per-token decimals.
+ * Returns 0 when either side is an unsupported token — this fails the
+ * compound gate closed. Also fixes the F3 USD-estimation bug where
+ * (rawX + rawY) * solPrice added lamports + base-units, producing
+ * multi-billion-dollar estimates that bypassed the gate.
+ *
+ * @deprecated Symbol-based — only knows SOL/WSOL/USDC/USDT and books $0 for
+ * every other mint. The live claim paths now consume the adapter's mint-based
+ * `claimFees().netFeesUsd` instead. Retained only because unit tests pin it;
+ * do not use for new accounting.
+ */
+export function convertClaimFeesToUsd(input: ClaimFeesUsdInput): number {
+  const xDecimals = getTokenDecimals(input.tokenXSymbol);
+  const yDecimals = getTokenDecimals(input.tokenYSymbol);
+  if (xDecimals < 0 || yDecimals < 0) return 0;
+  const feeXUsd = tokenAmountToUsd(input.netFeeXRaw, input.tokenXSymbol, input.solPriceUsd);
+  const feeYUsd = tokenAmountToUsd(input.netFeeYRaw, input.tokenYSymbol, input.solPriceUsd);
+  return feeXUsd + feeYUsd;
+}

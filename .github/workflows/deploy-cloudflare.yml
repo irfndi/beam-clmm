@@ -1,0 +1,131 @@
+name: Deploy Cloudflare Workers
+
+# Infrastructure is managed as TypeScript by Alchemy
+# (`cloudflare/infra/alchemy.run.ts`), not wrangler.toml (removed — see commit).
+# One production stack, stage `prod`.
+#
+# The Alchemy program lives in its own Bun workspace package (`cloudflare/infra`)
+# because alchemy@2.0.0-beta.64 requires the Effect 4 runtime
+# (peerDependencies effect `>=4.0.0-beta.100 || >=4.0.0`), while the Worker
+# runtime code is pinned to effect@^3.22.0. `cloudflare` is the workspace root;
+# a single `bun install` at `./cloudflare` installs both, nesting effect@4 under
+# `infra/node_modules` and keeping effect@3 for the workers. The root scripts
+# (`typecheck`, `deploy`, `plan`, `dev`) delegate to the infra package.
+#
+# REQUIRED ONE-TIME OPERATOR BOOTSTRAP (before the first deploy from this
+# workflow can succeed): the Alchemy remote state store must exist in the
+# account. Run once, locally, with an admin profile:
+#     cd cloudflare/infra && bun alchemy login --profile admin
+#     cd cloudflare/infra && bun alchemy cloudflare bootstrap --profile admin
+# CI runners have no local state on disk, so `CI=true` (set automatically by
+# GitHub Actions) makes Alchemy resolve the state-store credentials from the
+# account's Cloudflare Secrets Store on every run.
+#
+# PR PREVIEW DEPLOYS ARE DELIBERATELY DISABLED: all stages share the single
+# production D1/KV/R2/Vectorize. A per-PR stage that destroyed on PR close
+# could drop production data, so PRs only typecheck — the prod deploy runs on
+# merge to main.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "cloudflare/**"
+      - ".github/workflows/deploy-cloudflare.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "cloudflare/**"
+      - ".github/workflows/deploy-cloudflare.yml"
+
+# Serialize production deploys: back-to-back pushes must not run two
+# simultaneous `alchemy deploy --stage prod` jobs against the shared stack.
+# cancel-in-progress: false (never cancel mid-apply — that can leave the
+# stack partially updated). Scoped to main so fork PRs (which only typecheck)
+# cannot hold the prod group and stall a real deploy.
+concurrency:
+  group: ${{ github.ref == 'refs/heads/main' && 'deploy-cloudflare-prod' || format('deploy-cloudflare-pr-{0}', github.event.pull_request.number) }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: ./cloudflare
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: canary
+
+      - name: Install dependencies
+        run: bun install
+
+      # Type check covers BOTH workspace packages, and the worker bundles are
+      # built here too so PRs gate on the exact artifacts alchemy uploads
+      # (prebuilt esbuild bundles in cloudflare/dist/ — see the deploy step).
+      - name: Type check + build workers
+        run: bun run typecheck && bun run build:workers
+
+      # Fail fast if any required secret is unset, instead of deploying with
+      # empty secret_text values that fail closed in production. Main-only:
+      # GitHub does not provide secrets to fork PRs, so this step must not run
+      # on PRs (the typecheck above is the PR gate; the deploy below is main-only).
+      - name: Validate required secrets
+        if: github.ref == 'refs/heads/main'
+        run: |
+          for v in TELEGRAM_BOT_TOKEN TELEGRAM_WEBHOOK_SECRET BOT_API_SECRET ADMIN_API_KEY FEE_WALLET_ADDRESS; do
+            if [ -z "$(printenv "$v")" ]; then
+              echo "::error::$v is not set; refusing to deploy"
+              exit 1
+            fi
+          done
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_WEBHOOK_SECRET: ${{ secrets.TELEGRAM_WEBHOOK_SECRET }}
+          BOT_API_SECRET: ${{ secrets.BOT_API_SECRET }}
+          ADMIN_API_KEY: ${{ secrets.ADMIN_API_KEY }}
+          FEE_WALLET_ADDRESS: ${{ secrets.FEE_WALLET_ADDRESS }}
+
+      # Production deploy (main only). `bun run deploy` at the workspace root
+      # chains `build:workers` (esbuild → cloudflare/dist/), then delegates to
+      # `bun run --cwd infra deploy` = `alchemy deploy --stage prod --adopt
+      # --yes` from `cloudflare/infra` (where the alchemy CLI + its Effect-4
+      # runtime resolve). Alchemy uploads the prebuilt bundles byte-for-byte
+      # (`bundle: false`) — its beta rolldown pipeline stripped routes from
+      # source entries in production. `--adopt` takes over the wrangler-created
+      # workers (workers carry ownership tags, so unlike the data resources
+      # they are not silently adopted); it is a no-op for resources this stack
+      # already owns. Config.redacted worker secrets resolve from these env
+      # vars at deploy time and are uploaded to Cloudflare as `secret_text`.
+      # Alchemy's deploy is idempotent (adopt-by-read + reconcile), so bounded
+      # retries are safe and absorb transient Cloudflare API failures
+      # (observed in production: 504 gateway timeouts with retry_after=120s).
+      - name: Deploy via Alchemy
+        if: github.ref == 'refs/heads/main'
+        run: |
+          for attempt in 1 2 3; do
+            if bun run deploy; then
+              exit 0
+            fi
+            if [ "$attempt" -lt 3 ]; then
+              echo "Deploy attempt $attempt failed — retrying in 130s (Cloudflare API backoff)..."
+              sleep 130
+            fi
+          done
+          echo "::error::Deploy failed after 3 attempts"
+          exit 1
+        env:
+          # Cloudflare provider credentials (Alchemy auth + remote state store).
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          # Worker secrets (Config.redacted -> secret_text on the workers).
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_WEBHOOK_SECRET: ${{ secrets.TELEGRAM_WEBHOOK_SECRET }}
+          BOT_API_SECRET: ${{ secrets.BOT_API_SECRET }}
+          ADMIN_API_KEY: ${{ secrets.ADMIN_API_KEY }}
+          FEE_WALLET_ADDRESS: ${{ secrets.FEE_WALLET_ADDRESS }}
