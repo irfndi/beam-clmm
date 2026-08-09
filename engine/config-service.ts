@@ -42,6 +42,13 @@ export interface AppConfig {
   readonly paperTrading: boolean;
   readonly autonomousTokenMode: AutonomousTokenMode;
   readonly settlementAsset: SettlementAsset;
+  /** Challenge mode (CHALLENGE_MODE): harvest-focused presets + strategy. */
+  readonly challengeMode?: boolean;
+  readonly challengeDrawdownHalvePct?: number;
+  readonly challengeDrawdownExitPct?: number;
+  readonly challengeRangeVolK?: number;
+  readonly challengeMinScore?: number;
+  readonly challengePoolShareCapPct?: number;
   readonly candidateMinHealthyScans: number;
   readonly candidateMinObservationMs: number;
   readonly candidateScanLimit: number;
@@ -556,6 +563,23 @@ const loadConfig = Effect.gen(function* () {
   // entrySizeTvlFraction 0.05, minFeeIlRatio 1.2 (already the default).
   const challengeMode = yield* Config.boolean("CHALLENGE_MODE").pipe(
     Effect.orElseSucceed(() => false),
+  );
+  const challengeDrawdownHalvePct = yield* validatedNumber(
+    "CHALLENGE_DRAWDOWN_HALVE_PCT",
+    0,
+    5,
+  );
+  const challengeDrawdownExitPct = yield* validatedNumber(
+    "CHALLENGE_DRAWDOWN_EXIT_PCT",
+    0,
+    10,
+  );
+  const challengeRangeVolK = yield* validatedNumber("CHALLENGE_RANGE_VOL_K", 0.5, 1.5);
+  const challengeMinScore = yield* validatedNumber("CHALLENGE_MIN_SCORE", 0, 4);
+  const challengePoolShareCapPct = yield* validatedNumber(
+    "CHALLENGE_POOL_SHARE_CAP_PCT",
+    0.5,
+    10,
   );
 
   // WALLET_PRIVATE_KEY (env / .env) takes precedence; otherwise fall back to the local
@@ -1436,6 +1460,12 @@ const loadConfig = Effect.gen(function* () {
     agentInstanceId,
     scanIntervalMs,
     minPoolTvlUsd,
+    challengeMode,
+    challengeDrawdownHalvePct,
+    challengeDrawdownExitPct,
+    challengeRangeVolK,
+    challengeMinScore,
+    challengePoolShareCapPct,
     minFeeIlRatio,
     minNativeForGasWei,
     minNativeForEntryWei,

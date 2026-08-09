@@ -105,6 +105,12 @@ import { evaluateFallenAngelDiscovery } from "./fallen-angel-discovery.js";
 import { identifyAssetMint } from "./fallen-angel-service.js";
 import { buildTpLadder, evaluateTpLadder, parseTpLadder, serializeTpLadder } from "./tp-ladder.js";
 import { getGeckoPoolOhlcv, type GeckoOhlcvSignals } from "./gecko-ohlcv-service.js";
+import {
+  challengePoolScore,
+  challengeRangeFromVolatility,
+  challengeRotationSignal,
+  avgFeeYieldPct,
+} from "./challenge-strategy.js";
 import { getRugCheckReport, type RugCheckReport } from "./rugcheck-service.js";
 import type {
   AgentDecision,
@@ -4872,13 +4878,45 @@ export const program = Effect.gen(function* () {
       // pool-cycle — static baseline (ENTRY_RANGE_HALF_WIDTH_BINS or the
       // binStep tier), scaled by σ when VOLATILITY_ADAPTIVE_RANGES is on.
       // σ=0 (cold start, <2 snapshots) yields the bounded baseline.
-      const rangeHalfWidth = resolveRangeHalfWidth({
+      let rangeHalfWidth = resolveRangeHalfWidth({
         binStep: pool.binStep,
         configuredBaseHalfWidth: config.entryRangeHalfWidthBins,
         adaptiveEnabled: config.volatilityAdaptiveRanges,
         volatilityStddev,
         maxFullRangeBins: config.maxRebalanceRangeBins,
       });
+
+      // Challenge mode: when Krystal's measured priceVolatility is available,
+      // size the range from it (k·σ log-width) instead of bin-history —
+      // the volatility signal is the harvest strategy's range control.
+      const challengeRange =
+        config.challengeMode === true &&
+        pool.statsSource === "krystal" &&
+        (pool.priceVolatility ?? 0) > 0
+          ? challengeRangeFromVolatility(
+              pool.activeBinId,
+              pool.binStep,
+              pool.priceVolatility ?? 0,
+              config.challengeRangeVolK ?? 1.5,
+            )
+          : null;
+      // Use the volatility-sized width for ENTER/REBALANCE when present.
+      if (challengeRange !== null) {
+        rangeHalfWidth = challengeRange.halfWidth;
+      }
+
+      // Challenge drawdown gate: the measured 24h drawdown (Krystal) is the
+      // dominant risk term on meme harvest pools — a held position on a
+      // crashing pool must exit in THIS cycle, not wait for the trailing stop.
+      const challengeRotation =
+        config.challengeMode === true && pool.statsSource === "krystal"
+          ? challengeRotationSignal(
+              pool,
+              avgFeeYieldPct(previousSnapshots),
+              config.challengeDrawdownHalvePct ?? 5,
+              config.challengeDrawdownExitPct ?? 10,
+            )
+          : null;
 
       // Value estimation per position (feeds the trailing stop and the
       // REBALANCE gas gate); OOR counters above are persisted by the same save.
@@ -4984,6 +5022,39 @@ export const program = Effect.gen(function* () {
 
       for (const pos of poolPositions) {
         let decision: AgentDecision | null = null;
+
+        // Challenge drawdown gate FIRST: a held position on a pool whose
+        // measured 24h drawdown breached the exit threshold closes this cycle
+        // (capital protection on meme harvest pools — the dominant loss term
+        // is token decay, not fees). 'halve' de-risks by rebalancing to a
+        // tighter (k×0.5) range instead of closing.
+        if (challengeRotation !== null && challengeRotation.action !== "hold") {
+          if (challengeRotation.action === "exit") {
+            decision = {
+              action: "EXIT",
+              poolAddress,
+              positionId: pos.positionId,
+              confidence: 0.95,
+              reasoning: `[challenge-rotation] ${challengeRotation.reason}`,
+            };
+          } else if (
+            challengeRotation.action === "halve" &&
+            Date.now() - pos.lastRebalanceAt >= config.minRebalanceIntervalMs
+          ) {
+            decision = {
+              action: "REBALANCE",
+              poolAddress,
+              positionId: pos.positionId,
+              confidence: 0.8,
+              reasoning: `[challenge-rotation] ${challengeRotation.reason} — tightening range`,
+              rebalanceParams: {
+                newLowerBinId: pool.activeBinId - Math.max(1, Math.round((challengeRange?.halfWidth ?? 20) * 0.5)),
+                newUpperBinId: pool.activeBinId + Math.max(1, Math.round((challengeRange?.halfWidth ?? 20) * 0.5)),
+                slippageBps: 50,
+              },
+            };
+          }
+        }
 
         // IL-dominance pre-check: computed once before the exit chain so the
         // else-if below stays a clean boolean. Fires only when IL protection
@@ -5938,7 +6009,8 @@ export const program = Effect.gen(function* () {
           // authenticity, on-chain bin utilization, and TVL. This matches the
           // [fee-il-gate] floor and the weightedEntryScore fee term above/below,
           // which also skip the modeled ratio. A heuristic pool still cannot enter:
-          // it fails volumeAuthenticityKnown below.
+          // it fails volumeAuthenticityKnown below. In challenge mode the
+          // measured-yield-vs-drawdown score must also clear the floor.
           if (
             !enterGateRejected &&
             (metrics.feeIlRatioKnown ? feeIlRatio > evolvedThresholds.minFeeIlRatio * 1.5 : true) &&
@@ -5946,7 +6018,9 @@ export const program = Effect.gen(function* () {
             volumeAuth > 0.8 &&
             metrics.binUtilizationKnown &&
             binUtilization > 0.4 &&
-            pool.tvlUsd > config.minPoolTvlUsd * 2
+            pool.tvlUsd > config.minPoolTvlUsd * 2 &&
+            (config.challengeMode !== true ||
+              challengePoolScore(pool).score >= (config.challengeMinScore ?? 4))
           ) {
             const entryScore = weightedEntryScore(metrics, signalWeights);
             if (entryScore <= config.weightedEntryScoreThreshold) {
