@@ -1,6 +1,8 @@
 import { Effect, Layer } from "effect";
 import { KrystalService, type KrystalApi } from "./services.js";
+import { registerV4Pool, type V4PoolKey } from "./adapter-service.js";
 import type { PoolState } from "./types.js";
+import { NATIVE_MINT } from "./constants.js";
 import { createLogger } from "./logger.js";
 
 /**
@@ -156,8 +158,38 @@ export async function fetchKrystalUniverse(
     for (const entry of result) {
       if (!isObject(entry) || typeof entry.poolAddress !== "string") continue;
       const stats = parseKrystalPool(entry);
-      if (stats !== null) {
-        pools.set(entry.poolAddress.toLowerCase(), stats);
+      if (stats === null) continue;
+      const poolId = entry.poolAddress.toLowerCase();
+      pools.set(poolId, stats);
+      // Auto-register v4 pool keys so the adapter's StateView reads can name
+      // the legs. The key's fee/tickSpacing are cosmetic here (StateView reads
+      // by poolId; the poolId is a one-way hash, so the key is only a symbol
+      // carrier) — tokens are the truth. Krystal renders native ETH as
+      // 0xeeee…; the engine's isNative checks address(0).
+      if (entry.protocol === "uniswapv4") {
+        const token0 = isObject(entry.token0) ? entry.token0 : null;
+        const token1 = isObject(entry.token1) ? entry.token1 : null;
+        if (token0 !== null && token1 !== null && typeof token0.address === "string") {
+          const normalize = (addr: string): `0x${string}` =>
+            addr.toLowerCase() === "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+              ? NATIVE_MINT
+              : (addr.toLowerCase() as `0x${string}`);
+          const key: V4PoolKey = {
+            currency0: normalize(token0.address),
+            currency1:
+              typeof token1.address === "string"
+                ? normalize(token1.address)
+                : (NATIVE_MINT as `0x${string}`),
+            fee: Math.max(0, Math.round((stats.lpFee || stats.feeTier) * 10_000)),
+            // Cosmetic: the chain convention is tickSpacing 400; only used for
+            // binStep display (StateView reads by poolId, not key).
+            tickSpacing: 400,
+            hooks: "0x0000000000000000000000000000000000000000",
+          };
+          if (key.currency0.length > 0 && key.currency1.length > 0) {
+            registerV4Pool(poolId, key);
+          }
+        }
       }
     }
     universeCache = { fetchedAt: Date.now(), pools };

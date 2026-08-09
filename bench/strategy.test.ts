@@ -46,9 +46,13 @@ describe("DLMMStrategy", () => {
       expect(result.flags).toHaveLength(0);
     });
 
-    it("penalizes volume/TVL ratio > 10x", () => {
+    it("penalizes volume/TVL ratio > 10x only for UNMEASURED volume", () => {
       const pool = makePool({ tvlUsd: 10_000, volume24hUsd: 200_000, fees24hUsd: 1000 });
-      const result = DLMMStrategy.checkVolumeAuthenticity(pool, true);
+      // Measured fees (krystal/datapi): the on-chain income proves the volume
+      // real — no suspicion penalty.
+      expect(DLMMStrategy.checkVolumeAuthenticity(pool, true).score).toBe(1.0);
+      // Modeled/fabricated fees: high turnover stays suspicious.
+      const result = DLMMStrategy.checkVolumeAuthenticity(pool, false);
       expect(result.score).toBeLessThan(0.8);
       expect(result.flags.some((f: string) => f.includes("suspicious"))).toBe(true);
     });
@@ -59,9 +63,10 @@ describe("DLMMStrategy", () => {
       expect(result.score).toBe(0);
     });
 
-    it("flags low-tvl high-volume wash pattern", () => {
+    it("flags low-tvl high-volume wash pattern only for UNMEASURED volume", () => {
       const pool = makePool({ tvlUsd: 2_000, volume24hUsd: 500_000, fees24hUsd: 100 });
-      const result = DLMMStrategy.checkVolumeAuthenticity(pool, true);
+      expect(DLMMStrategy.checkVolumeAuthenticity(pool, true).score).toBe(1.0);
+      const result = DLMMStrategy.checkVolumeAuthenticity(pool, false);
       expect(result.score).toBeLessThan(0.3);
       expect(result.flags.some((f: string) => f.includes("wash"))).toBe(true);
     });
@@ -78,9 +83,10 @@ describe("DLMMStrategy", () => {
       expect(result.flags.some((f: string) => f.includes("outlier"))).toBe(true);
     });
 
-    it("flags elevated vol/tvl ratio", () => {
+    it("flags elevated vol/tvl ratio only for UNMEASURED volume", () => {
       const pool = makePool({ tvlUsd: 50_000, volume24hUsd: 300_000 });
-      const result = DLMMStrategy.checkVolumeAuthenticity(pool, true);
+      expect(DLMMStrategy.checkVolumeAuthenticity(pool, true).score).toBe(1.0);
+      const result = DLMMStrategy.checkVolumeAuthenticity(pool, false);
       expect(result.score).toBeLessThan(1.0);
       expect(result.flags.some((f: string) => f.includes("elevated"))).toBe(true);
     });

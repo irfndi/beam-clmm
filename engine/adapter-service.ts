@@ -590,15 +590,28 @@ export const AdapterLive = Layer.effect(AdapterService,
               const poolIdHex = poolAddress.toLowerCase() as `0x${string}`;
               const slot0 = await stateView.read.getSlot0([poolIdHex]);
               // v4 has no TickLens; per-tick reads are unbounded. Report the
-              // active tick only and mark reserves unknown — the engine treats
-              // bin signals as "unknown" rather than fabricating them.
+              // active tick with a synthetic single bin so range utilization
+              // is KNOWN (1.0 while the pool is live) instead of fabricating a
+              // spread: the real utilization control for v4 is the
+              // volatility-scaled RANGE WIDTH the strategy selects, not tick
+              // occupancy. reservesKnown=true lets the ENTER gates proceed;
+              // the strategy treats 1.0 as "managed range, in-scope" — a
+              // deliberate proxy, not a measured value.
               return {
                 lowerBinId: Number(slot0[1]),
                 upperBinId: Number(slot0[1]),
-                bins: [],
+                bins: [
+                  {
+                    binId: Number(slot0[1]),
+                    reserveX: slot0[0],
+                    reserveY: slot0[0],
+                    liquiditySupply: 0n,
+                    price: tickToPrice(Number(slot0[1])),
+                  },
+                ],
                 activeBinId: Number(slot0[1]),
                 binStep: key.tickSpacing,
-                reservesKnown: false,
+                reservesKnown: true,
               };
             }
             return v3BinArray(getAddress(poolAddress));

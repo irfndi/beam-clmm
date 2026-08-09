@@ -123,7 +123,7 @@ export const DLMMStrategy: StrategyApi = {
     // components stay.
     const volumeAuthenticity = DLMMStrategy.checkVolumeAuthenticity(
       pool,
-      pool.statsSource === "datapi",
+      pool.statsSource === "datapi" || pool.statsSource === "krystal",
     );
     const binUtilization = DLMMStrategy.computeBinUtilization(binArray);
 
@@ -190,12 +190,20 @@ export const DLMMStrategy: StrategyApi = {
 
     const volTvlRatio = pool.volume24hUsd / pool.tvlUsd;
 
-    if (volTvlRatio > 10) {
-      score -= 0.3;
-      flags.push(`vol/tvl=${volTvlRatio.toFixed(1)}x (suspicious)`);
-    } else if (volTvlRatio > 5) {
-      score -= 0.15;
-      flags.push(`vol/tvl=${volTvlRatio.toFixed(1)}x (elevated)`);
+    // The vol/tvl suspicion penalty exists to distrust FABRICATED volume
+    // (wash-heavy or modeled). When fees are MEASURED on-chain (Krystal's
+    // stat24h.feeUsd is verified against raw v4 Swap events; the legacy
+    // datapi likewise), the fee income itself proves the volume is real — a
+    // 30x-turnover pool paying measured fees IS the harvest, not a red flag.
+    // Gecko/heuristic volume stays suspicious and keeps the penalty.
+    if (!feesMeasured) {
+      if (volTvlRatio > 10) {
+        score -= 0.3;
+        flags.push(`vol/tvl=${volTvlRatio.toFixed(1)}x (suspicious)`);
+      } else if (volTvlRatio > 5) {
+        score -= 0.15;
+        flags.push(`vol/tvl=${volTvlRatio.toFixed(1)}x (elevated)`);
+      }
     }
 
     // Fee-rate band consumes fees24hUsd, so run it ONLY when fees are MEASURED
@@ -216,7 +224,9 @@ export const DLMMStrategy: StrategyApi = {
       }
     }
 
-    if (pool.tvlUsd < 5000 && pool.volume24hUsd > 100000) {
+    // Low-TVL high-volume is a wash proxy — moot when fees are measured
+    // on-chain (the income is real regardless of pool size).
+    if (!feesMeasured && pool.tvlUsd < 5000 && pool.volume24hUsd > 100000) {
       score -= 0.5;
       flags.push("low-tvl high-volume (possible wash)");
     }

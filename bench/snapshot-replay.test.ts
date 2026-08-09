@@ -330,7 +330,7 @@ describe("snapshot statsSource trust model on replay", () => {
     fees24hUsd: 600_000 * 0.025,
   };
 
-  it("a datapi snapshot restores gate-on: the outlier measured fee rate now rejects at the 0.7 prefilter", () => {
+  it("a datapi snapshot restores gate-on: the outlier measured fee rate is FLAGGED (no vol/tvl stacking)", () => {
     const layer = DbLive(":memory:");
     run(
       Effect.gen(function* () {
@@ -344,12 +344,13 @@ describe("snapshot statsSource trust model on replay", () => {
         // A Data-API snapshot replays as datapi…
         expect(restored!.statsSource).toBe("datapi");
         const pool = replayPool({ ...outlierFees, statsSource: restored!.statsSource });
-        // …so the measured-fee-rate component fires (mirrors the backtest gate:
-        // checkVolumeAuthenticity(pool, statsSource === "datapi")).
+        // Measured fees (datapi/krystal) prove the volume real, so the vol/tvl
+        // suspicion penalty is skipped — the OUTLIER MEASURED FEE RATE still
+        // flags (2.5% > 2% band) but no longer stacks a vol/tvl penalty.
         const auth = DLMMStrategy.checkVolumeAuthenticity(pool, pool.statsSource === "datapi");
         expect(auth.flags.some((f: string) => f.includes("outlier"))).toBe(true);
-        expect(auth.score).toBeCloseTo(0.65, 5);
-        expect(DLMMStrategy.passesPreFilter(pool, auth.score, 0.5, 50_000, 0.7, 0.3)).toBe(false);
+        expect(auth.flags.some((f: string) => f.includes("elevated"))).toBe(false);
+        expect(auth.score).toBeCloseTo(0.8, 5);
       }),
       layer,
     );
