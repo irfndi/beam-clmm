@@ -40,42 +40,82 @@ Live example: PEPE/WETH 0.25% pays 8.02%/day of its $106k TVL — $100 there ear
 capital only earns pool-level yields when it IS the liquidity (a fresh pool you are
 ~100% of) — or via wash volume.**
 
-## 3. Robinhood Chain opportunity — live inventory (2026-08-09)
+## 3. Robinhood Chain opportunity — corrected inventory (Krystal API, 2026-08-09)
+
+> **Correction:** the gecko-only snapshot below the line was incomplete. The
+> Krystal LP explorer API (`https://api.krystal.app/all/v2/lp_explorer/top_pools`,
+> chainId 4663) exposes the full universe with **measured per-pool fee income**
+> (`stat24h.feeUsd` from on-chain fee growth), `drawdown24h`, `priceVolatility`,
+> dynamic-fee state, and per-token symbols. **500-pool universe (live):**
+> **356 pools ≥ 1%/day fee yield, 82 ≥ 5%/day, 60 ≥ 10%/day; median 1.31%/day.**
+> This is 5–10× richer than the gecko-derived snapshot (gecko lacks per-pool fee
+> data on this chain — its APR model under-reported massively).
+
+**The 17 harvest candidates (≥ 5%/day fee yield AND 24h drawdown ≥ −5%):**
+
+| Pool | Yield/day | 24h dd | TVL | Fee | Turnover |
+|---|---|---|---|---|---|
+| ETH/USDG v4 (dynamic) | 18.29% | −0.02% | $237k | dyn | 23.9× |
+| ETH/USDG v4 (dynamic) | 17.06% | −0.01% | $202k | dyn | 22.8× |
+| ETH/CASHCAT v4 | 36.64% | 0.00% | $5.3k | 1.104% | 36.5× |
+| ETH/TENDIES v4 | 15.87% | 0.00% | $2.4k | 1.10% | 15.8× |
+| ETH/USDG v4 (5% dyn) | 13.45% | −0.01% | $565k | 5.0% | 18.2× |
+| ETH/CASHCAT v4 | 12.63% | 0.00% | $3.0k | 0.34% | 43.6× |
+| ETH/PRYSM v4 | 8.03% | −2.3% | $1.3k | 1% | 8.0× |
+| ETH/FORTUNA v4 | 7.93% | −4.7% | $1.3k | 1% | 7.9× |
+| USDG/FRONG v4 | 5.49% | 0.00% | $9.8k | 1.104% | 5.5× |
+| ETH/TOAD v4 | 5.33% | 0.00% | $6.2k | 1% | 5.3× |
+| ETH/GUAC v4 | 4.50% | 0.00% | $7.0k | 1% | — |
+| ETH/MANCER v4 | 5.15% | −5.0% | $40k | 2.1% | 2.6× |
+| + 5 more (ETH/USDG 4.7%@$609k, etc.) | | | | | |
+
+**The key findings the gecko snapshot missed:**
+1. **ETH/USDG v4 dynamic-fee pools are the motherlode**: 17–18%/day at $200–237k
+   TVL with ~0 drawdown (stable pair, 20×+ daily turnover, high dynamic fee), plus
+   a 5%-fee pool at $565k (13.4%/day). **A stable-anchor harvest at scale with
+   ~zero IL** — the exact opposite of the meme-only picture.
+2. **Meme harvest pools exist with 0 drawdown TODAY** (ETH/CASHCAT 36.6%/day,
+   ETH/TENDIES 15.9%/day) — but they're $2–9k TVL (capacity-limited, token-crash
+   risk is one bad day away — dd24h=0 is today's snapshot).
+3. **Top-yield pools are mostly top-crash pools** (the 60 ≥10%/day pools have
+   dd24h −34% to −89%): the 17-candidate filter (yield AND drawdown) is the
+   operative strategy signal, and it must be re-measured continuously — the
+   harvest set rotates hourly.
+
+**Share-adjusted daily earnings (fee yield × your share of pool TVL):**
+
+| Pool | TVL | $100 | $1k | $10k |
+|---|---|---|---|---|
+| ETH/CASHCAT 36.6%/d | $5.3k | $0.69 (0.7%/d) | **$6.9 (6.9%/d)** | pool-capped |
+| ETH/TENDIES 15.9%/d | $2.4k | $0.65 | **$6.5 (6.5%/d)** | pool-capped |
+| ETH/USDG 18.3%/d | $237k | $0.008 | $0.08 | $0.77 (0.8%/d) |
+| ETH/USDG 13.4%/d | $565k | — | $0.02 | $0.24 |
+| USDG/FRONG 5.5%/d | $9.8k | $0.06 | $0.56 | $5.6 |
+
+**The share constraint is now the central design fact**: $100–1,000 CAN earn
+0.7–6.9%/day by being a large share of the tiny meme harvest pools; $10k+ must
+ride the ETH/USDG anchor cluster (0.2–0.8%/day) or a multi-pool harvest book.
+Growth past each pool's TVL forces rotation into the next tier — the agent's
+pool-selection IS the strategy.
+
+**Gas/tx economics (unchanged):** base fee 0.0297 gwei, sub-cent txs; hourly
+recompound viable at $500+.
+
+<details><summary>Original gecko-derived snapshot (superseded — kept for comparison)</summary>
 
 Gas: base fee **0.0297 gwei** (~0.00003 ETH ≈ $0.06 per 1M-gas tx); blocks ~101ms
 (~9.9 blocks/s); 11.48M txs/day; ETH $1,914.
 
-**Top pools by 24h volume (GeckoTerminal live):**
+**Top pools by 24h volume (GeckoTerminal live):** USDG/WETH 0.01% v3 anchor
+($34.9M vol/$6.66M = 19.1% APR); WETH/USDG v4 4%* cluster (~$39.6M/$3.0M ≈
+53%/day pool-wide, decaying, fee tier inferred); CASHCAT/WETH 1% (363% APR);
+PEPE/WETH 0.25% ($106k TVL, 2,930% APR); BLINK/WETH 1% (3h old, 3,390%);
+MOG/WETH 1% (10,424%). Meme dispersion: median ~1.06%/day, best 8–9.3%/day,
+24h moves −29% to −36% on the best — full-range LP is IL-swamped. Per-capital:
+v3 anchor $10→$0.005/d; PEPE $100→$0.80/d; v4 cluster (if 4%) $100→$386/d.
+*[INFERENCE] v4 fee tier.
 
-| Pool | 24h vol | Reserve | Turnover | Fee APR |
-|---|---|---|---|---|
-| USDG/WETH 0.01% v3 (anchor) | $34.9M | $6.66M | 5.2×/d | 19.1% |
-| WETH/USDG v4 4%* (6-pool cluster) | ~$39.6M | ~$3.0M | 13.2×/d | **~53%/day pool-wide** |
-| CASHCAT/WETH 1% | $5.17M | $5.19M | 1.0×/d | 363% |
-| PEPE/WETH 0.25% | $3.39M | $106k | 32.1×/d | 2,930% |
-| BLINK/WETH 1% (3h old) | $2.98M | $321k | 9.3×/d | 3,390% |
-| MANCER 1% | — | — | — | 1,200% |
-| MOG/WETH 1% | $747k | $26k | 28.6×/d | 10,424% |
-
-*[INFERENCE] v4 fee tier (gecko returns null; repo convention 39999≈4%). If 0.046% instead, the anchor cluster is ~1,620% APR (still top).
-
-**Meme-pool dispersion (hot pools, <24h old):** median ~1.06%/day (387% APR), best
-8–9.3%/day (PEPE/BLINK), max:min ≈ 70:1. **Caveat:** 24h price moves −29% to −36%
-on the best pools — full-range LP is IL-swamped; the fee APR is only capturable with
-tight ranges + fast rebalance, and most meme volume is launch-window churn that dies
-in hours-to-days (98% of tokens dead in 3 months; 0.0045% ever >$1M cap).
-
-**Per-capital daily fees (proportional share, today):**
-
-| Pool | $10 | $100 | $1k | $10k |
-|---|---|---|---|---|
-| v3 0.01% anchor | $0.005 | $0.052 | $0.52 | $5.23 |
-| v4 4% cluster (if 4% holds) | up to $38/d | $386/d | $3,865/d | — |
-| CASHCAT 1% | $0.10 | $1.00 | $9.96 | $99.6 |
-| PEPE 0.25% | $0.80 | $8.03 | $80.3 | $803 |
-
-**Gas verdict:** sub-cent txs; hourly recompound costs $1.79–7.76/d — only pays at
-$500+ in ≥100%-APR pools. At $10–100: recompound ≤ daily.
+</details>
 
 ## 4. Fee-harvesting math (the operating regime)
 
@@ -180,24 +220,26 @@ precedent. The agent will NOT do this.
 
 ## 7. The verdict + recommended build sequence
 
-**The honest answer:** $10 → $1M in 112 days is not achievable via compliant organic
-fee harvesting (needs 10.8%/day; organic ceiling with real capital is ~1–4%/day, and
-small capital earns a small share of pool yields). The 112-day claim closes only via
-wash trading (prohibited, won't build) or a 1-in-10⁴ token lottery (legal but
-expected-negative). **What IS achievable and worth building:** an autonomous
-fee-harvesting agent that compounds 1–4%/day in the best rotating meme/anchor pools
-($10 → $150–8,000 in 112 days; $100k → meaningful 20–50%/day-in-pool capture with
-diversification), with IL/rug gates that make it survivable — the difference between
-this and the failed 99.99% of challenges is the gates, cadence, and honest book.
+**Corrected verdict (post-Krystal):** the opportunity set is real and rich —
+82 pools ≥ 5%/day, and a **stable-pair harvest exists (ETH/USDG dynamic-fee
+cluster: 13–18%/day, ~0 IL)**. The $10 → $1M math still requires a large share of
+small high-yield pools (capacity-limited) or sustained multi-pool rotation, but
+the honest ceiling is far above the gecko-era estimate: **$100–1,000 can compound
+at 0.7–6.9%/day in the meme harvest tier; $10k+ rides the anchor cluster at
+0.2–0.8%/day plus a diversified harvest book.** The 112-day scenario table:
+conservative 1%/d → ~3x; base 3%/d → ~27x; aggressive 6%/d (sustained harvest
+rotation, unlikely) → ~700x. **The wash-trading verdict stands (prohibited); the
+strategy is organic fee harvesting with continuous drawdown-gated rotation.**
 
 **Build order (next milestones):**
 1. **Live-tx v3 layer** (mint/collect/burn/swap) + fix `getPositionValueUsd` +
-   gas-floor config for small accounts → first real fees in paper→live.
-2. **Throughput refactor** (gecko cache → multicall → concurrency → fast lane) →
-   sub-minute full-universe cycles.
-3. **Strategy v1 (challenge mode)**: anchor + meme rotation, volatility-scaled
-   ranges, IL-stop gates, fee/gas-aware compounding cadence, the guardrail spec
-   above.
-4. **v4 single-tx compound** + UniversalRouter swaps (resolve address first).
-5. **Live challenge book**: wallet + P&L ledger (fees vs IL vs price) — the thing
-   no published challenge has.
+   gas-floor config for small accounts → first real fees.
+2. **Krystal stats source** (pool discovery + measured feeUsd + drawdown24h —
+   the strategy's primary signal set) + gecko fallback.
+3. **Two-tier loop** (slow 500-pool universe refresh 5–15 min + fast harvest
+   lane every 10–60s with drawdown-gated exits) + multicall batching +
+   concurrency.
+4. **Challenge-mode strategy**: the 17-candidate scoring/tiering, volatility-
+   sized ranges, rotation triggers, fee/gas-aware compounding cadence.
+5. **v4 single-tx compound** + UniversalRouter swaps (resolve address).
+6. **Live challenge book**: wallet + P&L ledger (fees vs IL vs price).
