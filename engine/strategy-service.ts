@@ -154,7 +154,11 @@ export const DLMMStrategy: StrategyApi = {
       // - Heuristic knows nothing (both flags false) — fabricated values would
       //   just re-validate their own assumptions, so no gate touches them.
       volumeAuthenticityKnown: isMeasuredStatsSource(pool.statsSource),
-      feeIlRatioKnown: pool.statsSource === "datapi",
+      // Fees are MEASURED under datapi (legacy) and krystal (verified on-chain
+      // fee income from v4 Swap events — the Robinhood Chain source of truth).
+      // GeckoTerminal fees remain a binStep base-rate MODEL — feeIlRatioKnown
+      // stays false for gecko (see the comment block above).
+      feeIlRatioKnown: pool.statsSource === "datapi" || pool.statsSource === "krystal",
       binUtilizationKnown: binArray.reservesKnown !== false,
       // Farm APR only flows from the Data API overlay: a pool with a farm but
       // an unknown APR reports 0 (known farm, no rate), non-farm/unknown null.

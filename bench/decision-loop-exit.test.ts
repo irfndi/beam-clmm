@@ -25,6 +25,7 @@ import {
   EntryPrepService,
   MeteoraDatapiService,
   GeckoTerminalService,
+  KrystalService,
   AlertService,
   type AdapterApi,
   type AgentApi,
@@ -248,6 +249,7 @@ function makeTestLayer(opts: {
     Layer.succeed(HttpStatusServerService, { start: () => Effect.void, stop: () => Effect.void }),
     Layer.succeed(EntryPrepService, { prepareEntryTokens: () => Effect.succeed(undefined) }),
     Layer.succeed(MeteoraDatapiService, opts.datapi ?? { getPoolData: () => Effect.succeed(null) }),
+    Layer.succeed(KrystalService, { getPoolStats: () => Effect.succeed(null), getUniverse: () => Effect.succeed(new Map()) }),
     Layer.succeed(GeckoTerminalService, opts.gecko ?? { getPoolStats: () => Effect.succeed(null) }),
     Layer.succeed(AlertService, {
       sendAlert: () => Effect.void,

@@ -136,15 +136,28 @@ export interface PoolState {
   timestamp: number;
   /**
    * Where tvl/volume/fees came from, in resolution order:
-   * "datapi" > "geckoterminal" > "heuristic". "datapi" = real Meteora Data API
-   * values (and the only source of safety signals — blacklist/freeze/verified/
-   * farm); "geckoterminal" = real GeckoTerminal 24h volume + reserve TVL with
-   * fees derived from real volume × the pool's base-fee rate; "heuristic" =
-   * on-chain reserves × price with modeled turnover (FABRICATED volume/fees,
-   * last-resort safety net only). Volume-authenticity and the fee/IL ratio are
-   * only meaningful for non-heuristic stats; gates skip them when heuristic.
+   * "datapi" > "krystal" > "geckoterminal" > "heuristic". "datapi" = real
+   * Meteora Data API values (legacy, chain-specific); "krystal" = MEASURED
+   * on-chain fee income + TVL from the Krystal LP explorer (verified against
+   * raw v4 Swap events — the only measured-fee source on Robinhood Chain);
+   * "geckoterminal" = real GeckoTerminal 24h volume + reserve TVL with fees
+   * derived from real volume × the pool's base-fee rate (modeled);
+   * "heuristic" = on-chain reserves × price with modeled turnover
+   * (FABRICATED volume/fees, last-resort safety net only). Volume-authenticity
+   * and the fee/IL ratio are only meaningful for non-heuristic stats; gates
+   * skip them when heuristic.
    */
-  statsSource?: "datapi" | "geckoterminal" | "heuristic" | undefined;
+  statsSource?: "datapi" | "krystal" | "geckoterminal" | "heuristic" | undefined;
+  /**
+   * 24h drawdown % (negative) from the Krystal LP explorer — the challenge
+   * strategy's risk term (IL proxy). Only set when statsSource is "krystal".
+   */
+  drawdown24h?: number | null | undefined;
+  /**
+   * 24h price volatility % from the Krystal LP explorer — drives range width
+   * selection. Only set when statsSource is "krystal".
+   */
+  priceVolatility?: number | null | undefined;
   /**
    * Whether the pool has an LM farm, from the Data API's `has_farm`. Only set
    * when statsSource is "datapi"; undefined otherwise (unknown).
@@ -169,8 +182,8 @@ export interface PoolState {
  */
 export function isMeasuredStatsSource(
   source: PoolState["statsSource"],
-): source is "datapi" | "geckoterminal" {
-  return source === "datapi" || source === "geckoterminal";
+): source is "datapi" | "krystal" | "geckoterminal" {
+  return source === "datapi" || source === "krystal" || source === "geckoterminal";
 }
 
 export interface PoolSnapshot {
@@ -197,7 +210,7 @@ export interface PoolSnapshot {
    * `undefined`. Conservative fail-closed default: a snapshot whose provenance
    * was never recorded is treated as fabricated (`heuristic`), NOT datapi.
    */
-  statsSource?: "datapi" | "geckoterminal" | "heuristic" | undefined;
+  statsSource?: "datapi" | "krystal" | "geckoterminal" | "heuristic" | undefined;
 }
 
 export interface PoolMetrics {
@@ -259,6 +272,9 @@ export interface Position {
   id: string;
   poolAddress: string;
   poolName: string;
+  /** Token mints (lowercase) — required for USD marks of the position legs. */
+  tokenX?: string;
+  tokenY?: string;
   lowerBinId: number;
   upperBinId: number;
   liquidityShares: bigint;

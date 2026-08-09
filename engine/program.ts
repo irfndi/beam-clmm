@@ -79,6 +79,7 @@ import {
   McpServerService,
   HttpStatusServerService,
   GeckoTerminalService,
+  KrystalService,
   PythPriceService,
   AlertService,
   CopySignalService,
@@ -94,6 +95,7 @@ import {
   type AgentStateApi,
 } from "./services.js";
 import { GeckoTerminalLive, enrichPoolFromGecko } from "./gecko-terminal-service.js";
+import { KrystalLive, enrichPoolFromKrystal } from "./krystal-service.js";
 import { PythPriceLive } from "./pyth-price-service.js";
 import { AlertLive } from "./alert-service.js";
 import { detectDepegAndLiquidityDrain } from "./depeg-liquidity-detector.js";
@@ -867,6 +869,7 @@ type AllServices =
   | McpServerService
   | HttpStatusServerService
   | GeckoTerminalService
+  | KrystalService
   | PythPriceService
   | AlertService
   | CopySignalService;
@@ -918,8 +921,9 @@ export function buildLayer(cfg?: AppConfig): Layer.Layer<AllServices, never, nev
   const merged7 = Layer.merge(merged6, screener);
   const merged8 = Layer.merge(merged7, configLayer);
   const merged11 = Layer.merge(merged8, revenueConfig);
-  const merged11b = Layer.merge(merged11, GeckoTerminalLive);
-  const merged11c = Layer.merge(merged11b, pythPrice);
+  const merged11b = Layer.merge(merged11, KrystalLive);
+  const merged11c = Layer.merge(merged11b, GeckoTerminalLive);
+  const merged11d = Layer.merge(merged11c, pythPrice);
 
   const agentLayer = cfg?.agentiveMode ? AgentLive(cfg) : Layer.succeed(AgentService, AgentNoOp);
 
@@ -939,7 +943,7 @@ export function buildLayer(cfg?: AppConfig): Layer.Layer<AllServices, never, nev
           stop: () => Effect.void,
         });
 
-  const merged12 = Layer.merge(merged11c, agentLayer);
+  const merged12 = Layer.merge(merged11d, agentLayer);
   const merged13 = Layer.merge(merged12, agentStateLayer);
   const merged14 = Layer.merge(merged13, mcpLayer);
   const merged15 = Layer.merge(merged14, httpLayer);
@@ -2138,6 +2142,7 @@ export const program = Effect.gen(function* () {
   const agentState = yield* AgentStateService;
   const mcpServer = yield* McpServerService;
   const httpStatusServer = yield* HttpStatusServerService;
+  const krystal = yield* KrystalService;
   const gecko = yield* GeckoTerminalService;
   const alertSvc = yield* AlertService;
   const copySignalsOption = yield* Effect.serviceOption(CopySignalService);
@@ -4398,20 +4403,30 @@ export const program = Effect.gen(function* () {
       // Real pool stats, resolved datapi (primary) > geckoterminal (secondary)
       // > the adapter's fabricated heuristic (last-resort safety net). The
       // chosen source is tagged onto the pool so the volume/fee gates skip
-      // Real pool stats, resolved geckoterminal (primary) > the adapter's
-      // fabricated heuristic (last-resort safety net). The chosen source is
-      // tagged onto the pool so the volume/fee gates skip heuristic fiction
-      // instead of acting on it. The gecko fee rate is the pool's
-      // binStep-derived base fee applied to REAL gecko volume (gecko's own
-      // pool_fee_percentage is null for every CL pool — see
-      // gecko-terminal-service.ts). Data-API-exclusive safety signals are
-      // never sourced from gecko: they stay null and the screener fails open
-      // on null.
+      // Real pool stats, resolved krystal (primary — MEASURED on-chain fee
+      // income, verified vs raw v4 Swap events) > geckoterminal (secondary —
+      // real volume, modeled fees) > the adapter's fabricated heuristic
+      // (last-resort safety net). The chosen source is tagged onto the pool so
+      // the volume/fee gates skip heuristic fiction instead of acting on it.
+      // The gecko fee rate is the pool's binStep-derived base fee applied to
+      // REAL gecko volume (gecko's own pool_fee_percentage is null for every
+      // CL pool — see gecko-terminal-service.ts). Data-API-exclusive safety
+      // signals are never sourced from gecko/krystal: they stay null and the
+      // screener fails open on null.
+      const krystalStats =
+        config.krystalEnabled !== false
+          ? yield* krystal.getPoolStats(poolAddress)
+          : null;
       const geckoStats =
-        config.geckoTerminalEnabled !== false
+        krystalStats === null && config.geckoTerminalEnabled !== false
           ? yield* gecko.getPoolStats(poolAddress, 0.0025 + rawPool.binStep / 10_000)
           : null;
-      const pool = geckoStats !== null ? enrichPoolFromGecko(rawPool, geckoStats) : rawPool;
+      const pool =
+        krystalStats !== null
+          ? enrichPoolFromKrystal(rawPool, krystalStats)
+          : geckoStats !== null
+            ? enrichPoolFromGecko(rawPool, geckoStats)
+            : rawPool;
 
       // TVL velocity + IL price-drift need a previous reference point, so the
       // previous snapshot must be read BEFORE persisting the current one.

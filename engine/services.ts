@@ -30,6 +30,7 @@ import type { BeamStateSnapshot } from "./state-service.js";
 import type { EvolvableThresholds, OutcomeRecord } from "./strategy-service.js";
 
 import type { GeckoPoolStats } from "./gecko-terminal-service.js";
+import type { KrystalPoolStats } from "./krystal-service.js";
 import type { ClaimedReward as RewardClaim } from "./rewards.js";
 
 /** Pool stats from GeckoTerminal (chain-agnostic; live on Robinhood Chain). */
@@ -582,6 +583,24 @@ export interface GeckoTerminalApi {
     baseFeeRate: number,
   ) => Effect.Effect<GeckoStats | null, never>;
 }
+
+export interface KrystalApi {
+  /**
+   * Measured stats for one pool from the Krystal LP explorer (verified
+   * on-chain fee income). Never fails: network/HTTP/schema errors return null
+   * so callers fall through to gecko/heuristic. Served from the cached
+   * universe (10-min TTL, one 500-pool call).
+   */
+  readonly getPoolStats: (poolAddress: string) => Effect.Effect<KrystalPoolStats | null, never>;
+  /**
+   * The full cached universe (poolAddress → stats), for discovery/ranking.
+   */
+  readonly getUniverse: () => Effect.Effect<ReadonlyMap<string, KrystalPoolStats>, never>;
+}
+
+export class KrystalService extends Context.Service<KrystalService, KrystalApi>()(
+  "KrystalService",
+) {}
 
 export class GeckoTerminalService extends Context.Service<GeckoTerminalService, GeckoTerminalApi>()(
   "GeckoTerminalService",

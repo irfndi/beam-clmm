@@ -360,6 +360,8 @@ export const AdapterLive = Layer.effect(AdapterService,
             id: tokenId.toString(),
             poolAddress: pool.toLowerCase(),
             poolName: `${token0.slice(0, 6)}/${token1.slice(0, 6)}`,
+            tokenX: token0.toLowerCase(),
+            tokenY: token1.toLowerCase(),
             lowerBinId: Number(p[5]),
             upperBinId: Number(p[6]),
             liquidityShares: p[7],
@@ -407,6 +409,8 @@ export const AdapterLive = Layer.effect(AdapterService,
             id: tokenId.toString(),
             poolAddress: poolId,
             poolName: `v4:${poolId.slice(0, 10)}`,
+            tokenX: key.currency0.toLowerCase(),
+            tokenY: key.currency1.toLowerCase(),
             lowerBinId: 0,
             upperBinId: 0,
             liquidityShares: liquidity,
@@ -626,16 +630,21 @@ export const AdapterLive = Layer.effect(AdapterService,
       getPositionValueUsd: (poolAddress, positionPubKey) =>
         Effect.tryPromise({
           try: async () => {
-            // Position value = liquidity × current price × range factor.
+            // Heuristic mark: liquidity × token USD price × range factor.
             // Full amount math (sqrtPrice bounds) is the tx-layer milestone;
-            // this heuristic mark is fail-open and only shapes decisions.
+            // this mark is fail-open and only shapes decisions. The mark
+            // prices the position's TOKEN MINT (the pool address is not a
+            // mint — the old `priceUsd(poolAddress)` always returned 0 and
+            // marked every live position at $0, driving dust/trailing churn).
             if (!walletAddress) return null;
             const pos =
               poolAddress.length === 66
                 ? (await v4PositionsOf(walletAddress)).find((p) => p.id === positionPubKey)
                 : (await v3PositionsOf(walletAddress)).find((p) => p.id === positionPubKey);
             if (!pos) return null;
-            const usd = await priceUsd(poolAddress).catch(() => 0);
+            const mint = pos.tokenX ?? pos.tokenY;
+            if (!mint) return null;
+            const usd = await priceUsd(mint).catch(() => 0);
             return (Number(pos.liquidityShares) / 1e18) * (usd || 0) * 2;
           },
           catch: () => null,

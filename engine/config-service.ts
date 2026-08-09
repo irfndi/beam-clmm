@@ -173,6 +173,9 @@ export interface AppConfig {
    *  test fixture pins false (like jupiterTokenRiskEnabled) so the existing
    *  program tests never touch the network and stay byte-identical. */
   readonly geckoTerminalEnabled?: boolean;
+  /** Krystal LP explorer as the primary measured-fee stats source. */
+  readonly krystalEnabled?: boolean;
+  readonly krystalApiUrl?: string;
 
   // ─── Pyth Hermes price feeds ─────────────────────────────────────────────────
   // Optional so standalone test fixtures that omit new fields keep compiling;
@@ -701,6 +704,16 @@ const loadConfig = Effect.gen(function* () {
 
   const geckoTerminalEnabled = yield* Config.boolean("GECKO_TERMINAL_ENABLED").pipe(
     Effect.orElseSucceed(() => true),
+  );
+
+  // ─── Krystal LP explorer (primary measured-fee stats source) ─────────────
+  // Measured on-chain fee income (verified vs raw v4 Swap events) — the only
+  // measured-fee source on Robinhood Chain; gecko fees stay modeled.
+  const krystalEnabled = yield* Config.boolean("KRYSTAL_ENABLED").pipe(
+    Effect.orElseSucceed(() => true),
+  );
+  const krystalApiUrl = yield* Config.string("KRYSTAL_API_URL").pipe(
+    Effect.orElseSucceed(() => "https://api.krystal.app"),
   );
 
   // ─── Pyth Hermes price feeds ──────────────────────────────────────────────
@@ -1269,7 +1282,10 @@ const loadConfig = Effect.gen(function* () {
     .split(",")
     .map((s) => s.trim())
     .filter(Boolean);
-  const invalidPools = watchlistPools.filter((pool) => !isAddress(pool));
+  // Watchlist entries are either 42-char v3 pool addresses or 66-char v4
+  // poolIds (keccak256(abi.encode(poolKey)) — the engine's v4 pool identity).
+  const isPoolId = (value: string) => /^0x[0-9a-fA-F]{64}$/.test(value);
+  const invalidPools = watchlistPools.filter((pool) => !isAddress(pool) && !isPoolId(pool));
   if (invalidPools.length > 0) {
     return yield* Effect.die(
       new ConfigError({
@@ -1379,6 +1395,8 @@ const loadConfig = Effect.gen(function* () {
     jupiterTokenRiskEnabled,
     jupiterTokenRiskCacheTtlMin,
     geckoTerminalEnabled,
+    krystalEnabled,
+    krystalApiUrl,
 
     pythEnabled,
     pythApiKey,
