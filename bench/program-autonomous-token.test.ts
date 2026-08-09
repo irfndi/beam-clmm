@@ -599,8 +599,9 @@ describe("settlement job processing", () => {
     // When
     const [processed] = await runSettlementProcessor([job], adapter, savedJobs);
 
-    // Then
-    expect(processed?.outputUsd).toBe(9007199.254740993);
+    // Then — native is ETH, 18 decimals (the old 9-decimal SOL pricing
+    // inflated native settlement value ~1e9x).
+    expect(processed?.outputUsd).toBe(0.009007199254740993);
   });
 
   it("records the finalized PnL and signal outcome after all settlement jobs confirm", async () => {
@@ -663,8 +664,9 @@ describe("settlement job processing", () => {
     const savedJobs: SettlementJobRecord[] = [];
     const adapter = {
       getSwapStatus: () => Effect.succeed({ state: "confirmed", error: null }),
+      // 0.1 ETH output, 0.0005 ETH fee — native is 18 decimals on 4663.
       getConfirmedSwapOutput: () =>
-        Effect.succeed({ outputAtomic: 1_000_000_000n, feeAtomic: 5_000_000n }),
+        Effect.succeed({ outputAtomic: 100_000_000_000_000_000n, feeAtomic: 500_000_000_000_000n }),
       getTokenPrices: () => Effect.succeed({ [NATIVE_MINT]: 100 }),
     } as unknown as AdapterApi;
 
@@ -674,9 +676,9 @@ describe("settlement job processing", () => {
     // Then
     expect(processed).toMatchObject({
       status: "confirmed",
-      confirmedOutputAtomic: "1000000000",
-      outputUsd: 100,
-      executionCostUsd: 0.5,
+      confirmedOutputAtomic: "100000000000000000",
+      outputUsd: 10,
+      executionCostUsd: 0.05,
     });
   });
 

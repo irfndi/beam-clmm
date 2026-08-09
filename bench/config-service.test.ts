@@ -295,13 +295,15 @@ describe("ConfigService live-mode gas floors (MIN_NATIVE_*)", () => {
     vi.stubEnv("MIN_NATIVE_FOR_ENTRY_WEI", undefined);
     vi.stubEnv("MIN_NATIVE_FOR_GAS_WEI", undefined);
     const cfg = await loadConfig();
-    expect(cfg.minNativeForEntryWei).toBe(50_000_000_000_000_000n); // 0.05 ETH
-    expect(cfg.minNativeForGasWei).toBe(5_000_000_000_000_000n); // 0.005 ETH
+    // 0.002 ETH entry / 0.001 ETH gas — tuned so a $10-20 test wallet funded
+    // ~50/50 USDG/ETH passes the live ENTER gate without a top-up.
+    expect(cfg.minNativeForEntryWei).toBe(2_000_000_000_000_000n); // 0.002 ETH
+    expect(cfg.minNativeForGasWei).toBe(1_000_000_000_000_000n); // 0.001 ETH
   });
 
   it("honours env overrides (small-account challenge floors)", async () => {
-    // 0.0001 ETH gas floor + 0.0005 ETH entry floor — a $10-100 challenge
-    // account is viable instead of blocked by the 0.05 ETH default gate.
+    // 0.0001 ETH gas floor + 0.0005 ETH entry floor — explicit control below
+    // the 0.001/0.002 ETH defaults for ultra-small test wallets.
     vi.stubEnv("MIN_NATIVE_FOR_ENTRY_WEI", "500000000000000"); // 0.0005 ETH
     vi.stubEnv("MIN_NATIVE_FOR_GAS_WEI", "100000000000000"); // 0.0001 ETH
     const cfg = await loadConfig();
@@ -312,13 +314,13 @@ describe("ConfigService live-mode gas floors (MIN_NATIVE_*)", () => {
   it("falls back on non-numeric values", async () => {
     vi.stubEnv("MIN_NATIVE_FOR_ENTRY_WEI", "not-a-number");
     const cfg = await loadConfig();
-    expect(cfg.minNativeForEntryWei).toBe(50_000_000_000_000_000n);
+    expect(cfg.minNativeForEntryWei).toBe(2_000_000_000_000_000n);
   });
 
   it("falls back on negative values", async () => {
     vi.stubEnv("MIN_NATIVE_FOR_GAS_WEI", "-5");
     const cfg = await loadConfig();
-    expect(cfg.minNativeForGasWei).toBe(5_000_000_000_000_000n);
+    expect(cfg.minNativeForGasWei).toBe(1_000_000_000_000_000n);
   });
 });
 

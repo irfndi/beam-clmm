@@ -1,6 +1,6 @@
 import { randomUUID } from "crypto";
 import { Effect } from "effect";
-import { NATIVE_MINT } from "./constants.js";
+import { NATIVE_MINT, NATIVE_DECIMALS, STABLECOIN_MINT } from "./constants.js";
 import { createLogger } from "./logger.js";
 import { computeNetRealizedPnlUsd } from "./pnl.js";
 import type { AdapterApi, DbApi } from "./services.js";
@@ -366,8 +366,8 @@ export function processSettlementJobs(
                 const prices = yield* input.adapter.getTokenPrices([NATIVE_MINT]);
                 const solPriceUsd = prices[NATIVE_MINT] ?? 0;
                 if (solPriceUsd > 0) {
-                  const outputUsd = atomicUsd(evidence.outputAtomic, 9, solPriceUsd);
-                  const executionCostUsd = atomicUsd(evidence.feeAtomic, 9, solPriceUsd);
+                  const outputUsd = atomicUsd(evidence.outputAtomic, NATIVE_DECIMALS, solPriceUsd);
+                  const executionCostUsd = atomicUsd(evidence.feeAtomic, NATIVE_DECIMALS, solPriceUsd);
                   return {
                     ...job,
                     status: "confirmed" as const,
@@ -444,7 +444,7 @@ export function processSettlementJobs(
             ...job,
             status: "confirmed" as const,
             confirmedOutputAtomic: job.amountAtomic,
-            outputUsd: atomicUsd(amountAtomic, 9, solPriceUsd),
+            outputUsd: atomicUsd(amountAtomic, NATIVE_DECIMALS, solPriceUsd),
             executionCostUsd: 0,
             attempts: job.attempts + 1,
             nextRetryAt: null,
@@ -535,13 +535,29 @@ export function processSettlementJobs(
         });
         submitted = true;
         capturedSignature = signature;
-        const nativeAfter = yield* input.adapter.getNativeBalance();
-        const confirmedOutputAtomic = nativeAfter > nativeBefore ? nativeAfter - nativeBefore : 0n;
+        // Primary confirmation: Swap-event evidence from the mined receipt
+        // (submitSwap's sendTx already waited for it). Correct for BOTH v3
+        // routes (output is WETH, 18 decimals — the old native-balance delta
+        // read 0 and the 9-decimal SOL pricing inflated value ~1e9) and v4
+        // native output. Falls back to the native balance delta (fresh read)
+        // when no Swap event is present.
+        let confirmedOutputAtomic = 0n;
+        const evidence = input.adapter.getConfirmedSwapOutput
+          ? yield* input.adapter
+              .getConfirmedSwapOutput(signature)
+              .pipe(Effect.catch(() => Effect.succeed(null)))
+          : null;
+        if (evidence && evidence.outputAtomic > 0n) {
+          confirmedOutputAtomic = evidence.outputAtomic;
+        } else {
+          const nativeAfter = yield* input.adapter.getNativeBalance();
+          confirmedOutputAtomic = nativeAfter > nativeBefore ? nativeAfter - nativeBefore : 0n;
+        }
         capturedConfirmedOutputAtomic = confirmedOutputAtomic;
         if (confirmedOutputAtomic <= 0n) {
           return yield* Effect.fail(new Error("Settlement output balance delta unavailable"));
         }
-        const outputUsd = atomicUsd(confirmedOutputAtomic, 9, solPriceUsd);
+        const outputUsd = atomicUsd(confirmedOutputAtomic, NATIVE_DECIMALS, solPriceUsd);
         const realizedInputUsd =
           inputPriceUsd > 0 ? atomicUsd(amountAtomic, inputDecimals, inputPriceUsd) : outputUsd;
         const executionCostUsd = Math.max(0, realizedInputUsd - outputUsd);
@@ -657,7 +673,15 @@ export function sweepOrphanSettlements(
         ),
       );
     const candidates = [...holdings.entries()].filter(
-      ([mint, holding]) => mint !== NATIVE_MINT && holding.amountAtomic > 0n,
+      ([mint, holding]) =>
+        mint !== NATIVE_MINT &&
+        // USDG is the engine's funding/entry stablecoin, not an orphan: on a
+        // fresh wallet no position backs it yet, and sweeping it to ETH would
+        // (a) pay slippage + gas and (b) strand the stable leg WETH-paired
+        // entries need (WETH != native ETH). Always keep the settlement
+        // stablecoin out of the orphan bucket.
+        mint !== STABLECOIN_MINT &&
+        holding.amountAtomic > 0n,
     );
     if (candidates.length === 0) return [];
     const existingJobs = yield* input.db
@@ -726,7 +750,7 @@ export function sweepOrphanSettlements(
     );
     const jobs: SettlementJobRecord[] = [];
     for (const [mint, holding] of holdings) {
-      if (mint === NATIVE_MINT || holding.amountAtomic <= 0n) continue;
+      if (mint === NATIVE_MINT || mint === STABLECOIN_MINT || holding.amountAtomic <= 0n) continue;
       if (backedMints.has(mint)) continue;
       const priceUsd = prices[mint] ?? 0;
       if (

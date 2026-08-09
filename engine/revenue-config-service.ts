@@ -8,8 +8,12 @@ import { getBeamUserConfigDir } from "./paths.js";
 
 const log = createLogger("revenue-config-service");
 
-const API_BASE_URL = "https://prism-api.irfndi.workers.dev";
+const API_BASE_URL = "https://beam-api.irfndi.workers.dev";
 const CACHE_TTL_MS = 30 * 60 * 1000;
+// After a fetch failure, keep serving the last-known config for this long
+// instead of re-running the 3-attempt fetch every 15s scan cycle (the old
+// behavior spammed warnings and, on a wrong host, hammered a 404 forever).
+const NEGATIVE_CACHE_TTL_MS = 5 * 60 * 1000;
 const MAX_RETRIES = 3;
 const RETRY_DELAY_MS = 2000;
 const CREDENTIALS_FILE = path.join(getBeamUserConfigDir(), "credentials.json");
@@ -145,10 +149,13 @@ function resolveConfig(db: DbApi, paperTrading: boolean): Effect.Effect<RevenueC
     }
 
     if (paperTrading) {
+      // Negative cache: retry the API only after the window, not every cycle.
+      cached = { config: DEFAULT_CONFIG, expiresAt: Date.now() + NEGATIVE_CACHE_TTL_MS };
       log.warn("Paper mode: using default revenue config after fetch failure");
       return DEFAULT_CONFIG;
     }
 
+    cached = { config: FAIL_CLOSED_CONFIG, expiresAt: Date.now() + NEGATIVE_CACHE_TTL_MS };
     log.error("Live mode: API unreachable, using fail-closed config with max fee rate");
     return FAIL_CLOSED_CONFIG;
   });

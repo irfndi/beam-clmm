@@ -1373,7 +1373,7 @@ export function executeLive(
         Effect.catch((err) =>
           Effect.succeed({
             value: null,
-            error: `Unable to read native SOL balance: ${err instanceof Error ? err.message : String(err)}`,
+            error: `Unable to read native ETH balance: ${err instanceof Error ? err.message : String(err)}`,
           }),
         ),
       );
@@ -1390,7 +1390,7 @@ export function executeLive(
           })
           .pipe(Effect.catch(() => Effect.void));
       if (nativeBalance.value === null) {
-        const error = nativeBalance.error ?? "Unable to read native SOL balance";
+        const error = nativeBalance.error ?? "Unable to read native ETH balance";
         if (autonomous && entryOperation) {
           yield* failPlannedEntry(entryOperation, error);
         }
@@ -1400,20 +1400,20 @@ export function executeLive(
       const minNativeForEntryWei = deps.minNativeForEntryWei ?? MIN_NATIVE_FOR_ENTRY_WEI;
       const minNativeForGasWei = deps.minNativeForGasWei ?? MIN_NATIVE_FOR_GAS_WEI;
       if (nativeBalanceWei < minNativeForEntryWei) {
-        const availableLamports = Number(nativeBalanceWei);
-        const neededLamports = Number(minNativeForEntryWei);
-        const reserve = neededLamports - Number(minNativeForGasWei);
-        const availableHuman = (availableLamports / 1e9).toFixed(4);
-        const neededHuman = (neededLamports / 1e9).toFixed(4);
-        const reserveHuman = (reserve / 1e9).toFixed(4);
+        const availableWei = Number(nativeBalanceWei);
+        const neededWei = Number(minNativeForEntryWei);
+        const reserve = neededWei - Number(minNativeForGasWei);
+        const availableHuman = (availableWei / 1e18).toFixed(6);
+        const neededHuman = (neededWei / 1e18).toFixed(6);
+        const reserveHuman = (reserve / 1e18).toFixed(6);
         console.warn(
-          `Insufficient SOL for ENTER — available ${availableHuman} SOL, need ${neededHuman} SOL ` +
-            `(gas ${(Number(minNativeForGasWei) / 1e9).toFixed(4)} + rent/fee reserve ${reserveHuman})`,
+          `Insufficient ETH for ENTER — available ${availableHuman} ETH, need ${neededHuman} ETH ` +
+            `(gas ${(Number(minNativeForGasWei) / 1e18).toFixed(6)} + fee reserve ${reserveHuman})`,
         );
         const error =
-          `Insufficient SOL for ENTER — available: ${availableHuman} SOL, ` +
-          `needed: ${neededHuman} SOL, ` +
-          `reserve: ${reserveHuman} SOL`;
+          `Insufficient ETH for ENTER — available: ${availableHuman} ETH, ` +
+          `needed: ${neededHuman} ETH, ` +
+          `reserve: ${reserveHuman} ETH`;
         if (autonomous && entryOperation) {
           yield* failPlannedEntry(entryOperation, error);
         }
@@ -7398,7 +7398,14 @@ export const program = Effect.gen(function* () {
             message: `EXIT executed on ${pool.tokenXSymbol}/${pool.tokenYSymbol}: ${decision.reasoning}`,
             poolAddress,
             ...(pos !== undefined ? { positionId: pos.positionId } : {}),
-            data: { reasoning: decision.reasoning, paperTrading: config.paperTrading },
+            data: {
+              reasoning: decision.reasoning,
+              paperTrading: config.paperTrading,
+              // Operator needs the money line on an exit: realized P&L (and
+              // fees) when the accounting recorded them.
+              realizedPnlUsd: pos?.realizedPnlUsd ?? null,
+              feesUsd: pos?.cumulativeFeesClaimedUsd ?? 0,
+            },
           });
         }
         if (decision.action === "ENTER" && isInsufficientTokenBalanceError(executionError)) {

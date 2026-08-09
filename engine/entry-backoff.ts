@@ -13,8 +13,11 @@ export function isInsufficientTokenBalanceError(error: string | undefined): bool
     normalized.includes("insufficient token balance") ||
     normalized.includes("insufficient_usdc_balance") ||
     normalized.includes("insufficient_balance_after_swap") ||
+    // SOL-era variants (kept for legacy paths) + the EVM ETH gate messages.
     normalized.includes("insufficient sol for gas") ||
-    normalized.includes("insufficient sol for enter")
+    normalized.includes("insufficient sol for enter") ||
+    normalized.includes("insufficient eth for gas") ||
+    normalized.includes("insufficient eth for enter")
   );
 }
 

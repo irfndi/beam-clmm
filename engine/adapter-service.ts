@@ -859,6 +859,39 @@ export function decodeV4PositionInfo(info: bigint): { tickLower: number; tickUpp
   };
 }
 
+/**
+ * Uniswap v3/v4 position amounts from liquidity + tick bounds + current sqrt
+ * price (Q64.96 fixed point; identical math on both protocol versions — the
+ * v3 whitepaper §6.3 formulas). Returns raw atomic amounts (token0, token1).
+ * Pure and deterministic; used by the live position mark so the ledger prices
+ * REAL holdings instead of the old liquidity-heuristic.
+ */
+export function positionAmountsAtSqrtPrice(
+  liquidity: bigint,
+  tickLower: number,
+  tickUpper: number,
+  sqrtPriceX96: bigint,
+): { amount0: bigint; amount1: bigint } {
+  const Q96 = 1n << 96n;
+  // v3-sdk's TickMath returns JSBI in this build — normalize to bigint.
+  const pa = BigInt(TickMath.getSqrtRatioAtTick(tickLower).toString());
+  const pb = BigInt(TickMath.getSqrtRatioAtTick(tickUpper).toString());
+  const p = sqrtPriceX96;
+  if (p <= pa) {
+    // Below range: all token0.
+    return { amount0: (liquidity * (pb - pa) * Q96) / (pa * pb), amount1: 0n };
+  }
+  if (p < pb) {
+    // In range: both legs.
+    return {
+      amount0: (liquidity * (pb - p) * Q96) / (p * pb),
+      amount1: (liquidity * (p - pa)) / Q96,
+    };
+  }
+  // Above range: all token1.
+  return { amount0: 0n, amount1: (liquidity * (pb - pa)) / Q96 };
+}
+
 /** Extract the minted tokenId from a mint receipt (ERC-721 Transfer from 0x0). */
 export function tokenIdFromMintReceipt(
   receipt: Pick<TransactionReceipt, "logs">,
@@ -1025,7 +1058,54 @@ export const AdapterLive = Layer.effect(AdapterService,
         throw new Error(`sendTransaction failed: ${revertMessage(e)}`);
       }
       logger.info("broadcast", { txHash, to, nonce: nonce.toString(), gas: gas.toString() });
-      const receipt = await publicClient.waitForTransactionReceipt({ hash: txHash, timeout: 60_000 });
+      // Receipt wait with self-healing: on timeout the tx was either DROPPED
+      // (baseFee spiked above the 2x snapshot, FCFS mempool eviction) or slow.
+      // A stale cache entry (nonce+1) after a drop bricks every later
+      // broadcast — including EXITs, exactly what a fee spike makes urgent.
+      // Reconcile from the chain and re-broadcast the same nonce with a gas
+      // bump once before giving up.
+      const receipt = await publicClient
+        .waitForTransactionReceipt({ hash: txHash, timeout: 60_000 })
+        .catch(async (err: unknown): Promise<TransactionReceipt> => {
+          const pendingCount = BigInt(
+            await publicClient.getTransactionCount({ address: owner, blockTag: "pending" }),
+          );
+          if (pendingCount <= nonce) {
+            // Dropped: same nonce, bumped gas, one retry.
+            const bumped = (maxFeePerGas * 150n) / 100n;
+            try {
+              const retryHash = await wc.sendTransaction({
+                to,
+                data,
+                value,
+                gas,
+                maxFeePerGas: bumped,
+                maxPriorityFeePerGas,
+                nonce: Number(nonce),
+              });
+              logger.warn("re-broadcast with bumped gas after receipt timeout", {
+                txHash,
+                retryHash,
+                nonce: nonce.toString(),
+              });
+              return await publicClient.waitForTransactionReceipt({
+                hash: retryHash,
+                timeout: 60_000,
+              });
+            } catch (re) {
+              nonces.delete(owner);
+              throw new Error(
+                `transaction ${txHash} receipt wait timed out and re-broadcast failed: ${revertMessage(re)}`,
+              );
+            }
+          }
+          // Nonce advanced: the tx is in flight (or mined but unreadable).
+          // Re-seed the cache so subsequent broadcasts cannot gap over it.
+          nonces.set(owner, pendingCount);
+          throw new Error(
+            `transaction ${txHash} receipt wait timed out (nonce ${nonce.toString()}); nonce cache re-seeded to ${pendingCount.toString()}`,
+          );
+        });
       if (receipt.status === "reverted") {
         throw new Error(`transaction reverted on-chain: ${txHash}`);
       }
@@ -1952,22 +2032,39 @@ export const AdapterLive = Layer.effect(AdapterService,
       getPositionValueUsd: (poolAddress, positionPubKey) =>
         Effect.tryPromise({
           try: async () => {
-            // Heuristic mark: liquidity × token USD price × range factor.
-            // Full amount math (sqrtPrice bounds) is the tx-layer milestone;
-            // this mark is fail-open and only shapes decisions. The mark
-            // prices the position's TOKEN MINT (the pool address is not a
-            // mint — the old `priceUsd(poolAddress)` always returned 0 and
-            // marked every live position at $0, driving dust/trailing churn).
+            // Real mark: sqrt-price-bounded amount math (Uniswap v3/v4,
+            // Q64.96) on the position's actual liquidity, both legs priced at
+            // their own token. The old heuristic (liquidity/1e18 × price × 2)
+            // was correct only for 18/18 pools near $1 — for the dominant
+            // WETH/USDG (18/6, ~$3000) it undervalued positions ~20,000x,
+            // collapsing portfolio equity into the 50% hard floor and faking
+            // ~99.99% trailing drawdowns (EXIT churn). Fail-open: any
+            // unreadable input returns null and the caller falls back to the
+            // price-anchored mark.
             if (!walletAddress) return null;
             const pos =
               poolAddress.length === 66
                 ? (await v4PositionsOf(walletAddress)).find((p) => p.id === positionPubKey)
                 : (await v3PositionsOf(walletAddress)).find((p) => p.id === positionPubKey);
-            if (!pos) return null;
-            const mint = pos.tokenX ?? pos.tokenY;
-            if (!mint) return null;
-            const usd = await priceUsd(mint).catch(() => 0);
-            return (Number(pos.liquidityShares) / 1e18) * (usd || 0) * 2;
+            if (!pos || pos.liquidityShares <= 0n) return null;
+            const state = poolAddress.length === 66
+              ? await v4PoolQuoteState(poolAddress)
+              : await v3PoolQuoteState(getAddress(poolAddress));
+            if (!state || !state.sqrtPriceX96) return null;
+            // Amounts from liquidity + tick bounds (identical math v3/v4).
+            const { amount0, amount1 } = positionAmountsAtSqrtPrice(
+              pos.liquidityShares,
+              pos.lowerBinId,
+              pos.upperBinId,
+              state.sqrtPriceX96,
+            );
+            const [price0, price1] = await Promise.all([
+              priceUsd(state.token0).catch(() => 0),
+              priceUsd(state.token1).catch(() => 0),
+            ]);
+            const usd0 = (Number(amount0) / 10 ** state.token0Decimals) * price0;
+            const usd1 = (Number(amount1) / 10 ** state.token1Decimals) * price1;
+            return usd0 + usd1;
           },
           catch: () => null,
         }).pipe(Effect.catch(() => Effect.succeed(null))),
@@ -2043,10 +2140,12 @@ export const AdapterLive = Layer.effect(AdapterService,
                 slippageToleranceBps,
                 ...rangeOverride,
               });
-              await Promise.all([
-                ensurePermit2Allowance(key.currency0, V4_POSITION_MANAGER, built.amount0),
-                ensurePermit2Allowance(key.currency1, V4_POSITION_MANAGER, built.amount1),
-              ]);
+              // Sequential, not parallel: both broadcast through the shared
+              // nonce cache, and parallel sends on a fresh wallet read the
+              // same pending count -> identical nonce -> one tx rejected or
+              // dropped (the first-ever mint is exactly this case).
+              await ensurePermit2Allowance(key.currency0, V4_POSITION_MANAGER, built.amount0);
+              await ensurePermit2Allowance(key.currency1, V4_POSITION_MANAGER, built.amount1);
               const { txSignature, receipt } = await sendTx({
                 to: V4_POSITION_MANAGER,
                 data: built.calldata,
@@ -2078,10 +2177,9 @@ export const AdapterLive = Layer.effect(AdapterService,
               slippageToleranceBps,
               ...rangeOverride,
             });
-            await Promise.all([
-              ensureErc20Allowance(state.token0, V3_NPM, built.amount0),
-              ensureErc20Allowance(state.token1, V3_NPM, built.amount1),
-            ]);
+            // Sequential, not parallel: shared nonce cache (see v4 mint).
+            await ensureErc20Allowance(state.token0, V3_NPM, built.amount0);
+            await ensureErc20Allowance(state.token1, V3_NPM, built.amount1);
             const { txSignature, receipt } = await sendTx({
               to: V3_NPM,
               data: built.calldata,
@@ -2180,10 +2278,12 @@ export const AdapterLive = Layer.effect(AdapterService,
                 tickLower: newLowerBinId,
                 tickUpper: newUpperBinId,
               });
-              await Promise.all([
-                ensurePermit2Allowance(key.currency0, V4_POSITION_MANAGER, built.amount0),
-                ensurePermit2Allowance(key.currency1, V4_POSITION_MANAGER, built.amount1),
-              ]);
+              // Sequential, not parallel: both broadcast through the shared
+              // nonce cache, and parallel sends on a fresh wallet read the
+              // same pending count -> identical nonce -> one tx rejected or
+              // dropped (the first-ever mint is exactly this case).
+              await ensurePermit2Allowance(key.currency0, V4_POSITION_MANAGER, built.amount0);
+              await ensurePermit2Allowance(key.currency1, V4_POSITION_MANAGER, built.amount1);
               const res = await sendTx({
                 to: V4_POSITION_MANAGER,
                 data: built.calldata,
@@ -2211,10 +2311,9 @@ export const AdapterLive = Layer.effect(AdapterService,
                 tickLower: newLowerBinId,
                 tickUpper: newUpperBinId,
               });
-              await Promise.all([
-                ensureErc20Allowance(state.token0, V3_NPM, built.amount0),
-                ensureErc20Allowance(state.token1, V3_NPM, built.amount1),
-              ]);
+              // Sequential, not parallel: shared nonce cache (see v4 mint).
+              await ensureErc20Allowance(state.token0, V3_NPM, built.amount0);
+              await ensureErc20Allowance(state.token1, V3_NPM, built.amount1);
               const res = await sendTx({ to: V3_NPM, data: built.calldata, value: built.value });
               mintTx = res.txSignature;
               const tid = tokenIdFromMintReceipt(res.receipt);
