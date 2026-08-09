@@ -11,7 +11,8 @@ import type {
 } from "./types.js";
 import { createLogger } from "./logger.js";
 import { applyDbConfigOverrides, readDbConfigOverrides } from "./db-config.js";
-import { ENTRY_SIZE_CAP_USD, ENTRY_SIZE_FLOOR_USD } from "./entry-sizing.js";
+import { ENTRY_SIZE_CAP_USD, ENTRY_SIZE_FLOOR_USD, ENTRY_SIZE_TVL_FRACTION } from "./entry-sizing.js";
+import { MIN_NATIVE_FOR_ENTRY_WEI, MIN_NATIVE_FOR_GAS_WEI } from "./constants.js";
 
 const logger = createLogger("ConfigService");
 
@@ -57,6 +58,14 @@ export interface AppConfig {
   readonly minPoolTvlUsd: number;
   readonly minFeeIlRatio: number;
   readonly tvlDropExitPct: number;
+  /** Native-ETH floor reserved purely for gas (wei). Env `MIN_NATIVE_FOR_GAS_WEI`;
+   *  default = constants.MIN_NATIVE_FOR_GAS_WEI (0.005 ETH). Absent = default. */
+  readonly minNativeForGasWei?: bigint;
+  /** Native-ETH floor for a live ENTER (gas + token approval + position mint),
+   *  wei. Env `MIN_NATIVE_FOR_ENTRY_WEI`; default = constants.MIN_NATIVE_FOR_ENTRY_WEI
+   *  (0.05 ETH). Absent = default. The entry gate and the gas top-up trigger
+   *  both read this value so they cannot drift. */
+  readonly minNativeForEntryWei?: bigint;
   readonly volumeAuthThreshold: number;
   readonly minRebalanceIntervalMs: number;
   readonly minRebalanceNetBenefitUsd: number;
@@ -248,6 +257,10 @@ export interface AppConfig {
   readonly maxPositionsPerPool: number;
   /** Hard USD ceiling per conservative entry (default 500; see MAX_ENTRY_SIZE_USD). */
   readonly maxEntrySizeUsd: number;
+  /** Fraction of pool TVL the conservative entry size may use. Env
+   *  `ENTRY_SIZE_TVL_FRACTION`; default 0.005 (0.5 %). CHALLENGE_MODE raises it
+   *  to 0.05 (5 %) for the compounding challenge. Absent = default. */
+  readonly entrySizeTvlFraction?: number;
 
   // ─── F6: Paper-trading validation period ────────────────────────────────────
   /** Require N days of paper trading before allowing live ENTER. */
@@ -499,8 +512,51 @@ function validatedNumber(name: string, min: number, fallback: number, max?: numb
   );
 }
 
+/**
+ * Parse a wei value from an env var (decimal string → bigint). Invalid,
+ * negative, or absent values fall back to `fallback` (fail-safe, same channel
+ * as validatedNumber). bigint is used instead of Number so wei values up to
+ * the full uint256 range parse without precision loss.
+ */
+function validatedBigIntWei(name: string, fallback: bigint) {
+  return Config.string(name).pipe(
+    Effect.map((raw) => {
+      const value = raw.trim();
+      try {
+        const parsed = BigInt(value);
+        if (parsed >= 0n) return parsed;
+        logger.warn("Invalid wei configuration (negative); using fallback", {
+          name,
+          value,
+          fallback: fallback.toString(),
+        });
+        return fallback;
+      } catch {
+        logger.warn("Invalid wei configuration; using fallback", {
+          name,
+          value,
+          fallback: fallback.toString(),
+        });
+        return fallback;
+      }
+    }),
+    Effect.orElseSucceed(() => fallback),
+  );
+}
+
 const loadConfig = Effect.gen(function* () {
   const isTest = process.env.NODE_ENV === "test" || process.env.VITEST === "true";
+
+  // ─── CHALLENGE_MODE presets ($10 → $1M compounding challenge) ──────────────
+  // One switch that relaxes the small-account-hostile defaults for challenge
+  // accounts. Each knob still honors its own explicit env var first — the
+  // preset is only the FALLBACK (see the challengeFallback ternaries below).
+  // Preset matrix: minPoolTvlUsd 1000, maxOpenPositions 4, maxPositionsPerPool
+  // 2 (already the default), feeClaimIntervalMs 1h (already the default),
+  // entrySizeTvlFraction 0.05, minFeeIlRatio 1.2 (already the default).
+  const challengeMode = yield* Config.boolean("CHALLENGE_MODE").pipe(
+    Effect.orElseSucceed(() => false),
+  );
 
   // WALLET_PRIVATE_KEY (env / .env) takes precedence; otherwise fall back to the local
   // keystore written by `beam wallet generate|import`, so a generated wallet actually
@@ -648,9 +704,19 @@ const loadConfig = Effect.gen(function* () {
       }),
     );
   }
-  const scanIntervalMs = yield* validatedNumber("SCAN_INTERVAL_MS", 10_000, 600_000);
-  const minPoolTvlUsd = yield* validatedNumber("MIN_POOL_TVL_USD", 0, 50_000);
-  const minFeeIlRatio = yield* validatedNumber("MIN_FEE_IL_RATIO", 0, 1.2);
+  const scanIntervalMs = yield* validatedNumber("SCAN_INTERVAL_MS", 2_000, 600_000);
+  const minPoolTvlUsd = yield* validatedNumber(
+    "MIN_POOL_TVL_USD",
+    0,
+    // CHALLENGE_MODE: small challenge pools qualify at $1K instead of $50K.
+    challengeMode ? 1_000 : 50_000,
+  );
+  const minFeeIlRatio = yield* validatedNumber(
+    "MIN_FEE_IL_RATIO",
+    0,
+    // CHALLENGE_MODE keeps the 1.2 default (preset value == default).
+    1.2,
+  );
   const tvlDropExitPct = yield* validatedNumber("TVL_DROP_EXIT_PCT", 0, 0.3);
   const volumeAuthThreshold = yield* validatedNumber("VOLUME_AUTH_THRESHOLD", 0, 0.7);
   const minRebalanceIntervalMs = yield* validatedNumber(
@@ -792,8 +858,18 @@ const loadConfig = Effect.gen(function* () {
     0.4,
     1.0,
   );
-  const maxOpenPositions = yield* validatedNumber("MAX_OPEN_POSITIONS", 1, 3);
-  const maxPositionsPerPool = yield* validatedNumber("MAX_POSITIONS_PER_POOL", 1, 2);
+  const maxOpenPositions = yield* validatedNumber(
+    "MAX_OPEN_POSITIONS",
+    1,
+    // CHALLENGE_MODE: 4 concurrent positions for the compounding cadence.
+    challengeMode ? 4 : 3,
+  );
+  const maxPositionsPerPool = yield* validatedNumber(
+    "MAX_POSITIONS_PER_POOL",
+    1,
+    // CHALLENGE_MODE keeps the default 2 (preset value == default).
+    2,
+  );
   // Hard USD ceiling per conservative entry (the sizing formula's cap term).
   // Raisable for high-frequency rotation profiles where the default $500
   // constant would cap deployed capital per position.
@@ -801,6 +877,28 @@ const loadConfig = Effect.gen(function* () {
     "MAX_ENTRY_SIZE_USD",
     ENTRY_SIZE_FLOOR_USD,
     ENTRY_SIZE_CAP_USD,
+  );
+
+  // ─── Live-mode gas floors + entry TVL share ────────────────────────────────
+  // Gas floors default to the constants (0.005 ETH gas / 0.05 ETH ENTER) but
+  // are env-overridable so a $10-100 challenge account can trade with a
+  // 0.0001 ETH gas floor instead of being blocked by the 0.05 ETH gate.
+  const minNativeForGasWei = yield* validatedBigIntWei(
+    "MIN_NATIVE_FOR_GAS_WEI",
+    MIN_NATIVE_FOR_GAS_WEI,
+  );
+  const minNativeForEntryWei = yield* validatedBigIntWei(
+    "MIN_NATIVE_FOR_ENTRY_WEI",
+    MIN_NATIVE_FOR_ENTRY_WEI,
+  );
+  // TVL share used by computeEntrySizeUsd (default 0.5 % of pool TVL; the
+  // compounding-challenge research targets up to 10 %). CHALLENGE_MODE raises
+  // the fallback to 5 %; an explicit ENTRY_SIZE_TVL_FRACTION always wins.
+  const entrySizeTvlFraction = yield* validatedNumber(
+    "ENTRY_SIZE_TVL_FRACTION",
+    0,
+    challengeMode ? 0.05 : ENTRY_SIZE_TVL_FRACTION,
+    1,
   );
 
   // ─── Idle-capital auto-redeploy (opt-in) ─────────────────────────────────
@@ -1203,7 +1301,8 @@ const loadConfig = Effect.gen(function* () {
   const feeClaimIntervalMs = yield* validatedNumber(
     "FEE_CLAIM_INTERVAL_MS",
     0,
-    24 * 60 * 60 * 1000,
+    // 1h default (was 24h) — the compounding challenge needs a fast claim cadence.
+    60 * 60 * 1000,
   );
   const enablePoolDiscovery = yield* Config.boolean("ENABLE_POOL_DISCOVERY").pipe(
     Effect.orElseSucceed(() => false),
@@ -1338,6 +1437,8 @@ const loadConfig = Effect.gen(function* () {
     scanIntervalMs,
     minPoolTvlUsd,
     minFeeIlRatio,
+    minNativeForGasWei,
+    minNativeForEntryWei,
     tvlDropExitPct,
     volumeAuthThreshold,
     minRebalanceIntervalMs,
@@ -1422,6 +1523,7 @@ const loadConfig = Effect.gen(function* () {
     maxOpenPositions,
     maxPositionsPerPool,
     maxEntrySizeUsd,
+    entrySizeTvlFraction,
     paperValidationMinDays,
     paperValidationEnforce,
     oorCooldownMs,

@@ -1,19 +1,42 @@
 import { Effect, Layer } from "effect";
 import {
   createPublicClient,
+  createWalletClient,
+  decodeFunctionData,
+  encodeAbiParameters,
+  encodeFunctionData,
   getAddress,
   getContract,
   http,
+  keccak256,
   parseAbi,
+  toHex,
   type Address,
+  type Hex,
   type PublicClient,
+  type TransactionReceipt,
 } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
+import { CurrencyAmount, Ether, Percent, Token } from "@uniswap/sdk-core";
+import {
+  NonfungiblePositionManager as V3NonfungiblePositionManager,
+  Pool as V3Pool,
+  Position as V3Position,
+  TickMath,
+  nearestUsableTick,
+  type TickDataProvider,
+} from "@uniswap/v3-sdk";
+import { Pool as V4Pool, Position as V4Position, V4PositionManager } from "@uniswap/v4-sdk";
 import { ConfigService } from "./config-service.js";
 import { AdapterService, type AdapterApi, type DiscoveredPool } from "./services.js";
 import type { EntryDepositMode, EntryStrategyShape } from "./types.js";
 import type { BinArray, BinData, PoolState, Position } from "./types.js";
-import { NATIVE_MINT, STABLECOIN_MINT } from "./constants.js";
+import {
+  GAS_TOP_UP_STABLECOIN,
+  MIN_NATIVE_FOR_GAS_WEI,
+  NATIVE_MINT,
+  STABLECOIN_MINT,
+} from "./constants.js";
 import { createLogger } from "./logger.js";
 import { DiscoverPoolsError, underlyingErrorMessage } from "./errors.js";
 
@@ -76,6 +99,8 @@ const erc20Abi = parseAbi([
   "function balanceOf(address) view returns (uint256)",
   "function decimals() view returns (uint8)",
   "function symbol() view returns (string)",
+  "function allowance(address,address) view returns (uint256)",
+  "function approve(address,uint256) returns (bool)",
 ]);
 const v3FactoryAbi = parseAbi([
   "function getPool(address,address,uint24) view returns (address)",
@@ -148,7 +173,6 @@ function poolKeyTuple(key: V4PoolKey): readonly [Address, Address, number, numbe
 
 /** v4 poolId = keccak256(abi.encode(poolKey)) — canonical v4 pool identity. */
 async function computeV4PoolId(key: V4PoolKey): Promise<string> {
-  const { encodeAbiParameters, keccak256 } = await import("viem");
   const encoded = encodeAbiParameters(
     [
       { type: "address" },
@@ -160,6 +184,692 @@ async function computeV4PoolId(key: V4PoolKey): Promise<string> {
     [key.currency0, key.currency1, key.fee, key.tickSpacing, key.hooks],
   );
   return keccak256(encoded).toLowerCase();
+}
+
+// ─── Live-transaction ABIs (only the functions this adapter broadcasts) ─────
+
+const v3MintDecodeAbi = parseAbi([
+  "function mint((address,address,uint24,int24,int24,uint256,uint256,uint256,uint256,address,uint256))",
+]);
+const v3NpmTxAbi = parseAbi([
+  "function mint((address,address,uint24,int24,int24,uint256,uint256,uint256,uint256,address,uint256)) payable returns (uint256,uint128,uint256,uint256)",
+  "function collect((uint256,address,uint128,uint128)) returns (uint256,uint256)",
+  "function decreaseLiquidity((uint256,uint128,uint256,uint256,uint256)) returns (uint256,uint256)",
+  "function burn(uint256) payable",
+  "function multicall(bytes[]) payable returns (bytes[])",
+]);
+const swapRouter02Abi = parseAbi([
+  "function exactInputSingle((address,address,uint24,address,uint256,uint256,uint256,uint160)) payable returns (uint256)",
+  "function unwrapWETH9(uint256,address) payable",
+  "function multicall(bytes[]) payable returns (bytes[])",
+]);
+const universalRouterAbi = parseAbi(["function execute(bytes,bytes[],uint256) payable"]);
+const v4PositionManagerTxAbi = parseAbi(["function modifyLiquidities(bytes,uint256)"]);
+
+/** Permit2 (canonical 0x000…22D4 deployment, used by the v4 PositionManager
+ *  and UniversalRouter as a forwarder). */
+export const PERMIT2: Address = getAddress("0x000000000022D473030F116dDEE9F6B43aC78BA3");
+const permit2Abi = parseAbi([
+  "function approve(address token, address spender, uint160 amount, uint48 expiration)",
+  "function allowance(address,address,address) view returns (uint160 amount, uint48 expiration, uint48 nonce)",
+]);
+
+export const MAX_UINT256 = 2n ** 256n - 1n;
+export const MAX_UINT160 = 2n ** 160n - 1n;
+const MAX_UINT48 = 2n ** 48n - 1n;
+
+/** ERC-721 Transfer(address,address,uint256) — minted NFTs emit from = 0x0. */
+const erc721TransferTopic = keccak256(toHex("Transfer(address,address,uint256)")).toLowerCase();
+/** UniswapV3 Swap event — receipt-level output decoding. */
+const v3SwapEventTopic = keccak256(
+  toHex("Swap(address,address,int256,int256,uint160,uint128,int24)"),
+).toLowerCase();
+
+/** viem chain object for wallet transactions on 4663. */
+export const ROBINHOOD_CHAIN = {
+  id: CHAIN_ID,
+  name: "Robinhood Chain",
+  nativeCurrency: { name: "Ether", symbol: "ETH", decimals: 18 },
+  rpcUrls: { default: { http: [DEFAULT_RPC] } },
+} as const;
+
+// ─── Pure calldata builders + quote math (network-free, unit-tested) ─────────
+
+/** Pool state snapshot the pure builders/quotes need (v3 and v4 both). */
+export interface PoolQuoteState {
+  readonly token0: Address;
+  readonly token1: Address;
+  readonly token0Decimals: number;
+  readonly token1Decimals: number;
+  readonly fee: number;
+  readonly tickSpacing: number;
+  readonly sqrtPriceX96: bigint;
+  readonly tickCurrent: number;
+  readonly liquidity: bigint;
+}
+
+/** Convert a USD size into raw atomic units for a leg. 0 when unpriceable. */
+export function usdToAtomic(usd: number, priceUsd: number, decimals: number): bigint {
+  if (!(priceUsd > 0) || !(usd > 0)) return 0n;
+  return BigInt(Math.floor((usd / priceUsd) * 10 ** decimals));
+}
+
+/** Half-width tick range (±rangeBps) around the current tick, spacing-aligned. */
+export function tickRangeAround(
+  tick: number,
+  tickSpacing: number,
+  rangeBps = 500,
+): { tickLower: number; tickUpper: number } {
+  const half = Math.round(Math.log(1 + rangeBps / 10_000) / Math.log(1.0001));
+  return {
+    tickLower: nearestUsableTick(tick - half, tickSpacing),
+    tickUpper: nearestUsableTick(tick + half, tickSpacing),
+  };
+}
+
+function sdkPercent(bps: number): Percent {
+  return new Percent(Math.round(bps), 10_000);
+}
+
+function v3Token(addr: Address, decimals: number): Token {
+  return new Token(CHAIN_ID, getAddress(addr), decimals);
+}
+
+/**
+ * TickDataProvider that reports no initialized ticks — the SDK swap loop then
+ * performs constant-product steps at the pool's current in-range liquidity.
+ * ponytail: single-hop quote at current liquidity; a trade crossing an
+ * initialized tick executes worse than quoted, so the router's
+ * amountOutMinimum (slippage) is the guard. Upgrade to TickLens-backed quotes
+ * when a trace-capable RPC is configured.
+ */
+export const CONSTANT_PRODUCT_TICK_PROVIDER: TickDataProvider = {
+  async getTick(): Promise<never> {
+    throw new Error("no tick data in constant-product quote");
+  },
+  async nextInitializedTickWithinOneWord(
+    tick: number,
+    lte: boolean,
+    tickSpacing: number,
+  ): Promise<[number, boolean]> {
+    return [lte ? tick - tickSpacing : tick + tickSpacing, false];
+  },
+};
+
+/**
+ * Exact-input quote at current liquidity (single hop, no tick crossing).
+ * Deterministic: all inputs are on-chain state, no network. Both v3 and v4
+ * vanilla pools share the same swap math.
+ */
+export async function quoteSwapInternal(
+  state: PoolQuoteState,
+  zeroForOne: boolean,
+  amountIn: bigint,
+): Promise<{ outAmountAtomic: bigint }> {
+  const t0 = v3Token(state.token0, state.token0Decimals);
+  const t1 = v3Token(state.token1, state.token1Decimals);
+  const pool = new V3Pool(
+    t0,
+    t1,
+    state.fee,
+    state.sqrtPriceX96.toString(),
+    state.liquidity.toString(),
+    state.tickCurrent,
+    CONSTANT_PRODUCT_TICK_PROVIDER,
+  );
+  const input = zeroForOne
+    ? CurrencyAmount.fromRawAmount(t0, amountIn.toString())
+    : CurrencyAmount.fromRawAmount(t1, amountIn.toString());
+  const [out] = await pool.getOutputAmount(input);
+  return { outAmountAtomic: BigInt(out.quotient.toString()) };
+}
+
+export interface V3MintCalldataArgs {
+  readonly token0: Address;
+  readonly token1: Address;
+  readonly fee: number;
+  readonly tickSpacing: number;
+  readonly sqrtPriceX96: bigint;
+  readonly tickCurrent: number;
+  readonly token0Decimals: number;
+  readonly token1Decimals: number;
+  readonly amount0: bigint;
+  readonly amount1: bigint;
+  readonly recipient: Address;
+  readonly deadline: number;
+  readonly slippageToleranceBps: number;
+  readonly tickLower?: number;
+  readonly tickUpper?: number;
+  readonly rangeBps?: number;
+}
+
+export interface V3MintCalldataResult {
+  readonly calldata: Hex;
+  readonly value: bigint;
+  readonly tickLower: number;
+  readonly tickUpper: number;
+  /** Actual amounts the NPM pulls (the SDK encodes mintAmounts as the desired
+   *  amounts — what the wallet pays). */
+  readonly amount0: bigint;
+  readonly amount1: bigint;
+  readonly amount0Min: bigint;
+  readonly amount1Min: bigint;
+}
+
+/**
+ * v3 NPM mint calldata for a two-sided position (or single-sided when one
+ * leg is 0). Returns the encoded mint plus the slippage floors decoded from
+ * the calldata, so callers approve exactly the amount the mint can pull.
+ */
+export function buildV3MintCalldata(args: V3MintCalldataArgs): V3MintCalldataResult {
+  const {
+    token0,
+    token1,
+    fee,
+    tickSpacing,
+    sqrtPriceX96,
+    tickCurrent,
+    token0Decimals,
+    token1Decimals,
+    amount0,
+    amount1,
+    recipient,
+    deadline,
+    slippageToleranceBps,
+  } = args;
+  const range = tickRangeAround(tickCurrent, tickSpacing, args.rangeBps);
+  const tickLower = args.tickLower ?? range.tickLower;
+  const tickUpper = args.tickUpper ?? range.tickUpper;
+  const t0 = v3Token(token0, token0Decimals);
+  const t1 = v3Token(token1, token1Decimals);
+  const pool = new V3Pool(t0, t1, fee, sqrtPriceX96.toString(), "0", tickCurrent);
+  const position =
+    amount0 > 0n && amount1 > 0n
+      ? V3Position.fromAmounts({
+          pool,
+          tickLower,
+          tickUpper,
+          amount0: amount0.toString(),
+          amount1: amount1.toString(),
+          useFullPrecision: true,
+        })
+      : amount0 > 0n
+        ? V3Position.fromAmount0({
+            pool,
+            tickLower,
+            tickUpper,
+            amount0: amount0.toString(),
+            useFullPrecision: true,
+          })
+        : V3Position.fromAmount1({ pool, tickLower, tickUpper, amount1: amount1.toString() });
+  const { calldata, value } = V3NonfungiblePositionManager.addCallParameters(position, {
+    slippageTolerance: sdkPercent(slippageToleranceBps),
+    deadline,
+    recipient: getAddress(recipient),
+  });
+  // Decode to expose the slippage floors (amount0Min/amount1Min) for approval
+  // sizing: NPM pulls exactly the amounts implied by the liquidity, bounded
+  // below by the mins.
+  const decoded = decodeFunctionData({ abi: v3MintDecodeAbi, data: calldata as Hex });
+  const p = decoded.args[0] as readonly [
+    Address,
+    Address,
+    number,
+    number,
+    number,
+    bigint,
+    bigint,
+    bigint,
+    bigint,
+    Address,
+    bigint,
+  ];
+  return {
+    calldata: calldata as Hex,
+    value: BigInt(value),
+    tickLower: Number(p[3]),
+    tickUpper: Number(p[4]),
+    amount0: p[5],
+    amount1: p[6],
+    amount0Min: p[7],
+    amount1Min: p[8],
+  };
+}
+
+export interface V3CollectCalldataArgs {
+  readonly tokenId: bigint;
+  readonly token0: Address;
+  readonly token1: Address;
+  readonly token0Decimals: number;
+  readonly token1Decimals: number;
+  readonly recipient: Address;
+}
+
+/** v3 NPM collect — caps are type(uint128).max, so the full owed balance
+ *  (fees + principal after a decrease) is collected to `recipient`. */
+export function buildV3CollectCalldata(args: V3CollectCalldataArgs): {
+  calldata: Hex;
+  value: bigint;
+} {
+  const { tokenId, token0, token1, token0Decimals, token1Decimals, recipient } = args;
+  const { calldata, value } = V3NonfungiblePositionManager.collectCallParameters({
+    tokenId: tokenId.toString(),
+    expectedCurrencyOwed0: CurrencyAmount.fromRawAmount(v3Token(token0, token0Decimals), "0"),
+    expectedCurrencyOwed1: CurrencyAmount.fromRawAmount(v3Token(token1, token1Decimals), "0"),
+    recipient: getAddress(recipient),
+  });
+  return { calldata: calldata as Hex, value: BigInt(value) };
+}
+
+export interface V3ExitCalldataArgs {
+  readonly tokenId: bigint;
+  readonly token0: Address;
+  readonly token1: Address;
+  readonly token0Decimals: number;
+  readonly token1Decimals: number;
+  readonly fee: number;
+  readonly sqrtPriceX96: bigint;
+  readonly tickCurrent: number;
+  readonly liquidity: bigint;
+  readonly tickLower: number;
+  readonly tickUpper: number;
+  readonly tokensOwed0: bigint;
+  readonly tokensOwed1: bigint;
+  readonly recipient: Address;
+  readonly deadline: number;
+  readonly slippageToleranceBps: number;
+}
+
+/** v3 full exit: decreaseLiquidity(100%) + collect + burn in one multicall. */
+export function buildV3ExitCalldata(args: V3ExitCalldataArgs): { calldata: Hex; value: bigint } {
+  const {
+    tokenId,
+    token0,
+    token1,
+    token0Decimals,
+    token1Decimals,
+    fee,
+    sqrtPriceX96,
+    tickCurrent,
+    liquidity,
+    tickLower,
+    tickUpper,
+    tokensOwed0,
+    tokensOwed1,
+    recipient,
+    deadline,
+    slippageToleranceBps,
+  } = args;
+  const t0 = v3Token(token0, token0Decimals);
+  const t1 = v3Token(token1, token1Decimals);
+  const pool = new V3Pool(t0, t1, fee, sqrtPriceX96.toString(), "0", tickCurrent);
+  const position = new V3Position({ pool, liquidity: liquidity.toString(), tickLower, tickUpper });
+  const { calldata, value } = V3NonfungiblePositionManager.removeCallParameters(position, {
+    tokenId: tokenId.toString(),
+    liquidityPercentage: new Percent(1),
+    slippageTolerance: sdkPercent(slippageToleranceBps),
+    deadline,
+    burnToken: true,
+    collectOptions: {
+      expectedCurrencyOwed0: CurrencyAmount.fromRawAmount(t0, tokensOwed0.toString()),
+      expectedCurrencyOwed1: CurrencyAmount.fromRawAmount(t1, tokensOwed1.toString()),
+      recipient: getAddress(recipient),
+    },
+  });
+  return { calldata: calldata as Hex, value: BigInt(value) };
+}
+
+export interface V3ExactInputSingleCalldataArgs {
+  readonly tokenIn: Address;
+  readonly tokenOut: Address;
+  readonly fee: number;
+  readonly recipient: Address;
+  readonly deadline: number;
+  readonly amountIn: bigint;
+  readonly amountOutMinimum: bigint;
+  readonly sqrtPriceLimitX96?: bigint;
+}
+
+/** SwapRouter02 exactInputSingle — v3 single-hop swaps. */
+export function buildV3ExactInputSingleCalldata(args: V3ExactInputSingleCalldataArgs): Hex {
+  const {
+    tokenIn,
+    tokenOut,
+    fee,
+    recipient,
+    deadline,
+    amountIn,
+    amountOutMinimum,
+    sqrtPriceLimitX96 = 0n,
+  } = args;
+  return encodeFunctionData({
+    abi: swapRouter02Abi,
+    functionName: "exactInputSingle",
+    args: [
+      [
+        getAddress(tokenIn),
+        getAddress(tokenOut),
+        fee,
+        getAddress(recipient),
+        BigInt(deadline),
+        amountIn,
+        amountOutMinimum,
+        sqrtPriceLimitX96,
+      ],
+    ],
+  });
+}
+
+export function buildUnwrapWETH9Calldata(amountMinimum: bigint, recipient: Address): Hex {
+  return encodeFunctionData({
+    abi: swapRouter02Abi,
+    functionName: "unwrapWETH9",
+    args: [amountMinimum, getAddress(recipient)],
+  });
+}
+
+export function buildSwapRouterMulticallCalldata(calls: readonly Hex[]): Hex {
+  return encodeFunctionData({
+    abi: swapRouter02Abi,
+    functionName: "multicall",
+    args: [calls],
+  });
+}
+
+export interface UniversalRouterV4SwapCalldataArgs {
+  readonly poolKey: V4PoolKey;
+  readonly zeroForOne: boolean;
+  readonly amountIn: bigint;
+  readonly amountOutMinimum: bigint;
+  readonly minHopPriceX36?: bigint;
+  readonly deadline: number;
+}
+
+/**
+ * UniversalRouter 2.1.1 V4_SWAP (0x10) single-hop exact-input command, verified
+ * against the verified 4663 router source: inputs = abi.encode(bytes actions,
+ * bytes[] params) with actions = SWAP_EXACT_IN_SINGLE (0x06) and params =
+ * [abi.encode(ExactInputSingleParams)]; ExactInputSingleParams carries
+ * (PoolKey, zeroForOne, amountIn, amountOutMinimum, minHopPriceX36, hookData).
+ */
+export function buildUniversalRouterV4SwapCalldata(
+  args: UniversalRouterV4SwapCalldataArgs,
+): Hex {
+  const { poolKey, zeroForOne, amountIn, amountOutMinimum, deadline } = args;
+  if (amountIn > MAX_UINT160 || amountOutMinimum > MAX_UINT160) {
+    throw new Error("v4 swap amount exceeds uint160");
+  }
+  const swapParams = encodeAbiParameters(
+    [
+      {
+        type: "tuple",
+        components: [
+          {
+            type: "tuple",
+            components: [
+              { type: "address" },
+              { type: "address" },
+              { type: "uint24" },
+              { type: "int24" },
+              { type: "address" },
+            ],
+          },
+          { type: "bool" },
+          { type: "uint128" },
+          { type: "uint128" },
+          { type: "uint256" },
+          { type: "bytes" },
+        ],
+      },
+    ],
+    [
+      [
+        [
+          poolKey.currency0,
+          poolKey.currency1,
+          poolKey.fee,
+          poolKey.tickSpacing,
+          poolKey.hooks,
+        ],
+        zeroForOne,
+        amountIn,
+        amountOutMinimum,
+        args.minHopPriceX36 ?? 0n,
+        "0x",
+      ],
+    ],
+  );
+  const unlockData = encodeAbiParameters([{ type: "bytes" }, { type: "bytes[]" }], ["0x06", [swapParams]]);
+  return encodeFunctionData({
+    abi: universalRouterAbi,
+    functionName: "execute",
+    args: ["0x10", [unlockData], BigInt(deadline)],
+  });
+}
+
+function v4Currency(key: V4PoolKey, decimals: number, isCurrency0: boolean) {
+  const address = (isCurrency0 ? key.currency0 : key.currency1).toLowerCase();
+  return address === "0x0000000000000000000000000000000000000000"
+    ? Ether.onChain(CHAIN_ID)
+    : new Token(CHAIN_ID, getAddress(address), decimals);
+}
+
+export interface V4MintCalldataArgs {
+  readonly poolKey: V4PoolKey;
+  readonly sqrtPriceX96: bigint;
+  readonly tickCurrent: number;
+  readonly token0Decimals: number;
+  readonly token1Decimals: number;
+  readonly amount0: bigint;
+  readonly amount1: bigint;
+  readonly recipient: Address;
+  readonly deadline: number;
+  readonly slippageToleranceBps: number;
+  readonly tickLower?: number;
+  readonly tickUpper?: number;
+  readonly rangeBps?: number;
+}
+
+export interface V4MintCalldataResult {
+  readonly calldata: Hex;
+  readonly value: bigint;
+  readonly tickLower: number;
+  readonly tickUpper: number;
+  /** Actual amounts the PM pulls for the position's liquidity. */
+  readonly amount0: bigint;
+  readonly amount1: bigint;
+}
+
+/**
+ * v4 PositionManager mint — builds the modifyLiquidities unlockData via the
+ * v4-sdk. PoolKey order is authoritative (registry-fed); native currency
+ * (address-zero) deposits ETH via msg.value (useNative).
+ */
+export function buildV4MintCalldata(args: V4MintCalldataArgs): V4MintCalldataResult {
+  const {
+    poolKey,
+    sqrtPriceX96,
+    tickCurrent,
+    token0Decimals,
+    token1Decimals,
+    amount0,
+    amount1,
+    recipient,
+    deadline,
+    slippageToleranceBps,
+  } = args;
+  const c0 = v4Currency(poolKey, token0Decimals, true);
+  const c1 = v4Currency(poolKey, token1Decimals, false);
+  const range = tickRangeAround(tickCurrent, poolKey.tickSpacing, args.rangeBps);
+  const tickLower = args.tickLower ?? range.tickLower;
+  const tickUpper = args.tickUpper ?? range.tickUpper;
+  const pool = new V4Pool(
+    c0,
+    c1,
+    poolKey.fee,
+    poolKey.tickSpacing,
+    getAddress(poolKey.hooks),
+    sqrtPriceX96.toString(),
+    "0",
+    tickCurrent,
+  );
+  const position =
+    amount0 > 0n && amount1 > 0n
+      ? V4Position.fromAmounts({
+          pool,
+          tickLower,
+          tickUpper,
+          amount0: amount0.toString(),
+          amount1: amount1.toString(),
+          useFullPrecision: true,
+        })
+      : amount0 > 0n
+        ? V4Position.fromAmount0({
+            pool,
+            tickLower,
+            tickUpper,
+            amount0: amount0.toString(),
+            useFullPrecision: true,
+          })
+        : V4Position.fromAmount1({ pool, tickLower, tickUpper, amount1: amount1.toString() });
+  const { calldata, value } = V4PositionManager.addCallParameters(position, {
+    slippageTolerance: sdkPercent(slippageToleranceBps),
+    deadline,
+    recipient: getAddress(recipient),
+    hookData: "0x",
+    ...(c0.isNative ? { useNative: Ether.onChain(CHAIN_ID) } : {}),
+  });
+  return {
+    calldata: calldata as Hex,
+    value: BigInt(value),
+    tickLower,
+    tickUpper,
+    amount0: BigInt(position.mintAmounts.amount0.toString()),
+    amount1: BigInt(position.mintAmounts.amount1.toString()),
+  };
+}
+
+export interface V4CollectCalldataArgs {
+  readonly poolKey: V4PoolKey;
+  readonly tokenId: bigint;
+  readonly recipient: Address;
+  readonly deadline: number;
+  readonly slippageToleranceBps: number;
+}
+
+/** v4 fee collection — decrease(liquidity=0) + TAKE_PAIR in one unlockData. */
+export function buildV4CollectCalldata(args: V4CollectCalldataArgs): {
+  calldata: Hex;
+  value: bigint;
+} {
+  const { poolKey, tokenId, recipient, deadline, slippageToleranceBps } = args;
+  const c0 = v4Currency(poolKey, 18, true);
+  const c1 = v4Currency(poolKey, 18, false);
+  // Collect only needs the pool's currency identity (TAKE_PAIR); a
+  // zero-liquidity position at tick 0 satisfies the SDK invariants.
+  const pool = new V4Pool(
+    c0,
+    c1,
+    poolKey.fee,
+    poolKey.tickSpacing,
+    getAddress(poolKey.hooks),
+    TickMath.getSqrtRatioAtTick(0).toString(),
+    "0",
+    0,
+  );
+  const position = new V4Position({
+    pool,
+    liquidity: "0",
+    tickLower: -poolKey.tickSpacing,
+    tickUpper: poolKey.tickSpacing,
+  });
+  const { calldata, value } = V4PositionManager.collectCallParameters(position, {
+    tokenId: tokenId.toString(),
+    recipient: getAddress(recipient),
+    slippageTolerance: sdkPercent(slippageToleranceBps),
+    deadline,
+    hookData: "0x",
+  });
+  return { calldata: calldata as Hex, value: BigInt(value) };
+}
+
+export interface V4ExitCalldataArgs {
+  readonly poolKey: V4PoolKey;
+  readonly tokenId: bigint;
+  readonly liquidity: bigint;
+  readonly tickLower: number;
+  readonly tickUpper: number;
+  readonly sqrtPriceX96: bigint;
+  readonly tickCurrent: number;
+  readonly deadline: number;
+  readonly slippageToleranceBps: number;
+}
+
+/** v4 full exit — BURN_POSITION + TAKE_PAIR in one unlockData. */
+export function buildV4ExitCalldata(args: V4ExitCalldataArgs): { calldata: Hex; value: bigint } {
+  const {
+    poolKey,
+    tokenId,
+    liquidity,
+    tickLower,
+    tickUpper,
+    sqrtPriceX96,
+    tickCurrent,
+    deadline,
+    slippageToleranceBps,
+  } = args;
+  const c0 = v4Currency(poolKey, 18, true);
+  const c1 = v4Currency(poolKey, 18, false);
+  const pool = new V4Pool(
+    c0,
+    c1,
+    poolKey.fee,
+    poolKey.tickSpacing,
+    getAddress(poolKey.hooks),
+    sqrtPriceX96.toString(),
+    "0",
+    tickCurrent,
+  );
+  const position = new V4Position({
+    pool,
+    liquidity: liquidity.toString(),
+    tickLower,
+    tickUpper,
+  });
+  const { calldata, value } = V4PositionManager.removeCallParameters(position, {
+    tokenId: tokenId.toString(),
+    liquidityPercentage: new Percent(1),
+    slippageTolerance: sdkPercent(slippageToleranceBps),
+    deadline,
+    burnToken: true,
+    hookData: "0x",
+  });
+  return { calldata: calldata as Hex, value: BigInt(value) };
+}
+
+/**
+ * Decode the new-interface PM's packed positionInfo (200b poolId | 24b
+ * tickUpper | 24b tickLower | 8b hasSubscriber; ticks are int24 sign-extended).
+ */
+export function decodeV4PositionInfo(info: bigint): { tickLower: number; tickUpper: number } {
+  return {
+    tickLower: Number(BigInt.asIntN(24, (info >> 8n) & ((1n << 24n) - 1n))),
+    tickUpper: Number(BigInt.asIntN(24, (info >> 32n) & ((1n << 24n) - 1n))),
+  };
+}
+
+/** Extract the minted tokenId from a mint receipt (ERC-721 Transfer from 0x0). */
+export function tokenIdFromMintReceipt(
+  receipt: Pick<TransactionReceipt, "logs">,
+): bigint | null {
+  for (const log of receipt.logs) {
+    const topic0 = log.topics[0]?.toLowerCase();
+    const from = log.topics[1]?.toLowerCase();
+    if (topic0 === erc721TransferTopic && from === "0x0000000000000000000000000000000000000000") {
+      return BigInt(log.topics[3] ?? "0x0");
+    }
+  }
+  return null;
 }
 
 // ─── The adapter ──────────────────────────────────────────────────────────────
@@ -227,6 +937,529 @@ export const AdapterLive = Layer.effect(AdapterService,
     async function getBalance(mint: string, owner: Address): Promise<bigint> {
       if (isNative(mint)) return publicClient.getBalance({ address: owner });
       return erc20(getAddress(mint)).read.balanceOf([owner]);
+    }
+
+    // ─── Live transaction layer ────────────────────────────────────────────────
+    // Wallet client exists only when a private key is configured; every
+    // broadcast path fails with a clear error instead of crashing in paper mode.
+    const walletClient = account
+      ? createWalletClient({ account, chain: ROBINHOOD_CHAIN, transport: http(rpcUrl) })
+      : null;
+
+    /** Incrementing nonce cache by address (seeded from the pending count on
+     *  first use; entry dropped on send failure so the next attempt re-reads). */
+    const nonces = new Map<Address, bigint>();
+    async function nextNonce(): Promise<bigint> {
+      const owner = requireWallet();
+      let nonce = nonces.get(owner);
+      if (nonce === undefined) {
+        nonce = BigInt(await publicClient.getTransactionCount({ address: owner, blockTag: "pending" }));
+      }
+      nonces.set(owner, nonce + 1n);
+      return nonce;
+    }
+
+    function requireWallet(): Address {
+      if (!walletAddress || !walletClient) {
+        throw new Error(
+          "live transactions disabled: WALLET_PRIVATE_KEY is not configured (paper mode)",
+        );
+      }
+      return walletAddress;
+    }
+
+    function revertMessage(e: unknown): string {
+      const msg = e instanceof Error ? e.message : String(e);
+      return msg.slice(0, 400);
+    }
+
+    /**
+     * Dry-run → estimateGas → broadcast → receipt wait. Gas strategy (Orbit
+     * L2, FCFS): maxPriorityFeePerGas 0, maxFeePerGas = 2× baseFee, limit =
+     * estimate + 30%. Never broadcasts without the eth_call dry-run passing.
+     */
+    async function sendTx(params: {
+      to: Address;
+      data?: Hex;
+      value?: bigint;
+    }): Promise<{ txSignature: string; receipt: TransactionReceipt }> {
+      const owner = requireWallet();
+      const wc = walletClient;
+      if (!wc) throw new Error("live transactions disabled: WALLET_PRIVATE_KEY is not configured (paper mode)");
+      const { to, data, value = 0n } = params;
+      try {
+        await publicClient.call({ account: owner, to, data, value });
+      } catch (e) {
+        throw new Error(`dry-run revert (${to}): ${revertMessage(e)}`);
+      }
+      let gas: bigint;
+      try {
+        const estimate = await publicClient.estimateGas({
+          account: owner,
+          to,
+          data,
+          value,
+        });
+        gas = (estimate * 130n) / 100n;
+      } catch (e) {
+        throw new Error(`estimateGas failed (${to}): ${revertMessage(e)}`);
+      }
+      const baseFee = (await publicClient.getBlock()).baseFeePerGas ?? 100_000_000n;
+      const maxFeePerGas = baseFee * 2n;
+      const maxPriorityFeePerGas = 0n;
+      const nonce = await nextNonce();
+      let txHash: Hex;
+      try {
+        txHash = await wc.sendTransaction({
+          to,
+          data,
+          value,
+          gas,
+          maxFeePerGas,
+          maxPriorityFeePerGas,
+          nonce: Number(nonce),
+        });
+      } catch (e) {
+        nonces.delete(owner);
+        throw new Error(`sendTransaction failed: ${revertMessage(e)}`);
+      }
+      logger.info("broadcast", { txHash, to, nonce: nonce.toString(), gas: gas.toString() });
+      const receipt = await publicClient.waitForTransactionReceipt({ hash: txHash, timeout: 60_000 });
+      if (receipt.status === "reverted") {
+        throw new Error(`transaction reverted on-chain: ${txHash}`);
+      }
+      return { txSignature: txHash, receipt };
+    }
+
+    /** Plain ERC-20 approval (v3 NPM + v3 SwapRouter02 are not Permit2
+     *  forwarders) — approve MAX once, only when the current allowance is low. */
+    async function ensureErc20Allowance(
+      token: Address,
+      spender: Address,
+      amount: bigint,
+    ): Promise<void> {
+      if (isNative(token)) return;
+      const tokenAddr = getAddress(token);
+      const current = await erc20(tokenAddr)
+        .read.allowance([requireWallet(), spender])
+        .catch(() => 0n);
+      if (current >= amount) return;
+      const data = encodeFunctionData({
+        abi: erc20Abi,
+        functionName: "approve",
+        args: [spender, MAX_UINT256],
+      });
+      await sendTx({ to: tokenAddr, data });
+    }
+
+    /** Two-step Permit2 approval (v4 PositionManager / UniversalRouter): the
+     *  token must approve Permit2 (ERC-20), then Permit2 must approve the
+     *  spender. Amounts capped at MAX_UINT160 / MAX_UINT48 (Permit2 types). */
+    async function ensurePermit2Allowance(
+      token: Address,
+      spender: Address,
+      amount: bigint,
+    ): Promise<void> {
+      if (isNative(token)) return;
+      const tokenAddr = getAddress(token);
+      const owner = requireWallet();
+      const ercCurrent = await erc20(tokenAddr)
+        .read.allowance([owner, PERMIT2])
+        .catch(() => 0n);
+      if (ercCurrent < amount) {
+        await sendTx({
+          to: tokenAddr,
+          data: encodeFunctionData({
+            abi: erc20Abi,
+            functionName: "approve",
+            args: [PERMIT2, MAX_UINT256],
+          }),
+        });
+      }
+      const permit2 = getContract({
+        address: PERMIT2,
+        abi: permit2Abi,
+        client: { public: publicClient },
+      });
+      const p2 = await permit2.read.allowance([owner, tokenAddr, spender]).catch(() => 0n);
+      const p2Amount = BigInt(Array.isArray(p2) ? p2[0] : p2);
+      if (p2Amount < amount) {
+        await sendTx({
+          to: PERMIT2,
+          data: encodeFunctionData({
+            abi: permit2Abi,
+            functionName: "approve",
+            args: [tokenAddr, spender, MAX_UINT160, Number(MAX_UINT48)],
+          }),
+        });
+      }
+    }
+
+    async function tokenDecimalsOf(mint: string): Promise<number> {
+      return getDecimals(isNative(mint) ? WETH9 : getAddress(mint));
+    }
+
+    /** On-chain pool state for a v3 pool (address) — feeds the pure builders. */
+    async function v3PoolQuoteState(poolAddress: Address): Promise<PoolQuoteState> {
+      const c = v3Pool(poolAddress);
+      const [token0, token1, fee, tickSpacing, slot0, liquidity] = await Promise.all([
+        c.read.token0(),
+        c.read.token1(),
+        c.read.fee(),
+        c.read.tickSpacing(),
+        c.read.slot0(),
+        c.read.liquidity(),
+      ]);
+      const [token0Decimals, token1Decimals] = await Promise.all([
+        tokenDecimalsOf(token0),
+        tokenDecimalsOf(token1),
+      ]);
+      return {
+        token0,
+        token1,
+        token0Decimals,
+        token1Decimals,
+        fee: Number(fee),
+        tickSpacing: Number(tickSpacing),
+        sqrtPriceX96: slot0[0],
+        tickCurrent: Number(slot0[1]),
+        liquidity,
+      };
+    }
+
+    /** PoolKey for a registered v4 poolId, or a clear error. */
+    function requireV4PoolKey(poolId: string): V4PoolKey {
+      const key = V4_POOL_REGISTRY[poolId.toLowerCase()];
+      if (!key) {
+        throw new Error(
+          `v4 pool ${poolId} is not registered (feed V4_POOL_REGISTRY via registerV4Pool / Krystal service)`,
+        );
+      }
+      return key;
+    }
+
+    /** Pool state for a v4 pool (poolId) via the StateView — feeds the pure
+     *  builders. PoolKey comes from the registry (poolId is one-way). */
+    async function v4PoolQuoteState(poolId: string): Promise<PoolQuoteState> {
+      const key = requireV4PoolKey(poolId);
+      const stateView = v4StateView();
+      const poolIdHex = poolId.toLowerCase() as `0x${string}`;
+      const [slot0, liquidity] = await Promise.all([
+        stateView.read.getSlot0([poolIdHex]),
+        stateView.read.getLiquidity([poolIdHex]),
+      ]);
+      const [token0Decimals, token1Decimals] = await Promise.all([
+        tokenDecimalsOf(key.currency0),
+        tokenDecimalsOf(key.currency1),
+      ]);
+      return {
+        token0: key.currency0,
+        token1: key.currency1,
+        token0Decimals,
+        token1Decimals,
+        fee: key.fee,
+        tickSpacing: key.tickSpacing,
+        sqrtPriceX96: slot0[0],
+        tickCurrent: Number(slot0[1]),
+        liquidity,
+      };
+    }
+
+    /** Find a direct v3 pool between two mints (native maps to WETH9). */
+    async function findV3PoolForPair(
+      tokenA: string,
+      tokenB: string,
+    ): Promise<{ pool: Address; fee: number } | null> {
+      const factory = v3Factory();
+      const a = isNative(tokenA) ? WETH9 : getAddress(tokenA);
+      const b = isNative(tokenB) ? WETH9 : getAddress(tokenB);
+      for (const fee of [3000, 500, 10_000, 100]) {
+        try {
+          const pool = await factory.read.getPool([a, b, fee]);
+          if (pool && pool.toLowerCase() !== "0x0000000000000000000000000000000000000000") {
+            return { pool, fee };
+          }
+        } catch {
+          continue;
+        }
+      }
+      return null;
+    }
+
+    /** Find a registered v4 pool for a token pair (either order). */
+    function findV4PoolForPair(
+      tokenA: string,
+      tokenB: string,
+    ): { poolId: string; key: V4PoolKey } | null {
+      const a = isNative(tokenA)
+        ? "0x0000000000000000000000000000000000000000"
+        : getAddress(tokenA).toLowerCase();
+      const b = isNative(tokenB)
+        ? "0x0000000000000000000000000000000000000000"
+        : getAddress(tokenB).toLowerCase();
+      for (const [poolId, key] of Object.entries(V4_POOL_REGISTRY)) {
+        const k0 = key.currency0.toLowerCase();
+        const k1 = key.currency1.toLowerCase();
+        if ((k0 === a && k1 === b) || (k0 === b && k1 === a)) return { poolId, key };
+      }
+      return null;
+    }
+
+    function usdOf(amountAtomic: bigint, decimals: number, priceUsd: number): number {
+      return (Number(amountAtomic) / 10 ** decimals) * (priceUsd || 0);
+    }
+
+    /**
+     * Full exit of a position (v3: decreaseLiquidity+collect+burn; v4:
+     * burn+TAKE_PAIR) returning the exact reclaimed amounts via balance
+     * deltas. Shared by exitPosition and rebalancePosition.
+     */
+    async function reclaimPosition(
+      poolAddress: string,
+      positionPubKey: string,
+    ): Promise<{
+      txSignature: string;
+      token0: Address;
+      token1: Address;
+      decimals0: number;
+      decimals1: number;
+      reclaimed0: bigint;
+      reclaimed1: bigint;
+      pendingFeeXAtomic: bigint;
+      pendingFeeYAtomic: bigint;
+      isV4: boolean;
+    }> {
+      const owner = requireWallet();
+      const tokenId = BigInt(positionPubKey);
+      const isV4 = poolAddress.length === 66;
+      let token0: Address;
+      let token1: Address;
+      let decimals0: number;
+      let decimals1: number;
+      let calldata: Hex;
+      let value: bigint;
+      let pendingFeeXAtomic = 0n;
+      let pendingFeeYAtomic = 0n;
+      if (isV4) {
+        const pm = v4PositionManager();
+        const [poolKeyTuple, positionInfo] = await pm.read.getPoolAndPositionInfo([tokenId]);
+        const key: V4PoolKey = {
+          currency0: poolKeyTuple[0],
+          currency1: poolKeyTuple[1],
+          fee: Number(poolKeyTuple[2]),
+          tickSpacing: Number(poolKeyTuple[3]),
+          hooks: poolKeyTuple[4],
+        };
+        const poolId = await computeV4PoolId(key);
+        const state = await v4PoolQuoteState(poolId);
+        const { tickLower, tickUpper } = decodeV4PositionInfo(positionInfo);
+        const liquidity = await pm.read.getPositionLiquidity([tokenId]);
+        const built = buildV4ExitCalldata({
+          poolKey: key,
+          tokenId,
+          liquidity,
+          tickLower,
+          tickUpper,
+          sqrtPriceX96: state.sqrtPriceX96,
+          tickCurrent: state.tickCurrent,
+          deadline: Math.floor(Date.now() / 1000) + 300,
+          slippageToleranceBps: 50,
+        });
+        calldata = built.calldata;
+        value = built.value;
+        token0 = key.currency0;
+        token1 = key.currency1;
+        decimals0 = state.token0Decimals;
+        decimals1 = state.token1Decimals;
+      } else {
+        const npm = v3Npm();
+        const p = await npm.read.positions([tokenId]);
+        token0 = p[2];
+        token1 = p[3];
+        const fee = Number(p[4]);
+        const tickLower = Number(p[5]);
+        const tickUpper = Number(p[6]);
+        const liquidity = p[7];
+        pendingFeeXAtomic = p[10];
+        pendingFeeYAtomic = p[11];
+        const poolAddr = await v3PoolOf(token0, token1, fee);
+        const state = await v3PoolQuoteState(poolAddr);
+        const built = buildV3ExitCalldata({
+          tokenId,
+          token0,
+          token1,
+          token0Decimals: state.token0Decimals,
+          token1Decimals: state.token1Decimals,
+          fee,
+          sqrtPriceX96: state.sqrtPriceX96,
+          tickCurrent: state.tickCurrent,
+          liquidity,
+          tickLower,
+          tickUpper,
+          tokensOwed0: pendingFeeXAtomic,
+          tokensOwed1: pendingFeeYAtomic,
+          recipient: owner,
+          deadline: Math.floor(Date.now() / 1000) + 300,
+          slippageToleranceBps: 50,
+        });
+        calldata = built.calldata;
+        value = built.value;
+        decimals0 = state.token0Decimals;
+        decimals1 = state.token1Decimals;
+      }
+      const [pre0, pre1] = await Promise.all([
+        getBalance(token0, owner),
+        getBalance(token1, owner),
+      ]);
+      const { txSignature } = await sendTx({
+        to: isV4 ? V4_POSITION_MANAGER : V3_NPM,
+        data: calldata,
+        value,
+      });
+      const [post0, post1] = await Promise.all([
+        getBalance(token0, owner),
+        getBalance(token1, owner),
+      ]);
+      return {
+        txSignature,
+        token0,
+        token1,
+        decimals0,
+        decimals1,
+        reclaimed0: post0 - pre0,
+        reclaimed1: post1 - pre1,
+        pendingFeeXAtomic,
+        pendingFeeYAtomic,
+        isV4,
+      };
+    }
+
+    // ─── Swap routing (v3 SwapRouter02 / v4 UniversalRouter) ───────────────────
+
+    type SwapRoute =
+      | {
+          router: "swaprouter02";
+          target: Address;
+          pool: Address;
+          fee: number;
+          zeroForOne: boolean;
+          decimals0: number;
+          decimals1: number;
+        }
+      | {
+          router: "universalrouter";
+          target: Address;
+          poolId: string;
+          poolKey: V4PoolKey;
+          zeroForOne: boolean;
+          decimals0: number;
+          decimals1: number;
+        };
+
+    /** Single-hop quote: registered v4 pool first, then a direct v3 pool.
+     *  The quote is in-SDK at current liquidity (the public RPC strips
+     *  quote-carrying reverts); slippage guards execution. */
+    async function quotePair(
+      tokenIn: string,
+      tokenOut: string,
+      amountIn: bigint,
+    ): Promise<{ outAmountAtomic: bigint; route: SwapRoute }> {
+      const v4 = findV4PoolForPair(tokenIn, tokenOut);
+      if (v4) {
+        const state = await v4PoolQuoteState(v4.poolId);
+        const inputAddr = isNative(tokenIn)
+          ? "0x0000000000000000000000000000000000000000"
+          : getAddress(tokenIn).toLowerCase();
+        const zeroForOne = inputAddr === state.token0.toLowerCase();
+        const { outAmountAtomic } = await quoteSwapInternal(state, zeroForOne, amountIn);
+        return {
+          outAmountAtomic,
+          route: {
+            router: "universalrouter",
+            target: UNIVERSAL_ROUTER,
+            poolId: v4.poolId,
+            poolKey: v4.key,
+            zeroForOne,
+            decimals0: state.token0Decimals,
+            decimals1: state.token1Decimals,
+          },
+        };
+      }
+      const v3 = await findV3PoolForPair(tokenIn, tokenOut);
+      if (!v3) {
+        throw new Error(
+          `no direct v3 or registered v4 pool for ${tokenIn} -> ${tokenOut}`,
+        );
+      }
+      const state = await v3PoolQuoteState(v3.pool);
+      const inputAddr = isNative(tokenIn)
+        ? WETH9.toLowerCase()
+        : getAddress(tokenIn).toLowerCase();
+      const zeroForOne = inputAddr === state.token0.toLowerCase();
+      const { outAmountAtomic } = await quoteSwapInternal(state, zeroForOne, amountIn);
+      return {
+        outAmountAtomic,
+        route: {
+          router: "swaprouter02",
+          target: V3_SWAP_ROUTER_02,
+          pool: v3.pool,
+          fee: v3.fee,
+          zeroForOne,
+          decimals0: state.token0Decimals,
+          decimals1: state.token1Decimals,
+        },
+      };
+    }
+
+    function buildSwapCalldata(
+      route: SwapRoute,
+      tokenIn: string,
+      tokenOut: string,
+      amountIn: bigint,
+      amountOutMinimum: bigint,
+      deadline: number,
+    ): Hex {
+      if (route.router === "universalrouter") {
+        return buildUniversalRouterV4SwapCalldata({
+          poolKey: route.poolKey,
+          zeroForOne: route.zeroForOne,
+          amountIn,
+          amountOutMinimum,
+          deadline,
+        });
+      }
+      return buildV3ExactInputSingleCalldata({
+        tokenIn: isNative(tokenIn) ? WETH9 : getAddress(tokenIn),
+        tokenOut: isNative(tokenOut) ? WETH9 : getAddress(tokenOut),
+        fee: route.fee,
+        recipient: requireWallet(),
+        deadline,
+        amountIn,
+        amountOutMinimum,
+      });
+    }
+
+    /** Address the router actually pulls for a mint: v3 swaps wrap native
+     *  ETH (WETH9); v4 swaps use address-zero native as a first-class
+     *  currency. */
+    function routerInputAddress(mint: string, router: SwapRoute["router"]): Address {
+      if (router === "swaprouter02") return isNative(mint) ? WETH9 : getAddress(mint);
+      return isNative(mint)
+        ? "0x0000000000000000000000000000000000000000"
+        : getAddress(mint);
+    }
+
+    async function approveInputForRoute(
+      tokenIn: string,
+      route: SwapRoute,
+      amount: bigint,
+    ): Promise<void> {
+      const addr = routerInputAddress(tokenIn, route.router);
+      if (route.router === "universalrouter") {
+        await ensurePermit2Allowance(addr, route.target, amount);
+      } else {
+        await ensureErc20Allowance(addr, route.target, amount);
+      }
     }
 
     /**
@@ -670,16 +1903,369 @@ export const AdapterLive = Layer.effect(AdapterService,
           source: "pool-heuristic" as const,
         }),
       enterPosition: (poolAddress, lowerBinId, upperBinId, positionSizeUsd, options) =>
-        NOT_IMPLEMENTED("enterPosition"),
-      exitPosition: (poolAddress, positionPubKey) => NOT_IMPLEMENTED("exitPosition"),
+        Effect.tryPromise({
+          try: async () => {
+            const owner = requireWallet();
+            const isV4 = poolAddress.length === 66;
+            const state = isV4
+              ? await v4PoolQuoteState(poolAddress)
+              : await v3PoolQuoteState(getAddress(poolAddress));
+            const [price0, price1] = await Promise.all([
+              priceUsd(state.token0),
+              priceUsd(state.token1),
+            ]);
+            const halfUsd = positionSizeUsd / 2;
+            let amount0 = usdToAtomic(halfUsd, price0, state.token0Decimals);
+            let amount1 = usdToAtomic(halfUsd, price1, state.token1Decimals);
+            // Fail closed on an unpriceable pool: a USD-sized entry needs both
+            // leg prices.
+            if (amount0 <= 0n && amount1 <= 0n) {
+              throw new Error(
+                `enterPosition: cannot price pool legs (${state.token0}, ${state.token1})`,
+              );
+            }
+            // Wallet-funding check → single-sided deposit when only one leg is
+            // fundable (full size in the held leg), per the interface docs.
+            const [bal0, bal1] = await Promise.all([
+              getBalance(state.token0, owner),
+              getBalance(state.token1, owner),
+            ]);
+            let mode: EntryDepositMode = "two-sided";
+            if (bal0 >= amount0 && bal1 >= amount1) {
+              // both legs fundable — two-sided
+            } else if (bal0 >= amount0) {
+              mode = "single-sided-x";
+              amount1 = 0n;
+              amount0 = usdToAtomic(positionSizeUsd, price0, state.token0Decimals);
+            } else if (bal1 >= amount1) {
+              mode = "single-sided-y";
+              amount0 = 0n;
+              amount1 = usdToAtomic(positionSizeUsd, price1, state.token1Decimals);
+            } else {
+              throw new Error(
+                `enterPosition: wallet can fund neither leg (need ${amount0} ${state.token0} / ${amount1} ${state.token1})`,
+              );
+            }
+            const deadline = Math.floor(Date.now() / 1000) + 300;
+            const slippageToleranceBps = 50;
+            const rangeOverride =
+              lowerBinId && upperBinId && lowerBinId < upperBinId
+                ? { tickLower: lowerBinId, tickUpper: upperBinId }
+                : {};
+            if (isV4) {
+              const key = requireV4PoolKey(poolAddress);
+              const built = buildV4MintCalldata({
+                poolKey: key,
+                sqrtPriceX96: state.sqrtPriceX96,
+                tickCurrent: state.tickCurrent,
+                token0Decimals: state.token0Decimals,
+                token1Decimals: state.token1Decimals,
+                amount0,
+                amount1,
+                recipient: owner,
+                deadline,
+                slippageToleranceBps,
+                ...rangeOverride,
+              });
+              await Promise.all([
+                ensurePermit2Allowance(key.currency0, V4_POSITION_MANAGER, built.amount0),
+                ensurePermit2Allowance(key.currency1, V4_POSITION_MANAGER, built.amount1),
+              ]);
+              const { txSignature, receipt } = await sendTx({
+                to: V4_POSITION_MANAGER,
+                data: built.calldata,
+                value: built.value,
+              });
+              const positionPubKey = tokenIdFromMintReceipt(receipt)?.toString() ?? "";
+              if (!positionPubKey) throw new Error("enterPosition: could not decode minted tokenId");
+              return {
+                positionPubKey,
+                txSignature,
+                depositMode: mode,
+                amountXUsd: usdOf(built.amount0, state.token0Decimals, price0),
+                amountYUsd: usdOf(built.amount1, state.token1Decimals, price1),
+              };
+            }
+            const built = buildV3MintCalldata({
+              token0: state.token0,
+              token1: state.token1,
+              fee: state.fee,
+              tickSpacing: state.tickSpacing,
+              sqrtPriceX96: state.sqrtPriceX96,
+              tickCurrent: state.tickCurrent,
+              token0Decimals: state.token0Decimals,
+              token1Decimals: state.token1Decimals,
+              amount0,
+              amount1,
+              recipient: owner,
+              deadline,
+              slippageToleranceBps,
+              ...rangeOverride,
+            });
+            await Promise.all([
+              ensureErc20Allowance(state.token0, V3_NPM, built.amount0),
+              ensureErc20Allowance(state.token1, V3_NPM, built.amount1),
+            ]);
+            const { txSignature, receipt } = await sendTx({
+              to: V3_NPM,
+              data: built.calldata,
+              value: built.value,
+            });
+            const positionPubKey = tokenIdFromMintReceipt(receipt)?.toString() ?? "";
+            if (!positionPubKey) throw new Error("enterPosition: could not decode minted tokenId");
+            return {
+              positionPubKey,
+              txSignature,
+              depositMode: mode,
+              amountXUsd: usdOf(built.amount0, state.token0Decimals, price0),
+              amountYUsd: usdOf(built.amount1, state.token1Decimals, price1),
+            };
+          },
+          catch: (e) => new Error(`enterPosition: ${underlyingErrorMessage(e)}`),
+        }),
+      exitPosition: (poolAddress, positionPubKey) =>
+        Effect.tryPromise({
+          try: async () => {
+            const reclaimed = await reclaimPosition(poolAddress, positionPubKey);
+            const [price0, price1] = await Promise.all([
+              priceUsd(reclaimed.token0),
+              priceUsd(reclaimed.token1),
+            ]);
+            const withdrawnXAtomic = reclaimed.reclaimed0.toString();
+            const withdrawnYAtomic = reclaimed.reclaimed1.toString();
+            const withdrawnUsd =
+              price0 > 0 && price1 > 0
+                ? usdOf(BigInt(withdrawnXAtomic), reclaimed.decimals0, price0) +
+                  usdOf(BigInt(withdrawnYAtomic), reclaimed.decimals1, price1)
+                : null;
+            const pendingFeeUsd =
+              price0 > 0 && price1 > 0
+                ? usdOf(reclaimed.pendingFeeXAtomic, reclaimed.decimals0, price0) +
+                  usdOf(reclaimed.pendingFeeYAtomic, reclaimed.decimals1, price1)
+                : null;
+            return {
+              txSignature: reclaimed.txSignature,
+              withdrawnXAtomic,
+              withdrawnYAtomic,
+              withdrawnUsd,
+              pendingFeeXAtomic: reclaimed.pendingFeeXAtomic.toString(),
+              pendingFeeYAtomic: reclaimed.pendingFeeYAtomic.toString(),
+              pendingFeeUsd,
+              sweptRewards: [],
+            };
+          },
+          catch: (e) => new Error(`exitPosition: ${underlyingErrorMessage(e)}`),
+        }),
       placeLimitOrder: (poolAddress, request) => NOT_IMPLEMENTED("placeLimitOrder"),
       cancelLimitOrder: (poolAddress, orderPubKey, binIds) => NOT_IMPLEMENTED("cancelLimitOrder"),
       rebalancePosition: (poolAddress, positionPubKey, newLowerBinId, newUpperBinId, topUp) =>
-        NOT_IMPLEMENTED("rebalancePosition"),
-      claimFees: (poolAddress, positionPubKey, ..._rest) => NOT_IMPLEMENTED("claimFees"),
+        Effect.tryPromise({
+          try: async () => {
+            const owner = requireWallet();
+            // EVM v3/v4 have no in-place range change: full exit (burn) then
+            // mint in the new range. The tokenId changes — program.ts re-keys
+            // defensively when the returned pubkey differs.
+            const reclaimed = await reclaimPosition(poolAddress, positionPubKey);
+            const [price0, price1] = await Promise.all([
+              priceUsd(reclaimed.token0),
+              priceUsd(reclaimed.token1),
+            ]);
+            const reclaimedUsd =
+              usdOf(reclaimed.reclaimed0, reclaimed.decimals0, price0) +
+              usdOf(reclaimed.reclaimed1, reclaimed.decimals1, price1);
+            const topUpUsd = topUp
+              ? usdOf(topUp.amountXAtomic, reclaimed.decimals0, price0) +
+                usdOf(topUp.amountYAtomic, reclaimed.decimals1, price1)
+              : 0;
+            const newSizeUsd = reclaimedUsd + topUpUsd;
+            if (!(newSizeUsd > 0)) throw new Error("rebalancePosition: reclaimed value is 0");
+            const state = reclaimed.isV4
+              ? await v4PoolQuoteState(poolAddress)
+              : await v3PoolQuoteState(getAddress(poolAddress));
+            const deadline = Math.floor(Date.now() / 1000) + 300;
+            const slippageToleranceBps = 50;
+            const amount0 = usdToAtomic(newSizeUsd / 2, price0, state.token0Decimals);
+            const amount1 = usdToAtomic(newSizeUsd / 2, price1, state.token1Decimals);
+            let mintTx: string;
+            let newTokenId: string;
+            if (reclaimed.isV4) {
+              const key = requireV4PoolKey(poolAddress);
+              const built = buildV4MintCalldata({
+                poolKey: key,
+                sqrtPriceX96: state.sqrtPriceX96,
+                tickCurrent: state.tickCurrent,
+                token0Decimals: state.token0Decimals,
+                token1Decimals: state.token1Decimals,
+                amount0,
+                amount1,
+                recipient: owner,
+                deadline,
+                slippageToleranceBps,
+                tickLower: newLowerBinId,
+                tickUpper: newUpperBinId,
+              });
+              await Promise.all([
+                ensurePermit2Allowance(key.currency0, V4_POSITION_MANAGER, built.amount0),
+                ensurePermit2Allowance(key.currency1, V4_POSITION_MANAGER, built.amount1),
+              ]);
+              const res = await sendTx({
+                to: V4_POSITION_MANAGER,
+                data: built.calldata,
+                value: built.value,
+              });
+              mintTx = res.txSignature;
+              const tid = tokenIdFromMintReceipt(res.receipt);
+              if (!tid) throw new Error("rebalancePosition: could not decode minted tokenId");
+              newTokenId = tid.toString();
+            } else {
+              const built = buildV3MintCalldata({
+                token0: state.token0,
+                token1: state.token1,
+                fee: state.fee,
+                tickSpacing: state.tickSpacing,
+                sqrtPriceX96: state.sqrtPriceX96,
+                tickCurrent: state.tickCurrent,
+                token0Decimals: state.token0Decimals,
+                token1Decimals: state.token1Decimals,
+                amount0,
+                amount1,
+                recipient: owner,
+                deadline,
+                slippageToleranceBps,
+                tickLower: newLowerBinId,
+                tickUpper: newUpperBinId,
+              });
+              await Promise.all([
+                ensureErc20Allowance(state.token0, V3_NPM, built.amount0),
+                ensureErc20Allowance(state.token1, V3_NPM, built.amount1),
+              ]);
+              const res = await sendTx({ to: V3_NPM, data: built.calldata, value: built.value });
+              mintTx = res.txSignature;
+              const tid = tokenIdFromMintReceipt(res.receipt);
+              if (!tid) throw new Error("rebalancePosition: could not decode minted tokenId");
+              newTokenId = tid.toString();
+            }
+            return { positionPubKey: newTokenId, txSignatures: [reclaimed.txSignature, mintTx] };
+          },
+          catch: (e) => new Error(`rebalancePosition: ${underlyingErrorMessage(e)}`),
+        }),
+      claimFees: (poolAddress, positionPubKey, ..._rest) =>
+        Effect.tryPromise({
+          try: async () => {
+            const owner = requireWallet();
+            const tokenId = BigInt(positionPubKey);
+            const isV4 = poolAddress.length === 66;
+            let token0: Address;
+            let token1: Address;
+            let decimals0: number;
+            let decimals1: number;
+            let calldata: Hex;
+            let value: bigint;
+            let expected0 = 0n;
+            let expected1 = 0n;
+            if (isV4) {
+              const pm = v4PositionManager();
+              const [poolKeyTuple] = await pm.read.getPoolAndPositionInfo([tokenId]);
+              const key: V4PoolKey = {
+                currency0: poolKeyTuple[0],
+                currency1: poolKeyTuple[1],
+                fee: Number(poolKeyTuple[2]),
+                tickSpacing: Number(poolKeyTuple[3]),
+                hooks: poolKeyTuple[4],
+              };
+              const state = await v4PoolQuoteState(poolAddress);
+              const built = buildV4CollectCalldata({
+                poolKey: key,
+                tokenId,
+                recipient: owner,
+                deadline: Math.floor(Date.now() / 1000) + 300,
+                slippageToleranceBps: 50,
+              });
+              calldata = built.calldata;
+              value = built.value;
+              token0 = key.currency0;
+              token1 = key.currency1;
+              decimals0 = state.token0Decimals;
+              decimals1 = state.token1Decimals;
+            } else {
+              const npm = v3Npm();
+              const p = await npm.read.positions([tokenId]);
+              token0 = p[2];
+              token1 = p[3];
+              expected0 = p[10];
+              expected1 = p[11];
+              const fee = Number(p[4]);
+              const state = await v3PoolQuoteState(await v3PoolOf(token0, token1, fee));
+              const built = buildV3CollectCalldata({
+                tokenId,
+                token0,
+                token1,
+                token0Decimals: state.token0Decimals,
+                token1Decimals: state.token1Decimals,
+                recipient: owner,
+              });
+              calldata = built.calldata;
+              value = built.value;
+              decimals0 = state.token0Decimals;
+              decimals1 = state.token1Decimals;
+            }
+            const [pre0, pre1] = await Promise.all([
+              getBalance(token0, owner),
+              getBalance(token1, owner),
+            ]);
+            const { txSignature } = await sendTx({
+              to: isV4 ? V4_POSITION_MANAGER : V3_NPM,
+              data: calldata,
+              value,
+            });
+            const [post0, post1] = await Promise.all([
+              getBalance(token0, owner),
+              getBalance(token1, owner),
+            ]);
+            // Exact collected amounts via balance deltas; v3 tokensOwed is the
+            // fallback when the delta is 0 (zero-fee claim).
+            const atomic0 = post0 - pre0 > 0n ? post0 - pre0 : expected0;
+            const atomic1 = post1 - pre1 > 0n ? post1 - pre1 : expected1;
+            const feeX = Number(atomic0) / 10 ** decimals0;
+            const feeY = Number(atomic1) / 10 ** decimals1;
+            const [price0, price1] = await Promise.all([priceUsd(token0), priceUsd(token1)]);
+            // v3/v4 collect pays 100% to the wallet — no on-chain platform
+            // split (the engine's platform fee is applied off-chain).
+            const netFeesUsd =
+              price0 > 0 && price1 > 0
+                ? usdOf(atomic0, decimals0, price0) + usdOf(atomic1, decimals1, price1)
+                : null;
+            return {
+              txSignature,
+              feeX,
+              feeY,
+              platformFeeX: 0,
+              platformFeeY: 0,
+              netFeeX: feeX,
+              netFeeY: feeY,
+              operatorFeeX: 0,
+              operatorFeeY: 0,
+              netFeesUsd,
+            };
+          },
+          catch: (e) => new Error(`claimFees: ${underlyingErrorMessage(e)}`),
+        }),
       convertClaimedFees: (poolAddress, destination, feeX, feeY) =>
-        NOT_IMPLEMENTED("convertClaimedFees"),
-      claimRewards: (poolAddress, positionPubKey) => NOT_IMPLEMENTED("claimRewards"),
+        Effect.succeed({
+          destination,
+          // Uniswap v3/v4 have no fee-conversion module (the Meteora convert
+          // path does not exist here); report the skip shape.
+          outputAtomic: 0n,
+          outputUsd: null,
+          txSignatures: [],
+        }),
+      claimRewards: (poolAddress, positionPubKey) =>
+        Effect.succeed({
+          skipped: true,
+          skipReason: "no LM farm rewards on Uniswap v3/v4 (Robinhood Chain)",
+          txSignatures: [],
+          rewards: [],
+        }),
       discoverPools: (scanOrdinal) =>
         Effect.tryPromise({
           try: async () => {
@@ -699,13 +2285,52 @@ export const AdapterLive = Layer.effect(AdapterService,
       reportFeeCollection: () => Effect.void,
       // Original semantics: fail-open (never errors) — logs and continues.
       swapUSDCForNative: (minNativeThreshold, swapAmountStable) =>
-        Effect.sync(() =>
-          logger.warn("swapUSDCForNative skipped: live EVM execution not implemented in scaffold", {
-            minNativeThreshold,
-            swapAmountStable,
-          }),
-        ),
-      getTokenBalance: (mint) =>
+        Effect.tryPromise({
+          try: async () => {
+            if (!walletAddress) {
+              logger.warn("swapUSDCForNative: no wallet configured");
+              return;
+            }
+            const threshold = BigInt(minNativeThreshold ?? MIN_NATIVE_FOR_GAS_WEI);
+            const nativeBalance = await publicClient.getBalance({ address: walletAddress });
+            if (nativeBalance >= threshold) return;
+            const desiredUsdg = BigInt(Math.round((swapAmountStable ?? GAS_TOP_UP_STABLECOIN) * 1e6));
+            const usdgBalance = await getBalance(STABLECOIN_MINT, walletAddress);
+            const amountIn = usdgBalance < desiredUsdg ? usdgBalance : desiredUsdg;
+            if (amountIn <= 0n) {
+              logger.warn("swapUSDCForNative: no USDG balance to top up gas");
+              return;
+            }
+            // v3 path only (v3 pools are WETH-paired): USDG -> WETH into the
+            // router, then unwrapWETH9 -> native ETH to the wallet, one tx.
+            const { outAmountAtomic, route } = await quotePair(STABLECOIN_MINT, WETH9, amountIn);
+            if (route.router !== "swaprouter02") {
+              logger.warn("swapUSDCForNative: no v3 USDG/WETH pool");
+              return;
+            }
+            const amountOutMinimum = (outAmountAtomic * 9900n) / 10000n; // 1% slippage
+            const deadline = Math.floor(Date.now() / 1000) + 300;
+            const swapData = buildV3ExactInputSingleCalldata({
+              tokenIn: STABLECOIN_MINT,
+              tokenOut: WETH9,
+              fee: route.fee,
+              recipient: V3_SWAP_ROUTER_02,
+              deadline,
+              amountIn,
+              amountOutMinimum,
+            });
+            const unwrapData = buildUnwrapWETH9Calldata(amountOutMinimum, walletAddress);
+            const calldata = buildSwapRouterMulticallCalldata([swapData, unwrapData]);
+            await ensureErc20Allowance(STABLECOIN_MINT, V3_SWAP_ROUTER_02, amountIn);
+            const { txSignature } = await sendTx({ to: V3_SWAP_ROUTER_02, data: calldata });
+            logger.info("swapUSDCForNative", { txSignature, amountIn: amountIn.toString() });
+          },
+          catch: (e) => {
+            logger.warn("swapUSDCForNative failed (fail-open)", {
+              error: underlyingErrorMessage(e),
+            });
+          },
+        }).pipe(Effect.catch(() => Effect.void)),      getTokenBalance: (mint) =>
         Effect.tryPromise({
           try: async () => (walletAddress ? getBalance(mint, walletAddress) : 0n),
           catch: (e) => new Error(`getTokenBalance: ${underlyingErrorMessage(e)}`),
@@ -728,16 +2353,213 @@ export const AdapterLive = Layer.effect(AdapterService,
       // the fail-open contract (callers treat absent authorities as unknown).
       getMintAuthorities: (mintAddress) =>
         Effect.succeed({ mintAuthority: null, freezeAuthority: null }),
-      quoteSwapUSDCForToken: (outputMint, amountAtomic) => NOT_IMPLEMENTED("quoteSwapUSDCForToken"),
+      quoteSwapUSDCForToken: (outputMint, amountAtomic) =>
+        Effect.tryPromise({
+          try: async () => {
+            const { outAmountAtomic, route } = await quotePair(STABLECOIN_MINT, outputMint, amountAtomic);
+            const minimumOutAmountAtomic = (outAmountAtomic * 9950n) / 10000n;
+            return {
+              inputMint: STABLECOIN_MINT,
+              outputMint,
+              amountAtomic: amountAtomic.toString(),
+              outAmountAtomic: outAmountAtomic.toString(),
+              minimumOutAmountAtomic: minimumOutAmountAtomic.toString(),
+              router: route.router,
+              ...(route.router === "swaprouter02"
+                ? { pool: route.pool.toLowerCase(), fee: route.fee }
+                : { poolId: route.poolId, poolKey: route.poolKey }),
+              quotedAt: Date.now(),
+            };
+          },
+          catch: (e) => new Error(`quoteSwapUSDCForToken: ${underlyingErrorMessage(e)}`),
+        }),
       swapUSDCForToken: (outputMint, amountAtomic, quoteData) =>
-        NOT_IMPLEMENTED("swapUSDCForToken"),
-      swapToken: (inputMint, outputMint, amountAtomic, quoteData) => NOT_IMPLEMENTED("swapToken"),
-      quoteSwap: (request) => NOT_IMPLEMENTED("quoteSwap"),
-      prepareSwap: (quote) => NOT_IMPLEMENTED("prepareSwap"),
-      simulateSwap: (prepared) => NOT_IMPLEMENTED("simulateSwap"),
-      submitSwap: (prepared, onBroadcast) => NOT_IMPLEMENTED("submitSwap"),
-      getSwapStatus: (signature) => NOT_IMPLEMENTED("getSwapStatus"),
-      getConfirmedSwapOutput: (signature) => NOT_IMPLEMENTED("getConfirmedSwapOutput"),
+        Effect.tryPromise({
+          try: async () => {
+            const { outAmountAtomic, route } = await quotePair(STABLECOIN_MINT, outputMint, amountAtomic);
+            const amountOutMinimum = (outAmountAtomic * 9950n) / 10000n;
+            const deadline = Math.floor(Date.now() / 1000) + 300;
+            const calldata = buildSwapCalldata(
+              route,
+              STABLECOIN_MINT,
+              outputMint,
+              amountAtomic,
+              amountOutMinimum,
+              deadline,
+            );
+            await approveInputForRoute(STABLECOIN_MINT, route, amountAtomic);
+            const { txSignature } = await sendTx({ to: route.target, data: calldata });
+            return txSignature;
+          },
+          catch: (e) => new Error(`swapUSDCForToken: ${underlyingErrorMessage(e)}`),
+        }),
+      swapToken: (inputMint, outputMint, amountAtomic, quoteData) =>
+        Effect.tryPromise({
+          try: async () => {
+            const { outAmountAtomic, route } = await quotePair(inputMint, outputMint, amountAtomic);
+            const amountOutMinimum = (outAmountAtomic * 9950n) / 10000n;
+            const deadline = Math.floor(Date.now() / 1000) + 300;
+            const calldata = buildSwapCalldata(
+              route,
+              inputMint,
+              outputMint,
+              amountAtomic,
+              amountOutMinimum,
+              deadline,
+            );
+            await approveInputForRoute(inputMint, route, amountAtomic);
+            const { txSignature } = await sendTx({ to: route.target, data: calldata });
+            return txSignature;
+          },
+          catch: (e) => new Error(`swapToken: ${underlyingErrorMessage(e)}`),
+        }),
+      quoteSwap: (request) =>
+        Effect.tryPromise({
+          try: async () => {
+            const { outAmountAtomic, route } = await quotePair(
+              request.inputMint,
+              request.outputMint,
+              request.amountAtomic,
+            );
+            const slippageBps = request.slippageBps > 0 ? request.slippageBps : 50;
+            const minimumOutAmountAtomic =
+              (outAmountAtomic * BigInt(10_000 - slippageBps)) / 10_000n;
+            return {
+              request,
+              outAmountAtomic,
+              minimumOutAmountAtomic,
+              // Single-hop current-liquidity quote; price impact is not modeled.
+              priceImpactBps: 0,
+              quotedAt: Date.now(),
+              route: [{ inputMint: request.inputMint, outputMint: request.outputMint }],
+              rawQuote: {
+                router: route.router,
+                ...(route.router === "swaprouter02"
+                  ? { pool: route.pool.toLowerCase(), fee: route.fee }
+                  : { poolId: route.poolId, poolKey: route.poolKey, zeroForOne: route.zeroForOne }),
+                amountIn: request.amountAtomic.toString(),
+                outAmountAtomic: outAmountAtomic.toString(),
+              },
+            };
+          },
+          catch: (e) => new Error(`quoteSwap: ${underlyingErrorMessage(e)}`),
+        }),
+      prepareSwap: (quote) =>
+        Effect.tryPromise({
+          try: async () => {
+            const owner = requireWallet();
+            const raw = quote.rawQuote;
+            const deadline = Math.floor(Date.now() / 1000) + 300;
+            const calldata =
+              raw.router === "universalrouter"
+                ? buildUniversalRouterV4SwapCalldata({
+                    poolKey: raw.poolKey as V4PoolKey,
+                    zeroForOne: raw.zeroForOne as boolean,
+                    amountIn: quote.request.amountAtomic,
+                    amountOutMinimum: quote.minimumOutAmountAtomic,
+                    deadline,
+                  })
+                : buildV3ExactInputSingleCalldata({
+                    tokenIn: routerInputAddress(quote.request.inputMint, "swaprouter02"),
+                    tokenOut: routerInputAddress(quote.request.outputMint, "swaprouter02"),
+                    fee: raw.fee as number,
+                    recipient: owner,
+                    deadline,
+                    amountIn: quote.request.amountAtomic,
+                    amountOutMinimum: quote.minimumOutAmountAtomic,
+                  });
+            return {
+              quote,
+              transactionBase64: Buffer.from(calldata.slice(2), "hex").toString("base64"),
+              transactionFormat: "legacy" as const,
+              preparedAt: Date.now(),
+            };
+          },
+          catch: (e) => new Error(`prepareSwap: ${underlyingErrorMessage(e)}`),
+        }),
+      simulateSwap: (prepared) =>
+        Effect.tryPromise({
+          try: async () => {
+            const owner = requireWallet();
+            const raw = prepared.quote.rawQuote;
+            const calldata = (`0x${Buffer.from(prepared.transactionBase64, "base64").toString("hex")}`) as Hex;
+            const target = raw.router === "universalrouter" ? UNIVERSAL_ROUTER : V3_SWAP_ROUTER_02;
+            await publicClient.call({ account: owner, to: target, data: calldata });
+            return { successful: true, logs: [], unitsConsumed: null };
+          },
+          catch: (e) => new Error(`simulateSwap: ${underlyingErrorMessage(e)}`),
+        }),
+      submitSwap: (prepared, onBroadcast) =>
+        Effect.gen(function* () {
+          const owner = requireWallet();
+          const raw = prepared.quote.rawQuote;
+          const calldata = (`0x${Buffer.from(prepared.transactionBase64, "base64").toString("hex")}`) as Hex;
+          const route: SwapRoute =
+            raw.router === "universalrouter"
+              ? {
+                  router: "universalrouter",
+                  target: UNIVERSAL_ROUTER,
+                  poolId: raw.poolId as string,
+                  poolKey: raw.poolKey as V4PoolKey,
+                  zeroForOne: raw.zeroForOne as boolean,
+                  decimals0: 0,
+                  decimals1: 0,
+                }
+              : {
+                  router: "swaprouter02",
+                  target: V3_SWAP_ROUTER_02,
+                  pool: raw.pool as Address,
+                  fee: raw.fee as number,
+                  zeroForOne: false,
+                  decimals0: 0,
+                  decimals1: 0,
+                };
+          yield* Effect.tryPromise(() =>
+            approveInputForRoute(
+              prepared.quote.request.inputMint,
+              route,
+              prepared.quote.request.amountAtomic,
+            ),
+          );
+          const { txSignature } = yield* Effect.tryPromise(() =>
+            sendTx({ to: route.target, data: calldata }),
+          );
+          if (onBroadcast) yield* onBroadcast(txSignature);
+          return txSignature;
+        }),
+      getSwapStatus: (signature) =>
+        Effect.tryPromise({
+          try: async () => {
+            const receipt = await publicClient
+              .getTransactionReceipt({ hash: signature as Hex })
+              .catch(() => null);
+            if (!receipt) return { state: "not_found" as const, error: null };
+            if (receipt.status === "success") return { state: "confirmed" as const, error: null };
+            return { state: "failed" as const, error: `transaction reverted: ${signature}` };
+          },
+          catch: (e) => new Error(`getSwapStatus: ${underlyingErrorMessage(e)}`),
+        }),
+      getConfirmedSwapOutput: (signature) =>
+        Effect.tryPromise({
+          try: async () => {
+            const receipt = await publicClient
+              .getTransactionReceipt({ hash: signature as Hex })
+              .catch(() => null);
+            if (!receipt || receipt.status !== "success") return null;
+            // v3 Swap event: the exact-output amount is the positive int256 side.
+            for (const log of receipt.logs) {
+              if (log.topics[0]?.toLowerCase() === v3SwapEventTopic) {
+                const data = log.data.slice(2);
+                const amount0 = BigInt.asIntN(256, BigInt(`0x${data.slice(0, 64)}`));
+                const amount1 = BigInt.asIntN(256, BigInt(`0x${data.slice(64, 128)}`));
+                const output = amount0 > 0n ? amount0 : amount1 > 0n ? amount1 : 0n;
+                return { outputAtomic: output, feeAtomic: 0n };
+              }
+            }
+            return null;
+          },
+          catch: (e) => new Error(`getConfirmedSwapOutput: ${underlyingErrorMessage(e)}`),
+        }),
     } satisfies AdapterApi;
   }),
 );

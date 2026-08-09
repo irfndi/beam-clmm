@@ -1220,6 +1220,10 @@ export function executeLive(
     nativePriceUsd: number;
     entryStrategyShape: EntryStrategyShape;
     entryRangeHalfWidth?: number;
+    /** Native-ETH ENTER floor (wei). Absent = constants.MIN_NATIVE_FOR_ENTRY_WEI. */
+    minNativeForEntryWei?: bigint | undefined;
+    /** Native-ETH pure-gas floor (wei). Absent = constants.MIN_NATIVE_FOR_GAS_WEI. */
+    minNativeForGasWei?: bigint | undefined;
     reconcileRequestedPools?: Set<string>;
     memory?: MemoryApi;
     unpricedExitWarnedPools?: Set<string>;
@@ -1299,7 +1303,8 @@ export function executeLive(
       // value. When the balance read fails (null), skip the top-up entirely —
       // the post-swap recheck below will independently reject the ENTER if the
       // SOL balance cannot be confirmed.
-      const entryReserveNative = Number(NATIVE_GAS_TOP_UP_THRESHOLD_WEI) / 1e9;
+      const entryReserveNative =
+        Number(deps.minNativeForEntryWei ?? NATIVE_GAS_TOP_UP_THRESHOLD_WEI) / 1e9;
       const preSwapSol = yield* adapter.getNativeBalance().pipe(
         Effect.map((lamports) => Number(lamports) / 1e9),
         Effect.catch(() => Effect.succeed(null)),
@@ -1359,16 +1364,18 @@ export function executeLive(
         return { executed: false, error };
       }
       const nativeBalanceWei = nativeBalance.value;
-      if (nativeBalanceWei < MIN_NATIVE_FOR_ENTRY_WEI) {
+      const minNativeForEntryWei = deps.minNativeForEntryWei ?? MIN_NATIVE_FOR_ENTRY_WEI;
+      const minNativeForGasWei = deps.minNativeForGasWei ?? MIN_NATIVE_FOR_GAS_WEI;
+      if (nativeBalanceWei < minNativeForEntryWei) {
         const availableLamports = Number(nativeBalanceWei);
-        const neededLamports = Number(MIN_NATIVE_FOR_ENTRY_WEI);
-        const reserve = neededLamports - Number(MIN_NATIVE_FOR_GAS_WEI);
+        const neededLamports = Number(minNativeForEntryWei);
+        const reserve = neededLamports - Number(minNativeForGasWei);
         const availableHuman = (availableLamports / 1e9).toFixed(4);
         const neededHuman = (neededLamports / 1e9).toFixed(4);
         const reserveHuman = (reserve / 1e9).toFixed(4);
         console.warn(
           `Insufficient SOL for ENTER — available ${availableHuman} SOL, need ${neededHuman} SOL ` +
-            `(gas ${(Number(MIN_NATIVE_FOR_GAS_WEI) / 1e9).toFixed(4)} + rent/fee reserve ${reserveHuman})`,
+            `(gas ${(Number(minNativeForGasWei) / 1e9).toFixed(4)} + rent/fee reserve ${reserveHuman})`,
         );
         const error =
           `Insufficient SOL for ENTER — available: ${availableHuman} SOL, ` +
@@ -3612,6 +3619,8 @@ export const program = Effect.gen(function* () {
               revenueConfigSvc,
               trackedPositions,
               nativePriceUsd: config.nativePriceUsd,
+              minNativeForEntryWei: config.minNativeForEntryWei,
+              minNativeForGasWei: config.minNativeForGasWei,
               entryStrategyShape,
               entryRangeHalfWidth,
               reconcileRequestedPools,
@@ -5650,6 +5659,7 @@ export const program = Effect.gen(function* () {
                 walletBalanceUsd,
                 tvlUsd: pool.tvlUsd,
                 maxSizeUsd: config.maxEntrySizeUsd,
+                tvlFractionUsd: config.entrySizeTvlFraction,
               }),
               volatilityStddev,
               netDriftBins,
@@ -5828,6 +5838,7 @@ export const program = Effect.gen(function* () {
               walletBalanceUsd,
               tvlUsd: pool.tvlUsd,
               maxSizeUsd: config.maxEntrySizeUsd,
+              tvlFractionUsd: config.entrySizeTvlFraction,
             });
             const faAllocation = evaluatePerPoolAllocation({
               proposedDepositUsd: faProposedSizeUsd,
@@ -5962,6 +5973,7 @@ export const program = Effect.gen(function* () {
                 walletBalanceUsd,
                 tvlUsd: pool.tvlUsd,
                 maxSizeUsd: config.maxEntrySizeUsd,
+                tvlFractionUsd: config.entrySizeTvlFraction,
               });
 
               // F5: per-pool allocation cap — aggregate across the pool's
@@ -6918,6 +6930,8 @@ export const program = Effect.gen(function* () {
               revenueConfigSvc,
               trackedPositions,
               nativePriceUsd: config.nativePriceUsd,
+              minNativeForEntryWei: config.minNativeForEntryWei,
+              minNativeForGasWei: config.minNativeForGasWei,
               entryStrategyShape,
               entryRangeHalfWidth: rangeHalfWidth,
               reconcileRequestedPools,
@@ -6967,6 +6981,8 @@ export const program = Effect.gen(function* () {
               revenueConfigSvc,
               trackedPositions,
               nativePriceUsd: config.nativePriceUsd,
+              minNativeForEntryWei: config.minNativeForEntryWei,
+              minNativeForGasWei: config.minNativeForGasWei,
               entryStrategyShape,
               entryRangeHalfWidth: rangeHalfWidth,
               reconcileRequestedPools,

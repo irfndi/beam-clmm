@@ -97,6 +97,24 @@ describe("computeEntrySizeUsd — legacy-identical conservative sizing", () => {
       }
     }
   });
+
+  it("a caller-supplied tvlFractionUsd replaces the 0.5% TVL share (challenge sizing)", () => {
+    // 5% of a $40K pool = $2000, bound by the $500 cap.
+    expect(
+      computeEntrySizeUsd({ walletBalanceUsd: 10_000, tvlUsd: 40_000, tvlFractionUsd: 0.05 }),
+    ).toBe(500);
+    // 5% of a $100K pool with a raised cap: wallet-half still binds.
+    expect(
+      computeEntrySizeUsd({
+        walletBalanceUsd: 10_000,
+        tvlUsd: 100_000,
+        maxSizeUsd: 2_000,
+        tvlFractionUsd: 0.05,
+      }),
+    ).toBe(2_000);
+    // The $10 floor still binds under an override.
+    expect(computeEntrySizeUsd({ walletBalanceUsd: 0, tvlUsd: 0, tvlFractionUsd: 0.05 })).toBe(10);
+  });
 });
 
 describe("computeIdleRedeploySizeUsd — widened redeploy size", () => {

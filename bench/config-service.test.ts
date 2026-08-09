@@ -285,3 +285,132 @@ describe("ConfigService agent runtime timeout", () => {
     expect(clamped.agentPromptTimeoutMs).toBe(1_000);
   });
 });
+
+describe("ConfigService live-mode gas floors (MIN_NATIVE_*)", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("defaults to the constants when unset", async () => {
+    vi.stubEnv("MIN_NATIVE_FOR_ENTRY_WEI", undefined);
+    vi.stubEnv("MIN_NATIVE_FOR_GAS_WEI", undefined);
+    const cfg = await loadConfig();
+    expect(cfg.minNativeForEntryWei).toBe(50_000_000_000_000_000n); // 0.05 ETH
+    expect(cfg.minNativeForGasWei).toBe(5_000_000_000_000_000n); // 0.005 ETH
+  });
+
+  it("honours env overrides (small-account challenge floors)", async () => {
+    // 0.0001 ETH gas floor + 0.0005 ETH entry floor — a $10-100 challenge
+    // account is viable instead of blocked by the 0.05 ETH default gate.
+    vi.stubEnv("MIN_NATIVE_FOR_ENTRY_WEI", "500000000000000"); // 0.0005 ETH
+    vi.stubEnv("MIN_NATIVE_FOR_GAS_WEI", "100000000000000"); // 0.0001 ETH
+    const cfg = await loadConfig();
+    expect(cfg.minNativeForEntryWei).toBe(500_000_000_000_000n);
+    expect(cfg.minNativeForGasWei).toBe(100_000_000_000_000n);
+  });
+
+  it("falls back on non-numeric values", async () => {
+    vi.stubEnv("MIN_NATIVE_FOR_ENTRY_WEI", "not-a-number");
+    const cfg = await loadConfig();
+    expect(cfg.minNativeForEntryWei).toBe(50_000_000_000_000_000n);
+  });
+
+  it("falls back on negative values", async () => {
+    vi.stubEnv("MIN_NATIVE_FOR_GAS_WEI", "-5");
+    const cfg = await loadConfig();
+    expect(cfg.minNativeForGasWei).toBe(5_000_000_000_000_000n);
+  });
+});
+
+describe("ConfigService FEE_CLAIM_INTERVAL_MS", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("defaults to 1h (3600000) — the compounding-challenge cadence", async () => {
+    vi.stubEnv("FEE_CLAIM_INTERVAL_MS", undefined);
+    const cfg = await loadConfig();
+    expect(cfg.feeClaimIntervalMs).toBe(3_600_000);
+  });
+
+  it("honours an explicit override", async () => {
+    vi.stubEnv("FEE_CLAIM_INTERVAL_MS", "7200000");
+    const cfg = await loadConfig();
+    expect(cfg.feeClaimIntervalMs).toBe(7_200_000);
+  });
+});
+
+describe("ConfigService ENTRY_SIZE_TVL_FRACTION", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("defaults to 0.005 (0.5% of pool TVL)", async () => {
+    vi.stubEnv("ENTRY_SIZE_TVL_FRACTION", undefined);
+    const cfg = await loadConfig();
+    expect(cfg.entrySizeTvlFraction).toBe(0.005);
+  });
+
+  it("honours an explicit override and clamps above 1.0", async () => {
+    vi.stubEnv("ENTRY_SIZE_TVL_FRACTION", "0.05");
+    const cfg = await loadConfig();
+    expect(cfg.entrySizeTvlFraction).toBe(0.05);
+
+    vi.stubEnv("ENTRY_SIZE_TVL_FRACTION", "2");
+    const clamped = await loadConfig();
+    expect(clamped.entrySizeTvlFraction).toBe(1);
+  });
+});
+
+describe("ConfigService SCAN_INTERVAL_MS floor", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("clamps below the 2s minimum to 2000 (challenge fast cadence)", async () => {
+    vi.stubEnv("SCAN_INTERVAL_MS", "1000");
+    const cfg = await loadConfig();
+    expect(cfg.scanIntervalMs).toBe(2_000);
+  });
+});
+
+describe("ConfigService CHALLENGE_MODE presets", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("is off by default and keeps the normal defaults", async () => {
+    vi.stubEnv("CHALLENGE_MODE", undefined);
+    vi.stubEnv("MIN_POOL_TVL_USD", undefined);
+    vi.stubEnv("MAX_OPEN_POSITIONS", undefined);
+    const cfg = await loadConfig();
+    expect(cfg.minPoolTvlUsd).toBe(50_000);
+    expect(cfg.maxOpenPositions).toBe(3);
+    expect(cfg.entrySizeTvlFraction).toBe(0.005);
+  });
+
+  it("applies the challenge preset when CHALLENGE_MODE=true", async () => {
+    vi.stubEnv("CHALLENGE_MODE", "true");
+    vi.stubEnv("MIN_POOL_TVL_USD", undefined);
+    vi.stubEnv("MAX_OPEN_POSITIONS", undefined);
+    vi.stubEnv("MAX_POSITIONS_PER_POOL", undefined);
+    vi.stubEnv("FEE_CLAIM_INTERVAL_MS", undefined);
+    vi.stubEnv("ENTRY_SIZE_TVL_FRACTION", undefined);
+    vi.stubEnv("MIN_FEE_IL_RATIO", undefined);
+    const cfg = await loadConfig();
+    expect(cfg.minPoolTvlUsd).toBe(1_000);
+    expect(cfg.maxOpenPositions).toBe(4);
+    expect(cfg.maxPositionsPerPool).toBe(2);
+    expect(cfg.feeClaimIntervalMs).toBe(3_600_000);
+    expect(cfg.entrySizeTvlFraction).toBe(0.05);
+    expect(cfg.minFeeIlRatio).toBe(1.2);
+  });
+
+  it("lets an explicit env var win over the challenge preset", async () => {
+    vi.stubEnv("CHALLENGE_MODE", "true");
+    vi.stubEnv("MIN_POOL_TVL_USD", "25000");
+    const cfg = await loadConfig();
+    expect(cfg.minPoolTvlUsd).toBe(25_000);
+    expect(cfg.maxOpenPositions).toBe(4); // preset still applies elsewhere
+  });
+});

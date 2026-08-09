@@ -18,6 +18,10 @@ export interface EntrySizeInput {
   readonly tvlUsd: number;
   /** Hard dollar ceiling on the entry; defaults to ENTRY_SIZE_CAP_USD. */
   readonly maxSizeUsd?: number;
+  /** Fraction of pool TVL the entry may use; defaults to ENTRY_SIZE_TVL_FRACTION
+   *  (0.005). Config override: ENTRY_SIZE_TVL_FRACTION (env), CHALLENGE_MODE
+   *  raises the fallback to 0.05. */
+  readonly tvlFractionUsd?: number | undefined;
 }
 
 /**
@@ -33,7 +37,7 @@ export interface EntrySizeInput {
 export function computeEntrySizeUsd(input: EntrySizeInput): number {
   const maxPositionSize = Math.min(
     input.walletBalanceUsd * ENTRY_SIZE_WALLET_FRACTION,
-    input.tvlUsd * ENTRY_SIZE_TVL_FRACTION,
+    input.tvlUsd * (input.tvlFractionUsd ?? ENTRY_SIZE_TVL_FRACTION),
     input.maxSizeUsd ?? ENTRY_SIZE_CAP_USD,
   );
   return Math.max(maxPositionSize, ENTRY_SIZE_FLOOR_USD);
