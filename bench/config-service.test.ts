@@ -347,6 +347,7 @@ describe("ConfigService ENTRY_SIZE_TVL_FRACTION", () => {
 
   it("defaults to 0.005 (0.5% of pool TVL)", async () => {
     vi.stubEnv("ENTRY_SIZE_TVL_FRACTION", undefined);
+    vi.stubEnv("CHALLENGE_MODE", undefined);
     const cfg = await loadConfig();
     expect(cfg.entrySizeTvlFraction).toBe(0.005);
   });

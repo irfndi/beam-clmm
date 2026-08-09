@@ -49,6 +49,8 @@ export interface AppConfig {
   readonly challengeRangeVolK?: number;
   readonly challengeMinScore?: number;
   readonly challengePoolShareCapPct?: number;
+  readonly challengeBookSize?: number;
+  readonly challengeUniverseRefreshMs?: number;
   readonly candidateMinHealthyScans: number;
   readonly candidateMinObservationMs: number;
   readonly candidateScanLimit: number;
@@ -580,6 +582,12 @@ const loadConfig = Effect.gen(function* () {
     "CHALLENGE_POOL_SHARE_CAP_PCT",
     0.5,
     10,
+  );
+  const challengeBookSize = yield* validatedNumber("CHALLENGE_BOOK_SIZE", 1, 10);
+  const challengeUniverseRefreshMs = yield* validatedNumber(
+    "CHALLENGE_UNIVERSE_REFRESH_MS",
+    60_000,
+    300_000,
   );
 
   // WALLET_PRIVATE_KEY (env / .env) takes precedence; otherwise fall back to the local
@@ -1466,6 +1474,8 @@ const loadConfig = Effect.gen(function* () {
     challengeRangeVolK,
     challengeMinScore,
     challengePoolShareCapPct,
+    challengeBookSize,
+    challengeUniverseRefreshMs,
     minFeeIlRatio,
     minNativeForGasWei,
     minNativeForEntryWei,

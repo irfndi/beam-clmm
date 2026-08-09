@@ -1563,13 +1563,28 @@ export const AdapterLive = Layer.effect(AdapterService,
         }
       }
       bins.sort((a, b) => a.binId - b.binId);
+      // TickLens returns empty for wide/low-occupancy pools (no populated
+      // ticks near the active one). Mirror the v4 proxy: a synthetic active
+      // bin keeps range utilization KNOWN (1.0 while live) so the ENTER
+      // gates proceed — the volatility-scaled range width is the real
+      // utilization control, not tick occupancy. A measured value when
+      // populated, the proxy otherwise.
+      if (bins.length === 0) {
+        bins.push({
+          binId: activeTick,
+          reserveX: slot0[0],
+          reserveY: 0n,
+          liquiditySupply: 0n,
+          price: tickToPrice(activeTick),
+        });
+      }
       return {
         lowerBinId: bins[0]?.binId ?? activeTick,
         upperBinId: bins[bins.length - 1]?.binId ?? activeTick,
         bins,
         activeBinId: activeTick,
         binStep: Number(tickSpacing),
-        reservesKnown: bins.length > 0,
+        reservesKnown: true,
       };
     }
 

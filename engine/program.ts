@@ -2414,6 +2414,45 @@ export const program = Effect.gen(function* () {
   // ─── Pool discovery ────────────────────────────────────────────────────────
 
   let poolsToScan = [...config.watchlistPools];
+
+  // Challenge fast lane: the Krystal-ranked harvest book (top-K pools by
+  // measured yield-vs-drawdown score) is merged into the scan set so their
+  // drawdown/yield gates run EVERY cycle (2-15s cadence), while the book
+  // itself re-ranks on the slow universe cadence (5 min default).
+  const harvestBookPools = new Set<string>();
+  let lastHarvestBookRefreshAt = 0;
+  const refreshHarvestBook = (): Effect.Effect<void, never, never> =>
+    Effect.gen(function* () {
+      if (config.challengeMode !== true) return;
+      const now = Date.now();
+      if (now - lastHarvestBookRefreshAt < (config.challengeUniverseRefreshMs ?? 300_000)) return;
+      lastHarvestBookRefreshAt = now;
+      const universe = yield* krystal.getUniverse();
+      const ranked = [...universe.entries()]
+        .map(([address, stats]) => {
+          const score = challengePoolScore({
+            address,
+            tokenX: "", tokenY: "",
+            tokenXSymbol: stats.token0Symbol, tokenYSymbol: stats.token1Symbol,
+            tvlUsd: stats.tvlUsd, volume24hUsd: stats.volume24hUsd,
+            fees24hUsd: stats.feeUsd24h, apr: stats.apr,
+            activeBinId: 0, binStep: 0, currentPrice: 0, timestamp: Date.now(),
+            statsSource: "krystal",
+            drawdown24h: stats.drawdown24h, priceVolatility: stats.priceVolatility,
+          });
+          return { address, score: score.score, tier: score.tier };
+        })
+        .filter((entry) => entry.tier !== "none")
+        .sort((a, b) => b.score - a.score)
+        .slice(0, config.challengeBookSize ?? 10);
+      harvestBookPools.clear();
+      for (const entry of ranked) harvestBookPools.add(entry.address);
+      logger.info("Harvest book refreshed", {
+        size: harvestBookPools.size,
+        top: ranked.slice(0, 3).map((r) => ({ pool: r.address.slice(0, 10), score: r.score.toFixed(1) })),
+      });
+    });
+
   const autonomousCandidateWallet = executionWalletAddress ?? "paper";
   const autonomousCandidates = new Map<string, TokenCandidateRecord>();
   const autonomousCandidatePools = new Set<string>();
@@ -2517,6 +2556,9 @@ export const program = Effect.gen(function* () {
       if (!poolsToScan.includes(poolAddress)) poolsToScan.push(poolAddress);
     }
     for (const poolAddress of fallenAngelCandidatePools) {
+      if (!poolsToScan.includes(poolAddress)) poolsToScan.push(poolAddress);
+    }
+    for (const poolAddress of harvestBookPools) {
       if (!poolsToScan.includes(poolAddress)) poolsToScan.push(poolAddress);
     }
   };
@@ -3830,6 +3872,7 @@ export const program = Effect.gen(function* () {
       let oldestSettlementAgeMs = 0;
       yield* refreshAutonomousCandidates(scanCount);
       yield* refreshFallenAngelCandidates(scanCount);
+      yield* refreshHarvestBook();
       yield* refreshMarketUniverse(Date.now());
       // The universe refresh may have rebuilt the market top-K — make the
       // fresh active set visible to the "no pools" check and the scan loop.
@@ -5752,7 +5795,8 @@ export const program = Effect.gen(function* () {
         } else if (
           !approvedPoolAddresses.includes(poolAddress) &&
           !autonomousCandidatePools.has(poolAddress) &&
-          !marketScanPools.has(poolAddress)
+          !marketScanPools.has(poolAddress) &&
+          !(config.challengeMode === true && harvestBookPools.has(poolAddress))
         ) {
           logger.info("Skipping ENTER for unmanaged pool", { pool: poolAddress });
           enterGateRejected = true;
