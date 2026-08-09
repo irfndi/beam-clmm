@@ -81,18 +81,6 @@ export const initialSnapshot: BeamStateSnapshot = {
   pendingProposals: [],
 };
 
-export function AgentStateLive(): Layer.Layer<AgentStateService, never, never> {
-  return Layer.succeed(AgentStateService, {
-    getSnapshot: () => Effect.succeed(initialSnapshot),
-    updateSnapshot: () => Effect.void,
-    setAgentPolicy: () => Effect.void,
-    enqueueProposal: () => Effect.succeed({ status: "enqueued" as const }),
-    dequeueProposals: () => Effect.void,
-    approveProposal: () => Effect.void,
-    rejectProposal: () => Effect.void,
-  });
-}
-
 export interface AgentStateMutableOptions {
   /** Maximum number of non-expired pending/approved proposals retained. Default 50. */
   readonly maxPendingProposals?: number;

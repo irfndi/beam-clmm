@@ -50,8 +50,6 @@ export const DEFAULT_RPC = "https://rpc.mainnet.chain.robinhood.com";
 export const V3_FACTORY: Address = getAddress("0x1f7d7550b1b028f7571e69a784071f0205fd2efa");
 export const V3_NPM: Address = getAddress("0x73991a25c818bf1f1128deaab1492d45638de0d3");
 export const V3_TICK_LENS: Address = getAddress("0x7dfd4f31be6814d2906bde155c3e1b146eac1468");
-export const V3_QUOTER_V2: Address = getAddress("0x33e885ed0ec9bf04ecfb19341582aadcb4c8a9e7");
-export const V4_POOL_MANAGER: Address = getAddress("0x8366a39cc670b4001a1121b8f6a443a643e40951");
 export const V4_POSITION_MANAGER: Address = getAddress(
   "0x58daec3116aae6d93017baaea7749052e8a04fa7",
 );
@@ -61,7 +59,6 @@ export const UNIVERSAL_ROUTER: Address = getAddress("0x06AfBA43Fd06227fA663b0DAe
 export const V3_SWAP_ROUTER_02: Address = getAddress(
   "0xCaf681a66D020601342297493863E78C959E5cb2",
 );
-export const MULTICALL3: Address = getAddress("0xcA11bDe05977b3631167028862bE2a173976CA11");
 // v3 pools on Robinhood Chain are WETH-paired (native ETH must be wrapped for
 // v3; v4 treats address-zero as a first-class currency). Verified 2026-07.
 export const WETH9: Address = getAddress("0x0Bd7D308f8E1639FAb988df18A8011f41EAcAD73");
@@ -218,6 +215,12 @@ const permit2Abi = parseAbi([
 export const MAX_UINT256 = 2n ** 256n - 1n;
 export const MAX_UINT160 = 2n ** 160n - 1n;
 const MAX_UINT48 = 2n ** 48n - 1n;
+
+// Position txs (mint/collect/exit/rebalance) carry a 30-minute deadline:
+// they are not price-critical (no ordering risk), and under a baseFee spike
+// the FCFS mempool can hold a tx past the old 300s deadline — reverting on
+// inclusion and burning gas. SWAPS keep a 5-minute deadline (price-critical).
+const POSITION_DEADLINE_S = 30 * 60;
 
 /** ERC-721 Transfer(address,address,uint256) — minted NFTs emit from = 0x0. */
 const erc721TransferTopic = keccak256(toHex("Transfer(address,address,uint256)")).toLowerCase();
@@ -738,7 +741,11 @@ export function buildV4MintCalldata(args: V4MintCalldataArgs): V4MintCalldataRes
     deadline,
     recipient: getAddress(recipient),
     hookData: "0x",
-    ...(c0.isNative ? { useNative: Ether.onChain(CHAIN_ID) } : {}),
+    // Native (address-zero) may legally be EITHER leg in a v4 pool — the old
+    // c0-only check made ETH-quote pools permanently unenterable (dry-run
+    // revert with no msg.value). addCallParameters computes the msg.value
+    // from the native leg amount whichever side it sits on.
+    ...(c0.isNative || c1.isNative ? { useNative: Ether.onChain(CHAIN_ID) } : {}),
   });
   return {
     calldata: calldata as Hex,
@@ -928,7 +935,15 @@ export const AdapterLive = Layer.effect(AdapterService,
           try {
             return privateKeyToAccount(config.walletPrivateKey as `0x${string}`);
           } catch {
-            return null;
+            // A CONFIGURED key that fails to parse must refuse to boot: with
+            // the old catch -> null the engine silently ran paper-mode-style
+            // (every sendTx errors 'live transactions disabled') and the
+            // operator only noticed after the first cycle. The key itself is
+            // never logged.
+            throw new Error(
+              "WALLET_PRIVATE_KEY is set but could not be parsed as an EVM private key " +
+                "(expected 0x-prefixed, 64 hex chars). Fix it before starting the engine.",
+            );
           }
         })()
       : null;
@@ -1164,7 +1179,13 @@ export const AdapterLive = Layer.effect(AdapterService,
       });
       const p2 = await permit2.read.allowance([owner, tokenAddr, spender]).catch(() => 0n);
       const p2Amount = BigInt(Array.isArray(p2) ? p2[0] : p2);
-      if (p2Amount < amount) {
+      const p2Expiration = BigInt(Array.isArray(p2) ? p2[1] : 0n);
+      // Permit2 treats an EXPIRED allowance as 0 regardless of amount — an
+      // expired-but-large approval would let the mint broadcast and revert
+      // on-chain (burned gas). Unreachable today (all approvals use
+      // MAX_UINT48 ≈ 8.9M years) but cheap to guard.
+      const p2Expired = p2Expiration <= BigInt(Math.floor(Date.now() / 1000));
+      if (p2Amount < amount || p2Expired) {
         await sendTx({
           to: PERMIT2,
           data: encodeFunctionData({
@@ -1393,7 +1414,7 @@ export const AdapterLive = Layer.effect(AdapterService,
           tickUpper,
           sqrtPriceX96: state.sqrtPriceX96,
           tickCurrent: state.tickCurrent,
-          deadline: Math.floor(Date.now() / 1000) + 300,
+          deadline: Math.floor(Date.now() / 1000) + POSITION_DEADLINE_S,
           slippageToleranceBps: 50,
         });
         calldata = built.calldata;
@@ -1430,7 +1451,7 @@ export const AdapterLive = Layer.effect(AdapterService,
           tokensOwed0: pendingFeeXAtomic,
           tokensOwed1: pendingFeeYAtomic,
           recipient: owner,
-          deadline: Math.floor(Date.now() / 1000) + 300,
+          deadline: Math.floor(Date.now() / 1000) + POSITION_DEADLINE_S,
           slippageToleranceBps: 50,
         });
         calldata = built.calldata;
@@ -2119,7 +2140,7 @@ export const AdapterLive = Layer.effect(AdapterService,
                 `enterPosition: wallet can fund neither leg (need ${amount0} ${state.token0} / ${amount1} ${state.token1})`,
               );
             }
-            const deadline = Math.floor(Date.now() / 1000) + 300;
+            const deadline = Math.floor(Date.now() / 1000) + POSITION_DEADLINE_S;
             const slippageToleranceBps = 50;
             const rangeOverride =
               lowerBinId && upperBinId && lowerBinId < upperBinId
@@ -2256,7 +2277,7 @@ export const AdapterLive = Layer.effect(AdapterService,
             const state = reclaimed.isV4
               ? await v4PoolQuoteState(poolAddress)
               : await v3PoolQuoteState(getAddress(poolAddress));
-            const deadline = Math.floor(Date.now() / 1000) + 300;
+            const deadline = Math.floor(Date.now() / 1000) + POSITION_DEADLINE_S;
             const slippageToleranceBps = 50;
             const amount0 = usdToAtomic(newSizeUsd / 2, price0, state.token0Decimals);
             const amount1 = usdToAtomic(newSizeUsd / 2, price1, state.token1Decimals);
@@ -2353,7 +2374,7 @@ export const AdapterLive = Layer.effect(AdapterService,
                 poolKey: key,
                 tokenId,
                 recipient: owner,
-                deadline: Math.floor(Date.now() / 1000) + 300,
+                deadline: Math.floor(Date.now() / 1000) + POSITION_DEADLINE_S,
                 slippageToleranceBps: 50,
               });
               calldata = built.calldata;
@@ -2539,46 +2560,6 @@ export const AdapterLive = Layer.effect(AdapterService,
       // the fail-open contract (callers treat absent authorities as unknown).
       getMintAuthorities: (mintAddress) =>
         Effect.succeed({ mintAuthority: null, freezeAuthority: null }),
-      quoteSwapUSDCForToken: (outputMint, amountAtomic) =>
-        Effect.tryPromise({
-          try: async () => {
-            const { outAmountAtomic, route } = await quotePair(STABLECOIN_MINT, outputMint, amountAtomic);
-            const minimumOutAmountAtomic = (outAmountAtomic * 9950n) / 10000n;
-            return {
-              inputMint: STABLECOIN_MINT,
-              outputMint,
-              amountAtomic: amountAtomic.toString(),
-              outAmountAtomic: outAmountAtomic.toString(),
-              minimumOutAmountAtomic: minimumOutAmountAtomic.toString(),
-              router: route.router,
-              ...(route.router === "swaprouter02"
-                ? { pool: route.pool.toLowerCase(), fee: route.fee }
-                : { poolId: route.poolId, poolKey: route.poolKey }),
-              quotedAt: Date.now(),
-            };
-          },
-          catch: (e) => new Error(`quoteSwapUSDCForToken: ${underlyingErrorMessage(e)}`),
-        }),
-      swapUSDCForToken: (outputMint, amountAtomic, quoteData) =>
-        Effect.tryPromise({
-          try: async () => {
-            const { outAmountAtomic, route } = await quotePair(STABLECOIN_MINT, outputMint, amountAtomic);
-            const amountOutMinimum = (outAmountAtomic * 9950n) / 10000n;
-            const deadline = Math.floor(Date.now() / 1000) + 300;
-            const calldata = buildSwapCalldata(
-              route,
-              STABLECOIN_MINT,
-              outputMint,
-              amountAtomic,
-              amountOutMinimum,
-              deadline,
-            );
-            await approveInputForRoute(STABLECOIN_MINT, route, amountAtomic);
-            const { txSignature } = await sendTx({ to: route.target, data: calldata });
-            return txSignature;
-          },
-          catch: (e) => new Error(`swapUSDCForToken: ${underlyingErrorMessage(e)}`),
-        }),
       swapToken: (inputMint, outputMint, amountAtomic, quoteData) =>
         Effect.tryPromise({
           try: async () => {

@@ -44,7 +44,6 @@ export interface AppConfig {
   readonly settlementAsset: SettlementAsset;
   /** Challenge mode (CHALLENGE_MODE): harvest-focused presets + strategy. */
   readonly challengeMode?: boolean;
-  readonly challengeDrawdownHalvePct?: number;
   readonly challengeDrawdownExitPct?: number;
   readonly challengeRangeVolK?: number;
   readonly challengeMinScore?: number;
@@ -267,7 +266,9 @@ export interface AppConfig {
    * behavior.
    */
   readonly maxPositionsPerPool: number;
-  /** Hard USD ceiling per conservative entry (default 500; see MAX_ENTRY_SIZE_USD). */
+  /** Hard USD ceiling per conservative entry (default 500; see MAX_ENTRY_SIZE_USD).
+   *  CHALLENGE_MODE raises the fallback to 5000 so a scaling challenge account
+   *  can deploy meaningful per-position size. */
   readonly maxEntrySizeUsd: number;
   /** Fraction of pool TVL the conservative entry size may use. Env
    *  `ENTRY_SIZE_TVL_FRACTION`; default 0.005 (0.5 %). CHALLENGE_MODE raises it
@@ -565,19 +566,18 @@ const loadConfig = Effect.gen(function* () {
   // preset is only the FALLBACK (see the challengeFallback ternaries below).
   // Preset matrix: minPoolTvlUsd 1000, maxOpenPositions 4, maxPositionsPerPool
   // 2 (already the default), feeClaimIntervalMs 1h (already the default),
-  // entrySizeTvlFraction 0.05, minFeeIlRatio 1.2 (already the default).
+  // entrySizeTvlFraction 0.05, maxEntrySizeUsd 5000, minFeeIlRatio 1.2
+  // (already the default).
   const challengeMode = yield* Config.boolean("CHALLENGE_MODE").pipe(
     Effect.orElseSucceed(() => false),
   );
-  const challengeDrawdownHalvePct = yield* validatedNumber(
-    "CHALLENGE_DRAWDOWN_HALVE_PCT",
-    0,
-    5,
-  );
+  // Single drawdown exit threshold: the old 'halve' de-risk tier (default 5%)
+  // collapsed into exit (program.ts maps both to EXIT), so the exit default is
+  // 5% — the effective runtime threshold.
   const challengeDrawdownExitPct = yield* validatedNumber(
     "CHALLENGE_DRAWDOWN_EXIT_PCT",
     0,
-    10,
+    5,
   );
   const challengeRangeVolK = yield* validatedNumber("CHALLENGE_RANGE_VOL_K", 0.5, 1.5);
   const challengeMinScore = yield* validatedNumber("CHALLENGE_MIN_SCORE", 0, 4);
@@ -944,11 +944,14 @@ const loadConfig = Effect.gen(function* () {
   );
   // Hard USD ceiling per conservative entry (the sizing formula's cap term).
   // Raisable for high-frequency rotation profiles where the default $500
-  // constant would cap deployed capital per position.
+  // constant would cap deployed capital per position. CHALLENGE_MODE raises
+  // the fallback to $5000 so a scaling challenge account ($10 → $100k) can
+  // deploy meaningful per-position size; an explicit MAX_ENTRY_SIZE_USD wins.
   const maxEntrySizeUsd = yield* validatedNumber(
     "MAX_ENTRY_SIZE_USD",
     ENTRY_SIZE_FLOOR_USD,
-    ENTRY_SIZE_CAP_USD,
+    // CHALLENGE_MODE: 5000 USD per position for the compounding cadence.
+    challengeMode ? 5_000 : ENTRY_SIZE_CAP_USD,
   );
 
   // ─── Live-mode gas floors + entry TVL share ────────────────────────────────
@@ -1509,7 +1512,6 @@ const loadConfig = Effect.gen(function* () {
     scanIntervalMs,
     minPoolTvlUsd,
     challengeMode,
-    challengeDrawdownHalvePct,
     challengeDrawdownExitPct,
     challengeRangeVolK,
     challengeMinScore,

@@ -21,9 +21,11 @@ export interface ChallengePoolScore {
 }
 
 /**
- * score = yield24h% × (1 + dd24h/100) × w_tier × w_stable × w_age
+ * score = yield24h% × (1 + dd24h/100)² × w_tier × w_stable × w_age
+ * (drawdown penalty squared when dd < 0 — a high-drawdown meme at the same
+ * yield must rank BELOW a zero-IL anchor, not tie or beat it).
  * yield24h = stat24h.feeUsd/tvlUsd (measured, from Krystal enrichment).
- * Entry filters (hard): tvl ≥ $1k, dd > −10%, age ≥ 6h, fee tier ≥ 0.05%.
+ * Entry filters (hard): tvl ≥ $1k, dd > −5%, age ≥ 6h, fee tier ≥ 0.05%.
  * Tiers: S = stable-pair score ≥ 15; A = score ≥ 10; B = score 4–10.
  */
 export function challengePoolScore(pool: PoolState): ChallengePoolScore {
@@ -33,9 +35,13 @@ export function challengePoolScore(pool: PoolState): ChallengePoolScore {
   const yieldPct = tvl > 0 ? (pool.fees24hUsd / tvl) * 100 : 0;
   if (yieldPct <= 0) return { score: 0, tier: "none", reasons: ["no measured fees"], yieldPerDayPct: 0, drawdown24h: pool.drawdown24h ?? 0 };
   const dd = pool.drawdown24h ?? 0;
-  if (dd < -10) return { score: 0, tier: "none", reasons: [`dd ${dd.toFixed(1)}% < -10%`], yieldPerDayPct: yieldPct, drawdown24h: dd };
+  if (dd < -5) return { score: 0, tier: "none", reasons: [`dd ${dd.toFixed(1)}% < -5%`], yieldPerDayPct: yieldPct, drawdown24h: dd };
 
-  let score = yieldPct * (1 + dd / 100);
+  // Squared penalty below zero drawdown: dd=-4% → ×0.96² ≈ ×0.92 (vs ×0.96
+  // before — high-yield memes used to outrank zero-IL anchors on the weak
+  // linear penalty). dd ≥ 0 keeps the legacy (1 + dd/100) uplift.
+  const ddFactor = 1 + dd / 100;
+  let score = yieldPct * (dd < 0 ? ddFactor * ddFactor : ddFactor);
   const xSymbol = pool.tokenXSymbol?.toUpperCase() ?? "";
   const ySymbol = pool.tokenYSymbol?.toUpperCase() ?? "";
   const hasStableLeg = STABLE_SYMBOLS.has(xSymbol) || STABLE_SYMBOLS.has(ySymbol);
@@ -97,26 +103,25 @@ export function challengeRangeFromVolatility(
   return { lowerBinId: lower, upperBinId: upper, halfWidth: half };
 }
 
-export type ChallengeRotationAction = "hold" | "halve" | "exit";
+export type ChallengeRotationAction = "hold" | "exit";
 
 /**
  * Rotation signal: drawdown gating (the dominant risk term) + yield decay.
- * - drawdown24h < -exitPct → exit (capital protection)
- * - drawdown24h < -halvePct → halve (de-risk: tighten range)
+ * - drawdown24h < -exitPct → exit (capital protection; the old 'halve'
+ *   de-risk tier folded into exit — program.ts maps both to EXIT, a
+ *   range-tighten does not de-risk dollars)
  * - measured yield < 50% of the pool's trailing average → exit (volume
- *   rotated away); < 70% → halve.
+ *   rotated away); < 70% → exit (decay exit, same action).
  * avgYieldPerDayPct: rolling 7d mean from the engine's pool_snapshots
  * (fees24hUsd/tvlUsd), passed by the caller; null → yield-decay skipped.
  */
 export function challengeRotationSignal(
   pool: PoolState,
   avgYieldPerDayPct: number | null,
-  halvePct = 5,
-  exitPct = 10,
+  exitPct = 5,
 ): { action: ChallengeRotationAction; reason: string } {
   const dd = pool.drawdown24h ?? 0;
   if (dd < -exitPct) return { action: "exit", reason: `drawdown ${dd.toFixed(1)}% < -${exitPct}%` };
-  if (dd < -halvePct) return { action: "halve", reason: `drawdown ${dd.toFixed(1)}% < -${halvePct}%` };
   if (avgYieldPerDayPct !== null && avgYieldPerDayPct > 0) {
     const tvl = pool.tvlUsd;
     const yieldPct = tvl > 0 ? (pool.fees24hUsd / tvl) * 100 : 0;
@@ -124,7 +129,7 @@ export function challengeRotationSignal(
       return { action: "exit", reason: `yield ${yieldPct.toFixed(2)}%/d < 50% of ${avgYieldPerDayPct.toFixed(2)}%/d avg` };
     }
     if (yieldPct < avgYieldPerDayPct * 0.7) {
-      return { action: "halve", reason: `yield ${yieldPct.toFixed(2)}%/d < 70% of ${avgYieldPerDayPct.toFixed(2)}%/d avg` };
+      return { action: "exit", reason: `yield ${yieldPct.toFixed(2)}%/d < 70% of ${avgYieldPerDayPct.toFixed(2)}%/d avg` };
     }
   }
   return { action: "hold", reason: "in range" };

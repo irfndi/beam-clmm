@@ -217,6 +217,12 @@ export function runBacktestFromTicks(
   let positionSizeUsd = 0;
   let positionPeakUsd = 0;
   let lastRebalanceTick = -cfg.minHoldTicks;
+  // Live-chain parity state (engine/program.ts evaluatePool): the #153
+  // trailing-stop confirm-cycles debounce and the challenge hard-floor /
+  // loss-cooldown gates carry state across cycles.
+  let trailingStopBreaches = 0;
+  let challengePeakEquityUsd = initialValue;
+  let lossCooldownUntilMs = 0;
 
   const strategyReturns: number[] = [0];
   let prevPortfolioValue = initialValue;
@@ -265,6 +271,7 @@ export function runBacktestFromTicks(
           highestValueUsd: positionPeakUsd,
         }
       : undefined;
+    challengePeakEquityUsd = Math.max(challengePeakEquityUsd, portfolioValue);
     const replay = evaluateReplayPool({
       poolAddress: tick.pool.address,
       activeBinId: tick.pool.activeBinId,
@@ -284,7 +291,26 @@ export function runBacktestFromTicks(
         maxPositionsPerPool: cfg.maxPositionsPerPool,
       },
       proposedSizeUsd: Math.min(portfolioValue * 0.2, 2_000),
+      // Live config values (engine/config-service.ts defaults) so the replay
+      // gates mirror the live engine's evaluatePool decision chain.
+      poolTvlUsd: tick.pool.tvlUsd,
+      trailingStopConfirmCycles: 2,
+      minFeeIlRatio: 1.2,
+      volumeAuthThreshold: 0.7,
+      minBinUtilization: 0.3,
+      minPoolTvlUsd: 50_000,
+      weightedEntryScoreThreshold: 0.6,
+      ilProtectionEnabled: true,
+      dustExitUsd: 5,
+      tvlDropExitPct: 0.3,
+      maxOpenPositions: 3,
+      trailingStopBreaches,
+      challengeMode: false,
     });
+    // Advance the #153 breach counter BEFORE the risk gate: live counts
+    // breaches in evaluatePool, so a risk-rejected HOLD tick must still
+    // accumulate toward the confirm-cycles EXIT.
+    trailingStopBreaches = replay.trailingStopBreachCount;
     if (!replay.riskApproved) {
       previousTvl = tick.pool.tvlUsd;
       strategyReturns.push(0);
@@ -294,10 +320,18 @@ export function runBacktestFromTicks(
       hasPosition = true;
       positionSizeUsd = replay.adjustedSizeUsd;
       positionPeakUsd = positionSizeUsd;
+      trailingStopBreaches = 0;
     } else if (replay.decision.action === "EXIT") {
+      // Challenge loss cooldown (safety audit): a pool that realized a LOSS is
+      // barred from re-entry until its stale drawdown has refreshed. The
+      // evaluator only enforces it when challengeMode is enabled (live gate).
+      if (replayPosition && replayPosition.currentValueUsd < replayPosition.depositedUsd) {
+        lossCooldownUntilMs = Date.now() + 6 * 3_600_000;
+      }
       hasPosition = false;
       positionSizeUsd = 0;
       positionPeakUsd = 0;
+      trailingStopBreaches = 0;
     } else if (hasPosition) {
       positionPeakUsd = Math.max(positionPeakUsd, replayPosition?.currentValueUsd ?? 0);
     }
@@ -411,10 +445,14 @@ async function runBacktest(argv: ReadonlyArray<string>): Promise<void> {
   log.warn("═══════════════════════════════════════════════════════════════");
   log.warn("  • TVL is CONSTANT per pool (current snapshot, not historical).");
   log.warn("    Position share, APR, and volume-auth checks use stale TVL.");
-  log.warn("  • Replay uses the shared risk kernel for ENTER sizing, confidence,");
-  log.warn("    allocation, and trailing-stop EXIT decisions.");
+  log.warn("  • Replay mirrors the LIVE decision chain (program.ts evaluatePool):");
+  log.warn("    the EXIT chain (challenge drawdown, dust, TVL drop, volume auth,");
+  log.warn("    Fee/IL, trailing stop with the #153 confirm debounce) and the ENTER");
+  log.warn("    mega-gate (fee/IL floor, candidate conditions, weighted score,");
+  log.warn("    allocation cap) with live confidence formulas + the shared risk kernel.");
   log.warn("    Live-only effects remain unavailable: memory retrieval/persistence,");
-  log.warn("    agent proposals, gas/recovery gates, and on-chain execution.");
+  log.warn("    agent proposals, gas/recovery gates, pool cooldowns, token-risk");
+  log.warn("    consults, IL-dominance/W15/fallen-angel exits, and on-chain execution.");
   log.warn("  • Each pool runs independently with $10K. Total PnL is the");
   log.warn("    sum of 6 independent portfolios ($60K deployed, not $10K).");
   log.warn("  • Synthetic bins (all liquiditySupply=1n) make binUtil=1.0");

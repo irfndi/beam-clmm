@@ -75,7 +75,6 @@ export interface GitHubRelease {
 }
 
 export const R2_PUBLIC_URL = "https://pub-2f55c98709e74d1d900b89ec20f8f1fc.r2.dev";
-export const R2_RELEASES_BUCKET = "beam-backups";
 export const R2_MANIFEST_PATHS: Record<"stable" | "beta" | "dev" | "canary", string> = {
   stable: "releases/latest.json",
   beta: "releases/channel/beta.json",

@@ -128,12 +128,6 @@ let universeCache: UniverseCache | null = null;
 const lastKnownStats = new Map<string, { readonly stats: KrystalPoolStats; readonly at: number }>();
 const LAST_KNOWN_TTL_MS = 2 * 60 * 60 * 1_000;
 
-/** TEST-ONLY: clear caches between tests. */
-export function clearKrystalCache(): void {
-  universeCache = null;
-  lastKnownStats.clear();
-}
-
 export async function fetchKrystalUniverse(
   options: { readonly baseUrl?: string; readonly fetchImpl?: FetchLike } = {},
 ): Promise<ReadonlyMap<string, KrystalPoolStats>> {

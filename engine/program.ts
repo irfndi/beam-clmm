@@ -1616,12 +1616,43 @@ export function executeLive(
           yield* db.saveExecutionOperation(exitOperation).pipe(Effect.catch(() => Effect.void));
         }
         if (!exited) {
-          // A failed close may have left the position half-closed on-chain
-          // (the $27 phantom-row candidate: wallet holds withdrawn funds while
-          // the row still counts in Σpositions). Flag the pool so the next
-          // cycle's reconcile re-reads the wallet's real positions and drops
-          // the row if it is gone — mirroring the atomic-rebalance failure path.
-          deps.reconcileRequestedPools?.add(decision.poolAddress);
+          // A receipt-wait timeout can fire AFTER the tx mined: the EXIT
+          // actually landed but the adapter gave up waiting. Probe the chain —
+          // if the position is gone, treat the exit as executed so the close
+          // bookkeeping books its PnL (unresolved amounts -> NULL realized
+          // PnL, honest) instead of reconcile silently deleting the row and
+          // losing the trade from the ledger + leaving peak equity stale.
+          const walletAddress = adapter.getWalletAddress();
+          if (walletAddress !== null && pos?.positionPubKey != null) {
+            const livePositions = yield* adapter
+              .getAllWalletPositions(walletAddress)
+              .pipe(Effect.catch(() => Effect.succeed([])));
+            const stillOpen = livePositions.some(
+              (p) => p.positionPubKey === pos.positionPubKey,
+            );
+            if (!stillOpen) {
+              exited = true;
+              exitResultData = {
+                txSignature: "",
+                withdrawnXAtomic: "0",
+                withdrawnYAtomic: "0",
+                withdrawnUsd: null,
+                pendingFeeUsd: null,
+                sweptRewards: [],
+              };
+              logger.info("EXIT mined despite receipt-wait timeout; booked as exited", {
+                pool: decision.poolAddress,
+              });
+            }
+          }
+          if (!exited) {
+            // A failed close may have left the position half-closed on-chain
+            // (the $27 phantom-row candidate: wallet holds withdrawn funds while
+            // the row still counts in Σpositions). Flag the pool so the next
+            // cycle's reconcile re-reads the wallet's real positions and drops
+            // the row if it is gone — mirroring the atomic-rebalance failure path.
+            deps.reconcileRequestedPools?.add(decision.poolAddress);
+          }
         }
       } else {
         exited = true;
@@ -4112,6 +4143,30 @@ export const program = Effect.gen(function* () {
         }
       }
 
+      // Challenge loss cooldowns (safety audit): per-pool re-entry bars from
+      // loss exits lived only in a session Map — a restart let a just-crashed
+      // pool re-ENTER while its stale Krystal drawdown still read healthy.
+      // Persist the map (JSON blob, same metadata store as peak equity) and
+      // hydrate at boot.
+      if (config.challengeMode === true && challengeLossCooldownUntil.size === 0) {
+        const persistedCooldowns = yield* db.getMetadata("challenge_loss_cooldowns").pipe(
+          Effect.catch(() => Effect.succeed(null)),
+        );
+        if (persistedCooldowns !== null) {
+          try {
+            const parsed = JSON.parse(persistedCooldowns) as Record<string, unknown>;
+            for (const [pool, until] of Object.entries(parsed)) {
+              const untilMs = typeof until === "number" ? until : Number(until);
+              if (Number.isFinite(untilMs) && untilMs > Date.now()) {
+                challengeLossCooldownUntil.set(pool.toLowerCase(), untilMs);
+              }
+            }
+          } catch {
+            // Malformed blob — start with an empty cooldown map.
+          }
+        }
+      }
+
       // Issue #170: batch wallet-reserve gate — refresh the per-cycle native
       // SOL budget for SOL-funded entries. One read, reused by every ENTER
       // gate this cycle; a failed read leaves the budget UNKNOWN and the gate
@@ -5071,12 +5126,7 @@ export const program = Effect.gen(function* () {
       // crashing pool must exit in THIS cycle, not wait for the trailing stop.
       const challengeRotation =
         config.challengeMode === true && pool.statsSource === "krystal"
-          ? challengeRotationSignal(
-              pool,
-              avgFeeYieldPct(previousSnapshots),
-              config.challengeDrawdownHalvePct ?? 5,
-              config.challengeDrawdownExitPct ?? 10,
-            )
+          ? challengeRotationSignal(pool, avgFeeYieldPct(previousSnapshots), config.challengeDrawdownExitPct ?? 5)
           : null;
 
       // Value estimation per position (feeds the trailing stop and the
@@ -5187,16 +5237,15 @@ export const program = Effect.gen(function* () {
         // Challenge drawdown gate FIRST: a held position on a pool whose
         // measured 24h drawdown breached the exit threshold closes this cycle
         // (capital protection on meme harvest pools — the dominant loss term
-        // is token decay, not fees). The 'halve' tier ALSO exits (safety
-        // audit: a range-tighten rebalance does not de-risk dollars, just
-        // pays friction into a falling range — the strategy erring to
-        // capital protection).
+        // is token decay, not fees). There is no 'halve' tier: a range-tighten
+        // rebalance does not de-risk dollars, just pays friction into a
+        // falling range — the strategy errs to capital protection.
         if (challengeRotation !== null && challengeRotation.action !== "hold") {
           decision = {
             action: "EXIT",
             poolAddress,
             positionId: pos.positionId,
-            confidence: challengeRotation.action === "exit" ? 0.95 : 0.85,
+            confidence: 0.95,
             reasoning: `[challenge-rotation] ${challengeRotation.reason}`,
           };
         }
@@ -7391,6 +7440,17 @@ export const program = Effect.gen(function* () {
               poolAddress,
               Date.now() + (config.challengeLossCooldownMs ?? 6 * 3_600_000),
             );
+            // Persist (pruned of expired entries) so a restart honors the bar.
+            const now = Date.now();
+            const pruned = Array.from(challengeLossCooldownUntil.entries()).filter(
+              ([, until]) => until > now,
+            );
+            yield* db
+              .setMetadata(
+                "challenge_loss_cooldowns",
+                JSON.stringify(Object.fromEntries(pruned)),
+              )
+              .pipe(Effect.catch(() => Effect.void));
           }
           yield* alertSvc.sendAlert({
             type: "exit_executed",
@@ -7581,7 +7641,8 @@ export const program = Effect.gen(function* () {
           }
 
           // Mint-based net-fee USD from the adapter; null → 0 fails the
-          // compound gate closed (see convertClaimFeesToUsd deprecation).
+          // compound gate closed (see convertClaimedFees — the legacy
+          // convertClaimFeesToUsd helper was removed with the Solana surface).
           const netFeesUsd = result.netFeesUsd ?? 0;
 
           yield* db

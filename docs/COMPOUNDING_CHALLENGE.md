@@ -254,13 +254,13 @@ the PoolManager:
 
 ### Two-tier engine loop (the high-throughput core)
 - **Slow lane (5–15 min):** 1 Krystal call refreshes the 500-pool universe → score → the harvest book (S/A/B tiers). Replaces the sequential 13–14 RPC + 2.1s-gecko per pool.
-- **Fast lane (10–60s):** for open-position pools + top harvest candidates only — multicall-batched state (slot0, liquidity, tick range via TickLens) ≈ 2 RPC/pool; decide/execute; the drawdown guard (`dd24h < −10%` on a held pool → exit in THIS lane, latency budget < 60s).
+- **Fast lane (10–60s):** for open-position pools + top harvest candidates only — multicall-batched state (slot0, liquidity, tick range via TickLens) ≈ 2 RPC/pool; decide/execute; the drawdown guard (`dd24h < −5%` on a held pool → exit in THIS lane, latency budget < 60s).
 - Implementation: SCAN_INTERVAL_MS floor 10s → 2–5s; `Effect.all(evaluatePool, { concurrency: 4–8 })`; hoist `getClosedPositions`/positions to cycle top; fix `getPositionValueUsd` (priceUsd(poolAddress) bug → $0 marks).
 
 ### Challenge-mode strategy (spec from research)
-- **Scoring:** `score = yield24h × (1 + dd24h/100) × w_tier × w_stable × w_age`; filters: tvl ≥ $1k, share ≤ 10% of pool TVL, dd > −10%, age ≥ 6h (launch-rug window).
+- **Scoring:** `score = yield24h × (1 + dd24h/100)² × w_tier × w_stable × w_age` (dd penalty squared below 0 — a high-drawdown meme never outranks a zero-IL anchor at equal yield); filters: tvl ≥ $1k, share ≤ 10% of pool TVL, dd > −5%, age ≥ 6h (launch-rug window).
 - **Tiers:** S = ETH/USDG anchor cluster (17–18%/day, ~0 IL — the safe sleeve); A = meme harvest (CASHCAT/TENDIES-class, 12–37%/day, capacity-tiny ~$8k); B = yield fallback (4–10%).
-- **Rotation:** yield < 70% of 7d avg → halve; < 50% → exit; dd < −5% → halve; < −10% → exit; TVL −30%/24h → exit.
+- **Rotation:** yield < 70% of 7d avg → exit; dd < −5% → exit; TVL −30%/24h → exit.
 - **Ranges:** half-width `w = k·σ_daily` (k=1.5 default; E = 1/(1−e^(−w/2)) concentration; CASHCAT σ=24% → w=0.36 → E≈6×, 87% in-range; anchors E≈50×).
 - **Compounding:** when claimable ≥ max(MIN_COMPOUND_FEES_USD, 20×loop_cost); v3 = 3 txs (~$0.03), v4 = 1 tx modifyLiquidities (~$0.02); $10 → daily, $500+ → hourly.
 - **Sizing phases:** $10–100 → 1–2 meme pools (concentration); $100–1k → 3–5 (memes + anchor toehold); $1k–10k → memes capped + anchors; $10k–148k → anchor sleeve; >$148k → ≥5%/≥1% tier expansion. Config: gas floors 0.05 ETH → 0.0001–0.001 ETH (blocks $10 accounts today), MAX_ENTRY_SIZE_USD 500 → phase-scaled, MAX_OPEN_POSITIONS 3 → 10–16, MIN_POOL_TVL_USD 50k → 1k.

@@ -189,11 +189,6 @@ function setCacheEntry(mint: string, entry: CacheEntry): void {
   }
 }
 
-/** Test/observability hook: drop all cached signals (production never resets). */
-export function clearTokenRiskCache(): void {
-  cache.clear();
-}
-
 /**
  * Resolve signals for a set of mints. NEVER throws and NEVER blocks the scan
  * cycle: fresh cache hits are served without fetching; on any fetch failure the

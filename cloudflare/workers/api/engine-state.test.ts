@@ -136,6 +136,54 @@ describe("Engine state surface (D1)", () => {
     expect(body.decisions.map((d) => d.action).sort()).toEqual(["ENTER", "HOLD"]);
   });
 
+  it("prunes snapshots and decisions older than the retention window on report", async () => {
+    const ctx = createExecutionContext();
+    const retentionMs = 7 * 24 * 60 * 60 * 1000;
+    const cutoff = Date.now() - retentionMs;
+    // Seed rows well past the 7-day window for this agent.
+    await env.DB.prepare(
+      `INSERT INTO engine_snapshots (agent_id, reported_at, status, positions, pnl, details)
+       VALUES (?, ?, 'running', 0, 0, NULL)`,
+    )
+      .bind("user-1", cutoff - 24 * 60 * 60 * 1000)
+      .run();
+    await env.DB.prepare(
+      `INSERT INTO engine_decisions (agent_id, reported_at, pool_address, action, confidence, reasoning, executed)
+       VALUES (?, ?, 'PoolOld', 'ENTER', 0.9, 'old decision', 1)`,
+    )
+      .bind("user-1", cutoff - 24 * 60 * 60 * 1000)
+      .run();
+
+    const report = buildRequest(
+      "POST",
+      "/v1/agent-status/report",
+      { status: "running", positions: 1, pnl: 3.25 },
+      { Authorization: `Bearer ${apiKey}` },
+    );
+    const reportResponse = await worker.fetch(report, testEnv, ctx);
+    expect(reportResponse.status).toBe(200);
+
+    // Old rows are gone; the report's own fresh row survives.
+    const staleSnapshots = await env.DB.prepare(
+      "SELECT COUNT(*) as n FROM engine_snapshots WHERE agent_id = ? AND reported_at < ?",
+    )
+      .bind("user-1", cutoff)
+      .first<{ n: number }>();
+    expect(staleSnapshots?.n).toBe(0);
+    const staleDecisions = await env.DB.prepare(
+      "SELECT COUNT(*) as n FROM engine_decisions WHERE agent_id = ? AND reported_at < ?",
+    )
+      .bind("user-1", cutoff)
+      .first<{ n: number }>();
+    expect(staleDecisions?.n).toBe(0);
+    const fresh = await env.DB.prepare(
+      "SELECT COUNT(*) as n FROM engine_snapshots WHERE agent_id = ? AND reported_at >= ?",
+    )
+      .bind("user-1", cutoff)
+      .first<{ n: number }>();
+    expect(fresh?.n).toBe(1);
+  });
+
   it("round-trips the trade ledger through the portfolio surface", async () => {
     const ctx = createExecutionContext();
     const trades = [

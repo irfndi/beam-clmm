@@ -14,8 +14,8 @@ import type { PoolState } from "./types.js";
  * Module-function core with an injectable `fetchImpl` (so the pure parsing and
  * the pacing stay unit-testable without layers), plus a thin `GeckoTerminalLive`
  * Effect layer at the bottom. program.ts consumes it through the
- * `GeckoTerminalService` Context.Tag (symmetric with `meteoraDatapi`) — the
- * `Effect.promise` network call lives in that layer, not in program logic.
+ * `GeckoTerminalService` Context.Tag — the `Effect.promise` network call lives
+ * in that layer, not in program logic.
  *
  * LIVE-VERIFIED contract (2026-07-22, 5 pools across meteora/orca/raydium-clmm/
  * pancakeswap-v3-solana + raydium-v4 CPMM):
@@ -68,10 +68,6 @@ const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout
  *  disable pacing in fast unit tests, or a small value for the pacing test).
  *  Restore to DEFAULT_REQUEST_INTERVAL_MS afterwards; production never calls
  *  this and keeps the 2.1s interval. */
-export function setGeckoRequestIntervalMsForTest(ms: number): void {
-  requestIntervalMs = ms;
-}
-
 /**
  * The `fetch` call surface the module needs. A bare call signature rather than
  * the runtime's full `typeof fetch`, so the global `fetch` and a plain injected
@@ -265,10 +261,10 @@ export async function getGeckoPoolStats(
 
 // ─── Effect service wiring ───────────────────────────────────────────────────
 // Thin live layer so program.ts consumes gecko through the GeckoTerminalService
-// Context.Tag (symmetric with MeteoraDatapiLive) instead of a direct
-// Effect.promise network call. The module functions, injectable FetchLike and
-// the ≥2.1s pacing stay exactly as they are — pacing is an HTTP-client concern
-// and correctly lives at this layer (the rate limit is process-wide by nature).
+// Context.Tag instead of a direct Effect.promise network call. The module
+// functions, injectable FetchLike and the ≥2.1s pacing stay exactly as they
+// are — pacing is an HTTP-client concern and correctly lives at this layer
+// (the rate limit is process-wide by nature).
 
 export const GeckoTerminalLive = Layer.succeed(GeckoTerminalService, {
   getPoolStats: (poolAddress, baseFeeRate) =>

@@ -118,10 +118,6 @@ export function getBeamLogsPath(): string {
   return path.join(getBeamLogsDir(), "audit-trail.jsonl");
 }
 
-export function ensureBeamDataDir(): void {
-  fs.mkdirSync(getBeamDataDir(), { recursive: true, mode: 0o700 });
-}
-
 export function ensureBeamConfigDir(): void {
   fs.mkdirSync(getBeamConfigDir(), { recursive: true, mode: 0o700 });
 }

@@ -13,23 +13,3 @@ export interface LimitOrderRequest {
   readonly amountAtomic: bigint;
   readonly maxActiveTickSlippage?: number;
 }
-
-export interface ValidatedLimitOrderRequest extends LimitOrderRequest {
-  readonly isAskSide: boolean;
-}
-
-export function validateLimitOrderRequest(request: LimitOrderRequest): ValidatedLimitOrderRequest {
-  if (!Number.isSafeInteger(request.targetTick)) {
-    throw new Error("Limit-order target tick must be an integer");
-  }
-  if (request.amountAtomic <= 0n) {
-    throw new Error("Limit-order amount must be positive");
-  }
-  if (
-    request.maxActiveTickSlippage !== undefined &&
-    (!Number.isSafeInteger(request.maxActiveTickSlippage) || request.maxActiveTickSlippage < 0)
-  ) {
-    throw new Error("Limit-order active-tick slippage must be a non-negative integer");
-  }
-  return { ...request, isAskSide: request.side === "ask" };
-}

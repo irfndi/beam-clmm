@@ -711,8 +711,6 @@ function makeLiveAdapter(overrides: Partial<AdapterApi> = {}): AdapterApi {
     getTokenBalance: () => Effect.succeed(0n),
     getTokenPrices: () => Effect.succeed({}),
     getTokenDecimals: () => Effect.succeed(9),
-    quoteSwapUSDCForToken: () => Effect.succeed({}),
-    swapUSDCForToken: () => Effect.succeed("mock-swap-tx"),
     getMintAuthorities: () => Effect.succeed({ mintAuthority: null, freezeAuthority: null }),
     ...overrides,
   } as AdapterApi;
@@ -1125,7 +1123,7 @@ describe("live lifecycle PnL accounting", () => {
     expect(outcome.feeClaims.some((c) => c.txSignature?.startsWith("exit-sweep:"))).toBe(false);
   });
 
-  it("flags the pool for reconcile when the on-chain close fails (no resurrection, no silent drop)", async () => {
+  it("books a chain-gone close as exited even when the adapter reported failure (no silent drop)", async () => {
     const layer = DbLive(":memory:");
     const trackedPositions = new Map<string, PositionRecord>();
     const reconcileRequestedPools = new Set<string>();
@@ -1173,9 +1171,71 @@ describe("live lifecycle PnL accounting", () => {
       }),
       layer,
     );
-    // The close failed → not executed, and the pool is flagged so the next
-    // cycle's reconcile re-reads the wallet's real positions and drops the row
-    // if it was half-closed on-chain (the phantom-row guard).
+    // The close failed (adapter threw) AND the position is GONE on-chain
+    // (getAllWalletPositions mock returns []) — the receipt-wait-timeout
+    // case where the EXIT actually mined. New contract: book it as exited
+    // (unresolved amounts -> NULL realized PnL) instead of reconcile-deleting
+    // the row and losing the trade from the ledger.
+    expect(result.executed).toBe(true);
+    expect(reconcileRequestedPools.has("pool1")).toBe(false);
+  });
+
+  it("still flags the pool for reconcile when the close fails and the position remains open on-chain", async () => {
+    const layer = DbLive(":memory:");
+    const trackedPositions = new Map<string, PositionRecord>();
+    const reconcileRequestedPools = new Set<string>();
+    const pool = {
+      activeBinId: 5000,
+      binStep: 10,
+      tokenXSymbol: "SOL",
+      tokenYSymbol: "USDC",
+      currentPrice: 100,
+    };
+    const result = await runDb(
+      Effect.gen(function* () {
+        const db = yield* DbService;
+        const pos = makePosition({
+          poolAddress: "pool1",
+          positionId: "pos-1",
+          positionPubKey: "pos-1",
+          depositedUsd: 1000,
+          currentValueUsd: 1000,
+        });
+        trackedPositions.set("pos-1", pos);
+        yield* db.savePosition(pos);
+        return yield* executeLive(
+          {
+            adapter: makeLiveAdapter({
+              exitPosition: () => Effect.fail(new Error("close tx failed")),
+              // The position is STILL OPEN on-chain — the failure was real.
+              getAllWalletPositions: () =>
+                Effect.succeed([
+                  { poolAddress: "pool1", positionPubKey: "pos-1", lowerBinId: 0, upperBinId: 10 },
+                ]),
+            }),
+            strategy: liveStrategy,
+            db,
+            revenueConfigSvc: liveRevenueConfig,
+            trackedPositions,
+            nativePriceUsd: 150,
+            entryStrategyShape: "spot" as const,
+            reconcileRequestedPools,
+          },
+          {
+            action: "EXIT",
+            poolAddress: "pool1",
+            confidence: 0.9,
+            reasoning: "exit",
+            positionId: "pos-1",
+          },
+          pool,
+        );
+      }),
+      layer,
+    );
+    // Close failed and the position is provably still open — not executed,
+    // and the pool is flagged so the next cycle's reconcile re-reads the
+    // wallet's real positions (the phantom-row guard).
     expect(result.executed).toBe(false);
     expect(reconcileRequestedPools.has("pool1")).toBe(true);
   });

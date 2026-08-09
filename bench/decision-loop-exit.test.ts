@@ -23,7 +23,6 @@ import {
   McpServerService,
   HttpStatusServerService,
   EntryPrepService,
-  MeteoraDatapiService,
   GeckoTerminalService,
   KrystalService,
   AlertService,
@@ -32,8 +31,6 @@ import {
   type MemoryApi,
   type GeckoTerminalApi,
   type GeckoStats,
-  type MeteoraDatapiApi,
-  type MeteoraPoolStats,
 } from "../engine/services.js";
 import type { PoolSnapshot } from "../engine/types.js";
 import type { AgentRuntimeContext } from "../engine/agent-transport.js";
@@ -53,33 +50,6 @@ function makeGeckoStats(overrides: Partial<GeckoStats> = {}): GeckoStats {
     fees24hUsd: 300,
     basePriceUsd: 150,
     quotePriceUsd: 1,
-    ...overrides,
-  };
-}
-
-function makeDatapiStats(overrides: Partial<MeteoraPoolStats> = {}): MeteoraPoolStats {
-  return {
-    address: "unset",
-    name: "TEST",
-    tvlUsd: 200_000,
-    volume24hUsd: 40_000,
-    fees24hUsd: 400,
-    apr: 20,
-    apy: 20,
-    currentPrice: 150,
-    feeTvlRatio24h: null,
-    feeTvlRatio12h: null,
-    feeTvlRatio1h: null,
-    dynamicFeePct: null,
-    baseFeePct: null,
-    hasFarm: null,
-    farmApr: null,
-    farmApy: null,
-    isBlacklisted: null,
-    tokenXFreezeAuthorityDisabled: null,
-    tokenYFreezeAuthorityDisabled: null,
-    tokenXVerified: null,
-    tokenYVerified: null,
     ...overrides,
   };
 }
@@ -146,8 +116,6 @@ function makeAdapter(
     getTokenBalance: () => Effect.succeed(0n),
     getTokenPrices: () => Effect.succeed({}),
     getTokenDecimals: () => Effect.succeed(9),
-    quoteSwapUSDCForToken: () => Effect.succeed({}),
-    swapUSDCForToken: () => Effect.succeed("mock-swap-tx"),
     getMintAuthorities: () => Effect.succeed(NO_AUTHORITIES),
     ...overrides,
   } as AdapterApi;
@@ -179,7 +147,6 @@ function makeRecordingMemory(record: RecordedMemory[]): MemoryApi {
 function makeTestLayer(opts: {
   adapter: AdapterApi;
   memoryRecorded?: RecordedMemory[];
-  datapi?: MeteoraDatapiApi;
   gecko?: GeckoTerminalApi;
   configOverrides?: Partial<AppConfig>;
   agent?: AgentApi;
@@ -248,7 +215,6 @@ function makeTestLayer(opts: {
     Layer.succeed(McpServerService, { start: () => Effect.void, stop: () => Effect.void }),
     Layer.succeed(HttpStatusServerService, { start: () => Effect.void, stop: () => Effect.void }),
     Layer.succeed(EntryPrepService, { prepareEntryTokens: () => Effect.succeed(undefined) }),
-    Layer.succeed(MeteoraDatapiService, opts.datapi ?? { getPoolData: () => Effect.succeed(null) }),
     Layer.succeed(KrystalService, { getPoolStats: () => Effect.succeed(null), getUniverse: () => Effect.succeed(new Map()) }),
     Layer.succeed(GeckoTerminalService, opts.gecko ?? { getPoolStats: () => Effect.succeed(null) }),
     Layer.succeed(AlertService, {

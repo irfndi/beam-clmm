@@ -33,7 +33,6 @@ import {
   McpServerService,
   HttpStatusServerService,
   EntryPrepService,
-  MeteoraDatapiService,
   GeckoTerminalService,
   KrystalService,
   type GeckoStats,
@@ -41,8 +40,6 @@ import {
   type AdapterApi,
   type AgentApi,
   type GeckoTerminalApi,
-  type MeteoraDatapiApi,
-  type MeteoraPoolStats,
 } from "../engine/services.js";
 import type { PoolState } from "../engine/types.js";
 import { STABLECOIN_MINT } from "../engine/constants.js";
@@ -185,35 +182,6 @@ function makeGeckoStats(overrides: Partial<GeckoStats> = {}): GeckoStats {
   };
 }
 
-// A strong Data API payload: passes pre-filter, candidate conditions and the
-// weighted-score threshold (the same fixture multi-position tests enter on).
-function makeDatapiStats(overrides: Partial<MeteoraPoolStats> = {}): MeteoraPoolStats {
-  return {
-    address: POOL,
-    name: "SOL-USDC",
-    tvlUsd: 200_000,
-    volume24hUsd: 40_000,
-    fees24hUsd: 400,
-    apr: 20,
-    apy: 20,
-    currentPrice: 150,
-    feeTvlRatio24h: null,
-    feeTvlRatio12h: null,
-    feeTvlRatio1h: null,
-    dynamicFeePct: null,
-    baseFeePct: null,
-    hasFarm: null,
-    farmApr: null,
-    farmApy: null,
-    isBlacklisted: null,
-    tokenXFreezeAuthorityDisabled: null,
-    tokenYFreezeAuthorityDisabled: null,
-    tokenXVerified: null,
-    tokenYVerified: null,
-    ...overrides,
-  };
-}
-
 function makeProgramAdapter(
   pools: Record<string, PoolState>,
   overrides: Partial<AdapterApi> = {},
@@ -268,8 +236,6 @@ function makeProgramAdapter(
     getTokenBalance: () => Effect.succeed(0n),
     getTokenPrices: () => Effect.succeed({}),
     getTokenDecimals: () => Effect.succeed(9),
-    quoteSwapUSDCForToken: () => Effect.succeed({}),
-    swapUSDCForToken: () => Effect.succeed("mock-swap-tx"),
     getMintAuthorities: () => Effect.succeed(NO_AUTHORITIES),
     ...overrides,
   } as AdapterApi;
@@ -277,7 +243,6 @@ function makeProgramAdapter(
 
 function makeProgramLayer(opts: {
   adapter: AdapterApi;
-  datapi?: MeteoraDatapiApi;
   configOverrides?: Partial<AppConfig>;
   agentApi?: AgentApi;
   agentStateLayer?: Layer.Layer<AgentStateService, never, never>;
@@ -346,7 +311,6 @@ function makeProgramLayer(opts: {
     Layer.succeed(McpServerService, { start: () => Effect.void, stop: () => Effect.void }),
     Layer.succeed(HttpStatusServerService, { start: () => Effect.void, stop: () => Effect.void }),
     Layer.succeed(EntryPrepService, { prepareEntryTokens: () => Effect.succeed(undefined) }),
-    Layer.succeed(MeteoraDatapiService, opts.datapi ?? { getPoolData: () => Effect.succeed(null) }),
     Layer.succeed(KrystalService, { getPoolStats: () => Effect.succeed(null), getUniverse: () => Effect.succeed(new Map()) }),
     Layer.succeed(GeckoTerminalService, opts.gecko ?? { getPoolStats: () => Effect.succeed(null) }),
     Layer.succeed(AlertService, {

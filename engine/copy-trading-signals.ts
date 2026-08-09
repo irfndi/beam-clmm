@@ -1,7 +1,7 @@
 import { Effect, Layer } from "effect";
 import { ConfigService } from "./config-service.js";
 import { CopySignalService } from "./services.js";
-import type { ActionType, AgentDecision } from "./types.js";
+import type { AgentDecision } from "./types.js";
 import { createLogger } from "./logger.js";
 import { retryEffectWithBackoff } from "./adapter-retry.js";
 
@@ -171,5 +171,3 @@ export const CopySignalLive = Layer.effect(
     return { getBoost } satisfies CopySignalApi;
   }),
 );
-
-export const copySignalActionTypes: ReadonlyArray<ActionType> = ["ENTER", "HOLD", "REBALANCE"];

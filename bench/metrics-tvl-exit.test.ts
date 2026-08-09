@@ -22,12 +22,10 @@ import {
   McpServerService,
   HttpStatusServerService,
   EntryPrepService,
-  MeteoraDatapiService,
   GeckoTerminalService,
   KrystalService,
   AlertService,
   type AdapterApi,
-  type MeteoraDatapiApi,
 } from "../engine/services.js";
 import type { PoolSnapshot } from "../engine/types.js";
 import { defaultAppConfig, makePool, makeBinArray, makePosition } from "./helpers.js";
@@ -99,14 +97,7 @@ describe("evaluatePool TVL-drop EXIT (integration)", () => {
       getTokenPrices: () => Effect.succeed({}),
       getTokenDecimals: () => Effect.succeed(9),
       getMintAuthorities: () => Effect.succeed({ mintAuthority: null, freezeAuthority: null }),
-      quoteSwapUSDCForToken: () => Effect.succeed({}),
-      swapUSDCForToken: () => Effect.succeed("mock-swap-tx"),
     };
-  }
-
-  function makeDatapi(): MeteoraDatapiApi {
-    // Data API unavailable → heuristic fallback path; cycle must still complete.
-    return { getPoolData: () => Effect.succeed(null) };
   }
 
   function makeTestLayer() {
@@ -173,7 +164,6 @@ describe("evaluatePool TVL-drop EXIT (integration)", () => {
       Layer.succeed(McpServerService, { start: () => Effect.void, stop: () => Effect.void }),
       Layer.succeed(HttpStatusServerService, { start: () => Effect.void, stop: () => Effect.void }),
       Layer.succeed(EntryPrepService, { prepareEntryTokens: () => Effect.succeed(undefined) }),
-      Layer.succeed(MeteoraDatapiService, makeDatapi()),
       Layer.succeed(KrystalService, { getPoolStats: () => Effect.succeed(null), getUniverse: () => Effect.succeed(new Map()) }),
       Layer.succeed(GeckoTerminalService, { getPoolStats: () => Effect.succeed(null) }),
       Layer.succeed(AlertService, {

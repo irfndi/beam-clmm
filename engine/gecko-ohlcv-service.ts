@@ -212,12 +212,6 @@ const lastGoodCache = new Map<
 /** Exponential backoff per failing pool so a dead endpoint is not re-hit every cycle. */
 const backoff = new Map<string, { readonly nextAttemptAt: number; readonly failures: number }>();
 
-/** Clear the in-process OHLCV cache + backoff state (test helper). */
-export function resetGeckoOhlcvCache(): void {
-  lastGoodCache.clear();
-  backoff.clear();
-}
-
 /**
  * Opportunistic eviction (called on every fetch): drop entries older than
  * MAX_RETENTION_MS, then enforce the hard size cap via insertion-order

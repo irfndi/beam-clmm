@@ -1,6 +1,5 @@
 import { describe, it, expect } from "vitest";
 import {
-  convertClaimFeesToUsd,
   tokenAmountToUsd,
   getTokenDecimals,
 } from "../engine/risk-service.js";
@@ -45,80 +44,5 @@ describe("tokenAmountToUsd", () => {
 
   it("returns 0 for zero raw amount", () => {
     expect(tokenAmountToUsd(0, "SOL", 150)).toBe(0);
-  });
-});
-
-describe("convertClaimFeesToUsd", () => {
-  it("sums SOL + USDC fees using correct decimals per token", () => {
-    // 0.5 SOL ($75 at $150) + 100 USDC ($100) = $175
-    const usd = convertClaimFeesToUsd({
-      netFeeXRaw: 500_000_000,
-      netFeeYRaw: 100_000_000,
-      tokenXSymbol: "SOL",
-      tokenYSymbol: "USDC",
-      nativePriceUsd: 150,
-    });
-    expect(usd).toBeCloseTo(175);
-  });
-
-  it("handles reversed token order (USDC as X, SOL as Y)", () => {
-    // 100 USDC ($100) + 0.5 SOL ($75) = $175
-    const usd = convertClaimFeesToUsd({
-      netFeeXRaw: 100_000_000,
-      netFeeYRaw: 500_000_000,
-      tokenXSymbol: "USDC",
-      tokenYSymbol: "SOL",
-      nativePriceUsd: 150,
-    });
-    expect(usd).toBeCloseTo(175);
-  });
-
-  it("returns 0 when both fees are zero", () => {
-    expect(
-      convertClaimFeesToUsd({
-        netFeeXRaw: 0,
-        netFeeYRaw: 0,
-        tokenXSymbol: "SOL",
-        tokenYSymbol: "USDC",
-        nativePriceUsd: 150,
-      }),
-    ).toBe(0);
-  });
-
-  it("does NOT multiply SOL lamports by solPrice (the bug we're fixing)", () => {
-    // Old buggy formula: (netFeeX + netFeeY) * solPrice
-    // For 1 SOL + 100 USDC: (1e9 + 1e8) * 150 = 165 BILLION
-    // Correct: 150 + 100 = 250
-    const usd = convertClaimFeesToUsd({
-      netFeeXRaw: 1_000_000_000,
-      netFeeYRaw: 100_000_000,
-      tokenXSymbol: "SOL",
-      tokenYSymbol: "USDC",
-      nativePriceUsd: 150,
-    });
-    expect(usd).toBeLessThan(1000); // proves we're not producing billions
-    expect(usd).toBeCloseTo(250);
-  });
-
-  it("returns 0 when X token is unknown (fail-closed)", () => {
-    const usd = convertClaimFeesToUsd({
-      netFeeXRaw: 1_000_000_000,
-      netFeeYRaw: 100_000_000,
-      tokenXSymbol: "BONK",
-      tokenYSymbol: "USDC",
-      nativePriceUsd: 150,
-    });
-    expect(usd).toBe(0);
-  });
-
-  it("returns 0 when Y token is unknown (fail-closed)", () => {
-    const usd = convertClaimFeesToUsd({
-      netFeeXRaw: 1_000_000_000,
-      netFeeYRaw: 100_000_000,
-      tokenXSymbol: "SOL",
-      tokenYSymbol: "WIF",
-      nativePriceUsd: 150,
-    });
-    expect(usd).toBe(0);
   });
 });

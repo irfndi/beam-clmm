@@ -35,15 +35,12 @@ import {
   McpServerService,
   HttpStatusServerService,
   EntryPrepService,
-  MeteoraDatapiService,
   GeckoTerminalService,
   KrystalService,
   AlertService,
   type AdapterApi,
-  type MeteoraDatapiApi,
   type GeckoTerminalApi,
   type GeckoStats,
-  type MeteoraPoolStats,
 } from "../engine/services.js";
 import type { AgentDecision, PoolState, Position } from "../engine/types.js";
 import { defaultAppConfig, makePool, makeBinArray, mockFetch, run } from "./helpers.js";
@@ -980,8 +977,6 @@ function makeReconcileAdapter(overrides: Partial<AdapterApi>): AdapterApi {
     getTokenPrices: () => Effect.succeed({}),
     getTokenDecimals: () => Effect.succeed(6),
     getMintAuthorities: () => Effect.succeed({ mintAuthority: null, freezeAuthority: null }),
-    quoteSwapUSDCForToken: () => Effect.fail("not implemented"),
-    swapUSDCForToken: () => Effect.fail("not implemented"),
     getPoolState: () => Effect.fail("not implemented"),
     getBinArray: () => Effect.fail("not implemented"),
     getPositions: () => Effect.succeed([]),
@@ -1248,33 +1243,6 @@ function makeGeckoStats(overrides: Partial<GeckoStats> = {}): GeckoStats {
   };
 }
 
-function makeDatapiStats(overrides: Partial<MeteoraPoolStats> = {}): MeteoraPoolStats {
-  return {
-    address: POOL,
-    name: "SOL-USDC",
-    tvlUsd: 200_000,
-    volume24hUsd: 40_000,
-    fees24hUsd: 400,
-    apr: 20,
-    apy: 20,
-    currentPrice: 150,
-    feeTvlRatio24h: null,
-    feeTvlRatio12h: null,
-    feeTvlRatio1h: null,
-    dynamicFeePct: null,
-    baseFeePct: null,
-    hasFarm: null,
-    farmApr: null,
-    farmApy: null,
-    isBlacklisted: null,
-    tokenXFreezeAuthorityDisabled: null,
-    tokenYFreezeAuthorityDisabled: null,
-    tokenXVerified: null,
-    tokenYVerified: null,
-    ...overrides,
-  };
-}
-
 function makeProgramAdapter(
   pools: Record<string, PoolState>,
   overrides: Partial<AdapterApi> = {},
@@ -1327,8 +1295,6 @@ function makeProgramAdapter(
     getTokenBalance: () => Effect.succeed(0n),
     getTokenPrices: () => Effect.succeed({}),
     getTokenDecimals: () => Effect.succeed(9),
-    quoteSwapUSDCForToken: () => Effect.succeed({}),
-    swapUSDCForToken: () => Effect.succeed("mock-swap-tx"),
     getMintAuthorities: () => Effect.succeed(NO_AUTHORITIES),
     ...overrides,
   } as AdapterApi;
@@ -1336,7 +1302,6 @@ function makeProgramAdapter(
 
 function makeProgramLayer(opts: {
   adapter: AdapterApi;
-  datapi?: MeteoraDatapiApi;
   gecko?: GeckoTerminalApi;
   configOverrides?: Partial<AppConfig>;
 }) {
@@ -1403,7 +1368,6 @@ function makeProgramLayer(opts: {
     Layer.succeed(McpServerService, { start: () => Effect.void, stop: () => Effect.void }),
     Layer.succeed(HttpStatusServerService, { start: () => Effect.void, stop: () => Effect.void }),
     Layer.succeed(EntryPrepService, { prepareEntryTokens: () => Effect.succeed(undefined) }),
-    Layer.succeed(MeteoraDatapiService, opts.datapi ?? { getPoolData: () => Effect.succeed(null) }),
     Layer.succeed(KrystalService, { getPoolStats: () => Effect.succeed(null), getUniverse: () => Effect.succeed(new Map()) }),
     Layer.succeed(GeckoTerminalService, opts.gecko ?? { getPoolStats: () => Effect.succeed(null) }),
     Layer.succeed(AlertService, {
@@ -2015,7 +1979,6 @@ describe("A4 paper fee accrual requires datapi-MEASURED fees", () => {
 
   async function runAccrualCycle(opts: {
     statsSource: "datapi" | "geckoterminal" | "heuristic";
-    datapi?: MeteoraDatapiApi;
     gecko?: GeckoTerminalApi;
   }): Promise<{ accruals: ReadonlyArray<{ feesUsd: number | null }>; accruedUsd: number }> {
     const layer = makeProgramLayer({
@@ -2024,7 +1987,6 @@ describe("A4 paper fee accrual requires datapi-MEASURED fees", () => {
       adapter: makeProgramAdapter({
         [POOL]: makePool({ address: POOL, fees24hUsd: 400, statsSource: opts.statsSource }),
       }),
-      ...(opts.datapi !== undefined ? { datapi: opts.datapi } : {}),
       ...(opts.gecko !== undefined ? { gecko: opts.gecko } : {}),
       configOverrides: {
         watchlistPools: [POOL],

@@ -651,6 +651,11 @@ const registerTelegramHandler = (db: D1Database, telegramId: string, firstName: 
 // to not_running when no recent heartbeat exists or when KV is unavailable.
 const AGENT_STATUS_CACHE_TTL_SEC = 30 * 60; // 30 minutes
 
+// Report-time retention sweep: engine_snapshots/engine_decisions older than
+// this are deleted on the next report. There is no scheduler, so the report
+// itself is the only natural prune point.
+const ENGINE_STATE_RETENTION_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
+
 /** One engine decision pushed per scan cycle to the D1 state surface. */
 export interface EngineDecisionRow {
   readonly poolAddress: string;
@@ -1385,6 +1390,30 @@ app.post("/v1/agent-status/report", async (c) => {
         decisions: body.decisions ?? [],
         trades: body.trades ?? [],
       });
+      // Prune this agent's rows past the retention window. Best-effort: a
+      // failed sweep must never fail the report itself — the report doubles
+      // as the cleanup tick because no scheduler exists.
+      yield* Effect.tryPromise(() =>
+        DB.batch([
+          DB.prepare("DELETE FROM engine_snapshots WHERE agent_id = ? AND reported_at < ?").bind(
+            handler.userId,
+            Date.now() - ENGINE_STATE_RETENTION_MS,
+          ),
+          DB.prepare("DELETE FROM engine_decisions WHERE agent_id = ? AND reported_at < ?").bind(
+            handler.userId,
+            Date.now() - ENGINE_STATE_RETENTION_MS,
+          ),
+        ]),
+      ).pipe(
+        Effect.catch((err) =>
+          Effect.sync(() =>
+            console.error("engine-state pruning failed", {
+              userId: handler.userId,
+              err: String(err),
+            }),
+          ),
+        ),
+      );
       return c.json({ ok: true });
     }).pipe(
       Effect.match({

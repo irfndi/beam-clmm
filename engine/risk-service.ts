@@ -833,32 +833,3 @@ export function tokenAmountToUsd(
   if (upper === "USDC" || upper === "USDT") return human;
   return human * nativePriceUsd;
 }
-
-export interface ClaimFeesUsdInput {
-  readonly netFeeXRaw: number;
-  readonly netFeeYRaw: number;
-  readonly tokenXSymbol: string;
-  readonly tokenYSymbol: string;
-  readonly nativePriceUsd: number;
-}
-
-/**
- * Convert both sides of a fee claim to USD using per-token decimals.
- * Returns 0 when either side is an unsupported token — this fails the
- * compound gate closed. Also fixes the F3 USD-estimation bug where
- * (rawX + rawY) * solPrice added lamports + base-units, producing
- * multi-billion-dollar estimates that bypassed the gate.
- *
- * @deprecated Symbol-based — only knows SOL/WSOL/USDC/USDT and books $0 for
- * every other mint. The live claim paths now consume the adapter's mint-based
- * `claimFees().netFeesUsd` instead. Retained only because unit tests pin it;
- * do not use for new accounting.
- */
-export function convertClaimFeesToUsd(input: ClaimFeesUsdInput): number {
-  const xDecimals = getTokenDecimals(input.tokenXSymbol);
-  const yDecimals = getTokenDecimals(input.tokenYSymbol);
-  if (xDecimals < 0 || yDecimals < 0) return 0;
-  const feeXUsd = tokenAmountToUsd(input.netFeeXRaw, input.tokenXSymbol, input.nativePriceUsd);
-  const feeYUsd = tokenAmountToUsd(input.netFeeYRaw, input.tokenYSymbol, input.nativePriceUsd);
-  return feeXUsd + feeYUsd;
-}

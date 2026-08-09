@@ -214,7 +214,7 @@ function handleLink(botToken: string, chatId: number): Effect.Effect<void, never
     chatId,
     `To link your Telegram account:\n\n` +
       `1. Run <code>beam link-telegram</code> on your machine\n` +
-      `2. Send the 6-character code here\n\n` +
+      `2. Send the code it shows here (format: <code>LINK-</code> + 16 hex characters, e.g. <code>LINK-A1B2C3D4E5F60718</code>)\n\n` +
       `The code expires in 10 minutes.`,
   );
 }
@@ -344,7 +344,17 @@ function handleStatus(
           `P&L: $${escapeHtml(data.pnl.toFixed(2))}`,
       );
     } else {
-      yield* sendMessage(botToken, chatId, `Agent not running or not linked.`);
+      // A non-ok response carries the real API error (e.g. a transient 500,
+      // "User not found"); only an ok-but-empty payload means the agent is
+      // genuinely not running or not linked — don't misreport a live API
+      // failure as "not linked".
+      yield* sendMessage(
+        botToken,
+        chatId,
+        result.error
+          ? `Could not fetch agent status: ${escapeHtml(result.error)}`
+          : `Agent not running or not linked.`,
+      );
     }
   });
 }
@@ -371,7 +381,13 @@ function handlePortfolio(
     );
 
     if (!result.ok || !result.data) {
-      yield* sendMessage(botToken, chatId, `Agent not running or not linked.`);
+      yield* sendMessage(
+        botToken,
+        chatId,
+        result.error
+          ? `Could not fetch agent status: ${escapeHtml(result.error)}`
+          : `Agent not running or not linked.`,
+      );
       return;
     }
 

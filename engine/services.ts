@@ -418,15 +418,6 @@ export interface AdapterApi {
   readonly getMintAuthorities: (
     mintAddress: string,
   ) => Effect.Effect<{ mintAuthority: string | null; freezeAuthority: string | null }, Error>;
-  readonly quoteSwapUSDCForToken: (
-    outputMint: string,
-    amountAtomic: bigint,
-  ) => Effect.Effect<Record<string, unknown>, Error>;
-  readonly swapUSDCForToken: (
-    outputMint: string,
-    amountAtomic: bigint,
-    quoteData?: Record<string, unknown>,
-  ) => Effect.Effect<string, Error>;
   readonly swapToken?: (
     inputMint: string,
     outputMint: string,
@@ -517,60 +508,6 @@ export interface StrategyApi {
 
 export class StrategyService extends Context.Service<StrategyService, StrategyApi>()(
   "StrategyService",
-) {}
-
-// ─── Meteora Data API Service ────────────────────────────────────────────────
-
-/** Real pool statistics from the Meteora Data API (dlmm.datapi.meteora.ag). */
-export interface MeteoraPoolStats {
-  readonly address: string;
-  readonly name: string;
-  readonly tvlUsd: number;
-  readonly volume24hUsd: number;
-  readonly fees24hUsd: number;
-  readonly apr: number;
-  readonly apy: number;
-  readonly currentPrice: number;
-  readonly feeTvlRatio24h: number | null;
-  readonly feeTvlRatio12h: number | null;
-  readonly feeTvlRatio1h: number | null;
-  readonly dynamicFeePct: number | null;
-  readonly baseFeePct: number | null;
-  readonly hasFarm: boolean | null;
-  /**
-   * Farm reward APR from the Data API (`farm_apr`), annualized percent — the
-   * same convention as the engine's enriched `PoolState.apr`. Null when the
-   * API omits it (schema drift) or the pool has no farm.
-   */
-  readonly farmApr: number | null;
-  /** Farm reward APY from the Data API (`farm_apy`), annualized percent. */
-  readonly farmApy: number | null;
-  readonly isBlacklisted: boolean | null;
-  readonly tokenXFreezeAuthorityDisabled: boolean | null;
-  readonly tokenYFreezeAuthorityDisabled: boolean | null;
-  /**
-   * Jupiter verification status per token leg (`token_x/y.is_verified`). The
-   * disambiguator between "risky freeze authority" and a legitimate
-   * freeze-authority token (USDC/USDT/cbBTC report `is_verified: true` while
-   * keeping freeze authority set). Read directly by the safety screener from
-   * `datapiStats` — deliberately NOT lifted onto `PoolState` by
-   * `enrichPoolWithDatapi`. Null when the API omits it (schema drift).
-   */
-  readonly tokenXVerified: boolean | null;
-  readonly tokenYVerified: boolean | null;
-}
-
-export interface MeteoraDatapiApi {
-  /**
-   * Fetch real stats for one pool. Never fails: on any network/HTTP/schema
-   * error it logs a warning and returns null so callers fall back to
-   * heuristic metrics without crashing the scan cycle.
-   */
-  readonly getPoolData: (poolAddress: string) => Effect.Effect<MeteoraPoolStats | null, never>;
-}
-
-export class MeteoraDatapiService extends Context.Service<MeteoraDatapiService, MeteoraDatapiApi>()(
-  "MeteoraDatapiService",
 ) {}
 
 // ─── GeckoTerminal Service ───────────────────────────────────────────────────

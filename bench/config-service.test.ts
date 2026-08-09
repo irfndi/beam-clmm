@@ -386,10 +386,12 @@ describe("ConfigService CHALLENGE_MODE presets", () => {
     vi.stubEnv("CHALLENGE_MODE", undefined);
     vi.stubEnv("MIN_POOL_TVL_USD", undefined);
     vi.stubEnv("MAX_OPEN_POSITIONS", undefined);
+    vi.stubEnv("MAX_ENTRY_SIZE_USD", undefined);
     const cfg = await loadConfig();
     expect(cfg.minPoolTvlUsd).toBe(50_000);
     expect(cfg.maxOpenPositions).toBe(3);
     expect(cfg.entrySizeTvlFraction).toBe(0.005);
+    expect(cfg.maxEntrySizeUsd).toBe(500);
   });
 
   it("applies the challenge preset when CHALLENGE_MODE=true", async () => {
@@ -400,6 +402,7 @@ describe("ConfigService CHALLENGE_MODE presets", () => {
     vi.stubEnv("FEE_CLAIM_INTERVAL_MS", undefined);
     vi.stubEnv("ENTRY_SIZE_TVL_FRACTION", undefined);
     vi.stubEnv("MIN_FEE_IL_RATIO", undefined);
+    vi.stubEnv("MAX_ENTRY_SIZE_USD", undefined);
     const cfg = await loadConfig();
     expect(cfg.minPoolTvlUsd).toBe(1_000);
     expect(cfg.maxOpenPositions).toBe(4);
@@ -407,13 +410,16 @@ describe("ConfigService CHALLENGE_MODE presets", () => {
     expect(cfg.feeClaimIntervalMs).toBe(3_600_000);
     expect(cfg.entrySizeTvlFraction).toBe(0.05);
     expect(cfg.minFeeIlRatio).toBe(1.2);
+    expect(cfg.maxEntrySizeUsd).toBe(5_000);
   });
 
   it("lets an explicit env var win over the challenge preset", async () => {
     vi.stubEnv("CHALLENGE_MODE", "true");
     vi.stubEnv("MIN_POOL_TVL_USD", "25000");
+    vi.stubEnv("MAX_ENTRY_SIZE_USD", "3000");
     const cfg = await loadConfig();
     expect(cfg.minPoolTvlUsd).toBe(25_000);
     expect(cfg.maxOpenPositions).toBe(4); // preset still applies elsewhere
+    expect(cfg.maxEntrySizeUsd).toBe(3_000); // explicit env beats the 5000 preset
   });
 });

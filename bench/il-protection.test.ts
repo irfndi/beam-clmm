@@ -22,15 +22,12 @@ import {
   McpServerService,
   HttpStatusServerService,
   EntryPrepService,
-  MeteoraDatapiService,
   GeckoTerminalService,
   KrystalService,
   AlertService,
   type AdapterApi,
   type GeckoTerminalApi,
   type GeckoStats,
-  type MeteoraDatapiApi,
-  type MeteoraPoolStats,
   type EngineAlert,
 } from "../engine/services.js";
 import { defaultAppConfig, makePool, makeBinArray, makePosition } from "./helpers.js";
@@ -103,8 +100,6 @@ function makeAdapter(
     getTokenBalance: () => Effect.succeed(0n),
     getTokenPrices: () => Effect.succeed({}),
     getTokenDecimals: () => Effect.succeed(9),
-    quoteSwapUSDCForToken: () => Effect.succeed({}),
-    swapUSDCForToken: () => Effect.succeed("mock-swap-tx"),
     getMintAuthorities: () => Effect.succeed(NO_AUTHORITIES),
     ...overrides,
   } as AdapterApi;
@@ -112,7 +107,6 @@ function makeAdapter(
 
 function makeTestLayer(opts: {
   adapter: AdapterApi;
-  datapi?: MeteoraDatapiApi;
   gecko?: GeckoTerminalApi;
   configOverrides?: Partial<AppConfig>;
   alertCapture?: EngineAlert[];
@@ -180,7 +174,6 @@ function makeTestLayer(opts: {
     Layer.succeed(McpServerService, { start: () => Effect.void, stop: () => Effect.void }),
     Layer.succeed(HttpStatusServerService, { start: () => Effect.void, stop: () => Effect.void }),
     Layer.succeed(EntryPrepService, { prepareEntryTokens: () => Effect.succeed(undefined) }),
-    Layer.succeed(MeteoraDatapiService, opts.datapi ?? { getPoolData: () => Effect.succeed(null) }),
     Layer.succeed(KrystalService, { getPoolStats: () => Effect.succeed(null), getUniverse: () => Effect.succeed(new Map()) }),
     Layer.succeed(GeckoTerminalService, opts.gecko ?? { getPoolStats: () => Effect.succeed(null) }),
     Layer.succeed(AlertService, {
@@ -237,36 +230,6 @@ function makeGeckoStats(overrides: Partial<GeckoStats> = {}): GeckoStats {
     fees24hUsd: 1,
     basePriceUsd: 150,
     quotePriceUsd: 1,
-    ...overrides,
-  };
-}
-
-// A minimal Data API stats payload so the pool is enriched to a MEASURED source
-// (feeIlRatioKnown=true). The [fee-il-gate] now only acts on measured fees, so a
-// gate test must supply real datapi stats rather than relying on heuristic fees.
-function makeDatapiStats(overrides: Partial<MeteoraPoolStats> = {}): MeteoraPoolStats {
-  return {
-    address: POOL,
-    name: "SOL-USDC",
-    tvlUsd: 100_000,
-    volume24hUsd: 2_000,
-    fees24hUsd: 1,
-    apr: 0.004,
-    apy: 0.004,
-    currentPrice: 150,
-    feeTvlRatio24h: 0.001,
-    feeTvlRatio12h: 0.001,
-    feeTvlRatio1h: 0.001,
-    dynamicFeePct: null,
-    baseFeePct: 0.2,
-    hasFarm: null,
-    farmApr: null,
-    farmApy: null,
-    isBlacklisted: false,
-    tokenXFreezeAuthorityDisabled: true,
-    tokenYFreezeAuthorityDisabled: true,
-    tokenXVerified: true,
-    tokenYVerified: true,
     ...overrides,
   };
 }
