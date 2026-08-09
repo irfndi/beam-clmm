@@ -218,6 +218,60 @@ precedent. The agent will NOT do this.
   - Sleeve cap: speculative one-sided bets ≤10% of capital with hard stops.
   - Compounding: only when accrued fees > 10× gas.
 
+## 7b. Independent cross-verification (3 dapps + raw on-chain, 2026-08-09)
+
+| Source | Robinhood support | Verdict |
+|---|---|---|
+| Krystal LP API | ✅ full universe (500) | Baseline |
+| GeckoTerminal | ✅ pools + volume | **Confirms volumes** (CASHCAT/WETH $189.6k/24h both) |
+| Dexscreener | ✅ pairs API | **Confirms TVL exact** (CASHCAT liquidity $5,254.73 = Krystal $5.3k) |
+| Blockscout v2 | ✅ txs/blocks | Confirms gas 0.03 gwei, 31.6M blocks |
+| **Raw v4 Swap events (on-chain)** | ✅ PoolManager logs | **Confirms fees to the basis point** |
+| DefiLlama yields | ❌ no robinhood | — |
+| Uniswap API / The Graph | ❌ key / no public subgraph | — |
+
+**On-chain fee verification (the gold standard):** parsed v4 `Swap` events from
+the PoolManager:
+- **ETH/CASHCAT**: every swap carries `fee: 11040` = 1.104% — **exactly matching
+  Krystal's fee claim**.
+- **ETH/USDG 0x30da… ("5%" pool)**: dynamic fee mix 0%/5%/7.5%/10% per swap,
+  volume-weighted avg ≈ 1.4%; extrapolated ≈ **18–26%/day of TVL — matching
+  Krystal's 13–18%/day**.
+- Krystal `feeUsd24h = volumeUsd24h × lpFee` verified exactly (85/85 v4, 15/15 v3
+  pools); apr = feeUsd/tvl × 365. **Krystal is trustworthy for automated
+  decisions.** Caveats: dynamic-fee pools report stale `feeTier=0` in top_pools
+  (read live fee from `pool_detail`); `skipCheckAutomation=true` is REQUIRED for
+  the full universe (the $565k anchor is invisible without it); the harvest set
+  rotates hourly.
+
+## 8. Refactor + challenge strategy spec (toward the goals)
+
+### Krystal integration contract (the new stats source)
+- **Universe:** `GET https://api.krystal.app/all/v2/lp_explorer/top_pools?chainId=4663&protocols=uniswapv2,uniswapv3,uniswapv4&quoteSymbols=usd&limit=500&skipCheckAutomation=true` — ONE call for 500 pools (offset ignored). TTL 10 min (stats update every 5–15 min). No auth; ~60 req/min safe budget.
+- **Per-pool live state:** `.../pool_detail?chainId=4663&protocol=uniswapv3|uniswapv4&poolAddress=…` — live dynamic fee, sqrtPrice, balances. Only for pools with open positions.
+- **Strategy fields:** fee yield = `stat24h.feeUsd/tvlUsd` (measured), `drawdown24h`, `priceVolatility`, turnover = `volumeUsd24h/tvlUsd`, `dynamicFee/lpFee/protocolFee`.
+- Gecko stays as fallback (its 30/min cap and per-pool 2.1s pacing no longer gate the cycle).
+
+### Two-tier engine loop (the high-throughput core)
+- **Slow lane (5–15 min):** 1 Krystal call refreshes the 500-pool universe → score → the harvest book (S/A/B tiers). Replaces the sequential 13–14 RPC + 2.1s-gecko per pool.
+- **Fast lane (10–60s):** for open-position pools + top harvest candidates only — multicall-batched state (slot0, liquidity, tick range via TickLens) ≈ 2 RPC/pool; decide/execute; the drawdown guard (`dd24h < −10%` on a held pool → exit in THIS lane, latency budget < 60s).
+- Implementation: SCAN_INTERVAL_MS floor 10s → 2–5s; `Effect.all(evaluatePool, { concurrency: 4–8 })`; hoist `getClosedPositions`/positions to cycle top; fix `getPositionValueUsd` (priceUsd(poolAddress) bug → $0 marks).
+
+### Challenge-mode strategy (spec from research)
+- **Scoring:** `score = yield24h × (1 + dd24h/100) × w_tier × w_stable × w_age`; filters: tvl ≥ $1k, share ≤ 10% of pool TVL, dd > −10%, age ≥ 6h (launch-rug window).
+- **Tiers:** S = ETH/USDG anchor cluster (17–18%/day, ~0 IL — the safe sleeve); A = meme harvest (CASHCAT/TENDIES-class, 12–37%/day, capacity-tiny ~$8k); B = yield fallback (4–10%).
+- **Rotation:** yield < 70% of 7d avg → halve; < 50% → exit; dd < −5% → halve; < −10% → exit; TVL −30%/24h → exit.
+- **Ranges:** half-width `w = k·σ_daily` (k=1.5 default; E = 1/(1−e^(−w/2)) concentration; CASHCAT σ=24% → w=0.36 → E≈6×, 87% in-range; anchors E≈50×).
+- **Compounding:** when claimable ≥ max(MIN_COMPOUND_FEES_USD, 20×loop_cost); v3 = 3 txs (~$0.03), v4 = 1 tx modifyLiquidities (~$0.02); $10 → daily, $500+ → hourly.
+- **Sizing phases:** $10–100 → 1–2 meme pools (concentration); $100–1k → 3–5 (memes + anchor toehold); $1k–10k → memes capped + anchors; $10k–148k → anchor sleeve; >$148k → ≥5%/≥1% tier expansion. Config: gas floors 0.05 ETH → 0.0001–0.001 ETH (blocks $10 accounts today), MAX_ENTRY_SIZE_USD 500 → phase-scaled, MAX_OPEN_POSITIONS 3 → 10–16, MIN_POOL_TVL_USD 50k → 1k.
+- **Capacity ladder (live):** 16-candidate book $148k @ 12.4%/day → ≥5% tier $286k @ 13.9% → ≥1% tier $822k @ 6.5% → full 500-pool $3.02M @ 2.05%. **$1M deployable needs ~$10M qualifying TVL.**
+- **112-day scenarios ($10 seed):** 1%/d → $30; 3%/d → $274; 6%/d → $6,840; upper-tail 10%/d (memes capped by day 41–70, anchors to $148k by day ~100) → **$170–290k**. **$1M requires 10.8%/day sustained AND $10M+ qualifying TVL — neither holds today.** Honest band: $30–$6,840; the real deliverable is the rotation engine that keeps the book in the top-decile pools hourly.
+
+### Tx pipeline (build order)
+1. v3: NPM mint/collect/burn + SwapRouter02 (`0xCaf681…`) + in-SDK quotes (Quoters revert empty on public RPC). Plain ERC20 approvals.
+2. v4: modifyLiquidities single-tx compound + Permit2 + UniversalRouter **`0x06AfBA…`** (official 4663 per deployments.json; `0x887678…` is a second deployment with identical init code, different feeRecipient — the adapter const is correct).
+3. Gas: priority 0, 2× baseFee; eth_call dry-run + estimateGas; Alchemy RPC for prod.
+
 ## 7. The verdict + recommended build sequence
 
 **Corrected verdict (post-Krystal):** the opportunity set is real and rich —
