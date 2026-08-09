@@ -4,6 +4,8 @@ import path from "path";
 import { Effect } from "effect";
 import { program, buildLayer } from "./program.js";
 import { ConfigService, ConfigLive } from "./config-service.js";
+import { AdapterService } from "./services.js";
+import { CHAIN_ID } from "./adapter-service.js";
 import { createLogger } from "./logger.js";
 import { errorReporter } from "./error-reporter.js";
 import { getCurrentVersion } from "./version.js";
@@ -103,21 +105,58 @@ export function runEngine(): Promise<void> {
     }).pipe(Effect.provide(ConfigLive)),
   );
 
+  // Chain-identity pre-flight (fail-closed): every contract address this
+  // engine uses is Robinhood Chain (4663)-specific. Verify the CONFIGURED
+  // RPC is actually 4663 before the program effect scans or broadcasts
+  // anything — a wrong RPC URL would otherwise silently target the wrong
+  // network. A transport error is tolerated (the first scan cycle surfaces
+  // connectivity anyway); a WRONG chain is never tolerated. Runs on the
+  // adapter's own client via the real layer, so paper and live mode share
+  // the exact same check. Only the adapter subtree of the layer graph is
+  // constructed here (adapter -> configLayer); the DB stays untouched.
+  const chainPreflight = Effect.gen(function* () {
+    const adapter = yield* AdapterService;
+    const connectedChainId: number | null = yield* adapter.verifyChainId
+      ? adapter.verifyChainId().pipe(
+          Effect.catch(() => Effect.succeed(null)),
+          Effect.map((id) => id as number | null),
+        )
+      : Effect.succeed<number | null>(null);
+    if (connectedChainId !== null && connectedChainId !== CHAIN_ID) {
+      return yield* Effect.fail(
+        new Error(
+          `Refusing to start: RPC reports chain ${connectedChainId}, expected ${CHAIN_ID} ` +
+            `(Robinhood Chain). Fix ROBINHOOD_RPC_URL before running the engine.`,
+        ),
+      );
+    }
+    if (connectedChainId === CHAIN_ID) {
+      logger.info("Chain verified: Robinhood Chain (4663)");
+    } else {
+      logger.info(
+        "Chain verification skipped (RPC unreachable at boot); first scan cycle will surface connectivity",
+      );
+    }
+  }).pipe(Effect.provide(buildLayer(config)));
+
+  const fatal = (err: unknown) =>
+    Effect.sync(() => {
+      errorReporter.report(ensureError(err), { severity: "critical" });
+      console.error("Fatal error:", err);
+      setImmediate(() =>
+        Effect.runFork(
+          errorReporter
+            .flushEffect(2_000)
+            .pipe(Effect.ensuring(Effect.sync(() => process.exit(1)))),
+        ),
+      );
+    });
+
   return Effect.runPromise(
-    program.pipe(
-      Effect.provide(buildLayer(config)),
-      Effect.catch((err) =>
-        Effect.sync(() => {
-          errorReporter.report(ensureError(err), { severity: "critical" });
-          console.error("Fatal error:", err);
-          setImmediate(() =>
-            Effect.runFork(
-              errorReporter
-                .flushEffect(2_000)
-                .pipe(Effect.ensuring(Effect.sync(() => process.exit(1)))),
-            ),
-          );
-        }),
+    chainPreflight.pipe(
+      Effect.catch(fatal),
+      Effect.andThen(
+        program.pipe(Effect.provide(buildLayer(config)), Effect.catch(fatal)),
       ),
     ),
   );

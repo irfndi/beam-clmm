@@ -121,6 +121,14 @@ export interface TokenPriceEvidence {
 export interface AdapterApi {
   readonly hasWallet: () => boolean;
   readonly getWalletAddress: () => string | null;
+  /**
+   * Chain-identity guard: `eth_chainId` against the CONFIGURED RPC. The
+   * engine's contracts are Robinhood Chain (4663)-specific, so the boot
+   * sequence calls this and fails closed on any other chain — a
+   * misconfigured RPC URL must never silently scan or broadcast on the
+   * wrong network. Optional so loop test mocks compile unchanged.
+   */
+  readonly verifyChainId?: () => Effect.Effect<number, Error>;
   readonly getWalletBalanceUsd: () => Effect.Effect<number, Error>;
   /**
    * Per-mint SPL holdings the wallet-balance read already scans (Token

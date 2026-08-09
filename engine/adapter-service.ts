@@ -1794,6 +1794,11 @@ export const AdapterLive = Layer.effect(AdapterService,
     return {
       hasWallet: () => account !== null,
       getWalletAddress: () => walletAddress,
+      // Chain-identity guard: eth_chainId against the CONFIGURED RPC (not the
+      // hardcoded chain object). The engine's addresses are 4663-specific, so
+      // the boot sequence refuses to start when this mismatches. A transport
+      // error surfaces here too — the caller decides fail-open vs fail-closed.
+      verifyChainId: () => Effect.tryPromise(() => publicClient.getChainId()),
       getWalletBalanceUsd: () => Effect.gen(function* () {
         if (!walletAddress) return 0;
         const [nativeWei, stable] = yield* Effect.tryPromise(async () => {

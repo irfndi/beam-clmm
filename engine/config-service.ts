@@ -621,11 +621,18 @@ const loadConfig = Effect.gen(function* () {
   const walletPrivateKey = yield* Config.string("WALLET_PRIVATE_KEY").pipe(
     Effect.orElseSucceed(() => loadKeystoreSecretKeyHex() ?? ""),
   );
-  let rpcUrl = yield* Config.string("RPC_URL").pipe(
-    Effect.orElseSucceed(() =>
-      isTest ? "https://example.com" : "https://rpc.mainnet.chain.robinhood.com",
-    ),
-  );
+  // `RPC_URL` is canonical; `ROBINHOOD_RPC_URL` is the legacy name `beam
+  // setup` has always written and AGENTS.md documents. Accept both so a user
+  // who sets the documented name is not silently ignored.
+  const rpcUrlOr = (name: string) =>
+    Config.string(name).pipe(Effect.catch(() => Effect.succeed("")));
+  const rpcUrl = yield* Effect.gen(function* () {
+    const primary = yield* rpcUrlOr("RPC_URL");
+    if (primary) return primary;
+    const legacy = yield* rpcUrlOr("ROBINHOOD_RPC_URL");
+    if (legacy) return legacy;
+    return isTest ? "https://example.com" : "https://rpc.mainnet.chain.robinhood.com";
+  });
   const rpcFallbackUrl = yield* Config.string("RPC_FALLBACK_URL").pipe(
     Effect.orElseSucceed(() => ""),
   );
