@@ -136,8 +136,8 @@ export const api = Cloudflare.Worker("api", {
     MEMORY: memory,
     // Plain vars (literal string -> `plain_text`).
     ENVIRONMENT: "production",
-    TELEGRAM_WEBHOOK_URL: "https://beam-telegram-bot.irfndi.workers.dev/webhook",
-    TELEGRAM_BOT_URL: "https://beam-telegram-bot.irfndi.workers.dev",
+    TELEGRAM_WEBHOOK_URL: "https://bot.pryx.dev/webhook",
+    TELEGRAM_BOT_URL: "https://bot.pryx.dev",
     // Secrets (Config.redacted -> `secret_text`, read from CI env at deploy).
     TELEGRAM_BOT_TOKEN: Config.redacted("TELEGRAM_BOT_TOKEN"),
     BOT_API_SECRET: Config.redacted("BOT_API_SECRET"),
@@ -146,13 +146,18 @@ export const api = Cloudflare.Worker("api", {
   },
 });
 
-/** Telegram bot worker — `beam-telegram-bot.irfndi.workers.dev`. */
+/** Telegram bot worker — `bot.pryx.dev` (custom domain: Telegram's resolver
+ * consistently fails on the workers.dev hostname, error "bad webhook: Failed
+ * to resolve host"; the account's own zones resolve fine). */
 export const telegramBot = Cloudflare.Worker("telegramBot", {
   name: "beam-telegram-bot",
   main: "../dist/telegram-bot/index.mjs",
   bundle: false,
   compatibility,
   observability,
+  // Custom domain with automatic DNS + edge cert (zone pryx.dev exists in
+  // this account). workers.dev hostname remains reachable as a fallback.
+  domain: { name: "bot.pryx.dev" },
   env: {
     // Shares the SAME database and KV namespace as the API worker.
     DB: database,
