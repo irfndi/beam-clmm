@@ -106,7 +106,7 @@ describe("Wallet API", () => {
       const request = buildRequest(
         "POST",
         "/v1/wallet",
-        { pubkey: "7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU" },
+        { pubkey: "0x7a4f9c2e1b8d6a3f5c0e9d2b4a8f1c6e3d5b7a9f" },
         { Authorization: `Bearer ${apiKey}` },
       );
       const response = await worker.fetch(request, testEnv, ctx);
@@ -114,7 +114,7 @@ describe("Wallet API", () => {
 
       const body = (await response.json()) as { success: boolean; pubkey: string };
       expect(body.success).toBe(true);
-      expect(body.pubkey).toBe("7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU");
+      expect(body.pubkey).toBe("0x7a4f9c2e1b8d6a3f5c0e9d2b4a8f1c6e3d5b7a9f");
 
       // Verify in DB
       const rows = await env.DB.prepare(
@@ -125,7 +125,7 @@ describe("Wallet API", () => {
       const results = rows.results ?? [];
       expect(results).toHaveLength(1);
       const row = results[0] as Record<string, unknown>;
-      expect(row.pubkey).toBe("7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU");
+      expect(row.pubkey).toBe("0x7a4f9c2e1b8d6a3f5c0e9d2b4a8f1c6e3d5b7a9f");
     });
 
     it("rejects invalid EVM addresses", async () => {
@@ -143,7 +143,7 @@ describe("Wallet API", () => {
     it("returns 401 without API key", async () => {
       const ctx = createExecutionContext();
       const request = buildRequest("POST", "/v1/wallet", {
-        pubkey: "7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU",
+        pubkey: "0x7a4f9c2e1b8d6a3f5c0e9d2b4a8f1c6e3d5b7a9f",
       });
       const response = await worker.fetch(request, testEnv, ctx);
       expect(response.status).toBe(401);
@@ -154,7 +154,7 @@ describe("Wallet API", () => {
       const request = buildRequest(
         "POST",
         "/v1/wallet",
-        { pubkey: "7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU" },
+        { pubkey: "0x7a4f9c2e1b8d6a3f5c0e9d2b4a8f1c6e3d5b7a9f" },
         { Authorization: "Bearer invalid-key" },
       );
       const response = await worker.fetch(request, testEnv, ctx);
@@ -166,7 +166,7 @@ describe("Wallet API", () => {
       const req1 = buildRequest(
         "POST",
         "/v1/wallet",
-        { pubkey: "7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU" },
+        { pubkey: "0x7a4f9c2e1b8d6a3f5c0e9d2b4a8f1c6e3d5b7a9f" },
         { Authorization: `Bearer ${apiKey}` },
       );
       await worker.fetch(req1, testEnv, ctx1);
@@ -175,7 +175,7 @@ describe("Wallet API", () => {
       const req2 = buildRequest(
         "POST",
         "/v1/wallet",
-        { pubkey: "9yLZuh4DX98e18UYKTEqcE6kCmfUrB95TZRuJosgBtV" },
+        { pubkey: "0x9a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d" },
         { Authorization: `Bearer ${apiKey}` },
       );
       const res2 = await worker.fetch(req2, testEnv, ctx2);
@@ -198,7 +198,7 @@ describe("Wallet API", () => {
       const req1 = buildRequest(
         "POST",
         "/v1/wallet",
-        { pubkey: "7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU" },
+        { pubkey: "0x7a4f9c2e1b8d6a3f5c0e9d2b4a8f1c6e3d5b7a9f" },
         { Authorization: `Bearer ${apiKey}` },
       );
       await worker.fetch(req1, testEnv, ctx1);
@@ -212,7 +212,7 @@ describe("Wallet API", () => {
       expect(res2.status).toBe(200);
 
       const body = (await res2.json()) as { pubkey: string };
-      expect(body.pubkey).toBe("7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU");
+      expect(body.pubkey).toBe("0x7a4f9c2e1b8d6a3f5c0e9d2b4a8f1c6e3d5b7a9f");
     });
 
     it("returns 404 when no wallet exists", async () => {

@@ -98,7 +98,7 @@ export const memory = Cloudflare.Vectorize.Index("memory", {
 // ---------------------------------------------------------------------------
 
 const compatibility = {
-  date: "2026-07-20",
+  date: "2026-07-11",
   flags: ["nodejs_compat"],
 };
 

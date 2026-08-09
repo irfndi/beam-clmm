@@ -651,6 +651,15 @@ const registerTelegramHandler = (db: D1Database, telegramId: string, firstName: 
 // to not_running when no recent heartbeat exists or when KV is unavailable.
 const AGENT_STATUS_CACHE_TTL_SEC = 30 * 60; // 30 minutes
 
+/** One engine decision pushed per scan cycle to the D1 state surface. */
+export interface EngineDecisionRow {
+  readonly poolAddress: string;
+  readonly action: string;
+  readonly confidence: number;
+  readonly reasoning: string;
+  readonly executed: boolean;
+}
+
 const agentStatusHandler = (db: D1Database, cache: KVNamespace, telegramId: string) =>
   Effect.gen(function* () {
     const result = yield* Effect.tryPromise(() =>
@@ -701,17 +710,67 @@ const agentStatusReportHandler = (db: D1Database, cache: KVNamespace, apiKey: st
 
     return {
       userId,
-      storeStatus: (status: string, positions: number, pnl: number) =>
-        Effect.tryPromise(() =>
-          cache.put(
-            `agent_status:${userId}`,
-            JSON.stringify({ status, positions, pnl, reportedAt: Date.now() }),
-            { expirationTtl: AGENT_STATUS_CACHE_TTL_SEC },
+      storeStatus: (
+        status: string,
+        positions: number,
+        pnl: number,
+        details?: { decisions?: ReadonlyArray<EngineDecisionRow> },
+      ) =>
+        Effect.tryPromise(() => {
+          const now = Date.now();
+          // D1 is the deployed system of record for the operator surface;
+          // KV keeps the legacy 30-min TTL heartbeat for the bot.
+          const writes = [
+            db
+              .prepare(
+                `INSERT OR REPLACE INTO engine_snapshots
+                 (agent_id, reported_at, status, positions, pnl, details)
+                 VALUES (?, ?, ?, ?, ?, ?)`,
+              )
+              .bind(
+                userId,
+                now,
+                status,
+                positions,
+                pnl,
+                details ? JSON.stringify(details) : null,
+              )
+              .run(),
+          ];
+          for (const d of details?.decisions ?? []) {
+            writes.push(
+              db
+                .prepare(
+                  `INSERT OR REPLACE INTO engine_decisions
+                   (agent_id, reported_at, pool_address, action, confidence, reasoning, executed)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)`,
+                )
+                .bind(
+                  userId,
+                  now,
+                  d.poolAddress,
+                  d.action,
+                  d.confidence,
+                  d.reasoning,
+                  d.executed ? 1 : 0,
+                )
+                .run(),
+            );
+          }
+          return Promise.all(writes);
+        }).pipe(
+          Effect.flatMap(() =>
+            Effect.tryPromise(() =>
+              cache.put(
+                `agent_status:${userId}`,
+                JSON.stringify({ status, positions, pnl, reportedAt: Date.now() }),
+                { expirationTtl: AGENT_STATUS_CACHE_TTL_SEC },
+              ),
+            ),
           ),
-        ).pipe(
           Effect.catch((err) =>
             Effect.sync(() =>
-              console.error("agent-status KV write failed", {
+              console.error("agent-status persistence failed", {
                 userId,
                 err: String(err),
               }),
@@ -1057,6 +1116,82 @@ app.post("/v1/agent-status", async (c) => {
   );
 });
 
+// Engine state surface — the deployed read side of the engine's per-cycle
+// snapshots (D1). Auth: same Bearer API key as the report endpoint.
+app.get("/v1/engine/state", async (c) => {
+  const { DB } = c.env;
+  const apiKey = c.get("apiKey") as string;
+  if (!apiKey) {
+    return c.json({ error: "API key required" }, 401);
+  }
+  const limit = Math.min(Math.max(Number(c.req.query("limit") ?? 10), 1), 100);
+
+  return Effect.runPromise(
+    Effect.gen(function* () {
+      const loginResult = yield* loginHandler(DB, apiKey);
+      const userId = (loginResult as { id: string }).id;
+      const snapshot = yield* Effect.tryPromise(() =>
+        DB.prepare(
+          `SELECT reported_at, status, positions, pnl, details
+           FROM engine_snapshots WHERE agent_id = ? ORDER BY reported_at DESC LIMIT 1`,
+        )
+          .bind(userId)
+          .first<{
+            reported_at: number;
+            status: string;
+            positions: number;
+            pnl: number;
+            details: string | null;
+          }>(),
+      );
+      const decisions = yield* Effect.tryPromise(() =>
+        DB.prepare(
+          `SELECT reported_at, pool_address, action, confidence, reasoning, executed
+           FROM engine_decisions WHERE agent_id = ? ORDER BY reported_at DESC LIMIT ?`,
+        )
+          .bind(userId, limit)
+          .all<{
+            reported_at: number;
+            pool_address: string;
+            action: string;
+            confidence: number;
+            reasoning: string;
+            executed: number;
+          }>(),
+      );
+      return c.json({
+        ok: true,
+        snapshot:
+          snapshot === null
+            ? null
+            : {
+                reportedAt: snapshot.reported_at,
+                status: snapshot.status,
+                positions: snapshot.positions,
+                pnl: snapshot.pnl,
+              },
+        decisions: (decisions.results ?? []).map((d) => ({
+          reportedAt: d.reported_at,
+          poolAddress: d.pool_address,
+          action: d.action,
+          confidence: d.confidence,
+          reasoning: d.reasoning,
+          executed: d.executed === 1,
+        })),
+      });
+    }).pipe(
+      Effect.match({
+        onFailure: (cause) => {
+          const message = cause instanceof Error ? cause.message : String(cause);
+          console.error("engine/state failed", { err: message });
+          return c.json({ error: "Failed to read engine state" }, 500);
+        },
+        onSuccess: (response) => response,
+      }),
+    ),
+  );
+});
+
 // Engine status report endpoint — called periodically by the running engine to
 // report its live state (running, positions, P&L). Authenticated via Bearer
 // API key. Stored in KV with a 30-minute TTL; the bot-facing /v1/agent-status
@@ -1069,7 +1204,12 @@ app.post("/v1/agent-status/report", async (c) => {
   }
 
   const body = await Effect.runPromise(
-    readJsonBody<{ status?: string; positions?: number; pnl?: number }>(c.req),
+    readJsonBody<{
+      status?: string;
+      positions?: number;
+      pnl?: number;
+      decisions?: ReadonlyArray<EngineDecisionRow>;
+    }>(c.req),
   );
 
   if (body.status !== "running" && body.status !== "stopped") {
@@ -1093,7 +1233,9 @@ app.post("/v1/agent-status/report", async (c) => {
       const handler = yield* agentStatusReportHandler(DB, CACHE, apiKey).pipe(
         Effect.catch(() => Effect.fail(new Error("Authentication failed"))),
       );
-      yield* handler.storeStatus(body.status!, positions, pnl);
+      yield* handler.storeStatus(body.status!, positions, pnl, {
+        decisions: body.decisions ?? [],
+      });
       return c.json({ ok: true });
     }).pipe(
       Effect.match({

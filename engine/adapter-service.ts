@@ -435,10 +435,16 @@ export const AdapterLive = Layer.effect(AdapterService,
       if (discoveredPoolCache !== null) return discoveredPoolCache;
       const latest = await publicClient.getBlockNumber();
       // Public RPC times out on 100k-block log queries; 10k chunks work.
-      // Scan the recent window only (pool creation since ~2M blocks ago);
-      // the gecko indexer is the completeness path (follow-up).
+      // Window: env DISCOVERY_BLOCK_WINDOW (default 2M blocks ≈ recent pools);
+      // the chain creates pools continuously (~509k total since genesis, ~99%
+      // WETH-paired fee-10000 meme pools), so a full-history scan is
+      // thousands of chunks — the gecko/subgraph indexer is the
+      // completeness path (follow-up).
       const CHUNK = 10_000n;
-      const fromStart = latest > 2_000_000n ? latest - 2_000_000n : 8930n;
+      const windowBlocks = BigInt(
+        Number(process.env.DISCOVERY_BLOCK_WINDOW ?? 2_000_000),
+      );
+      const fromStart = latest > windowBlocks ? latest - windowBlocks : 8930n;
       const pools = new Map<string, DiscoveredPool>();
       for (let from = fromStart; from <= latest; from += CHUNK) {
         const to = from + CHUNK - 1n < latest ? from + CHUNK - 1n : latest;

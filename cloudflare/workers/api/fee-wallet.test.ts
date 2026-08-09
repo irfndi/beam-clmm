@@ -40,7 +40,7 @@ describe("Fee Wallet API", () => {
 
   describe("GET /v1/fee-wallet", () => {
     it("returns the fee wallet address from KV", async () => {
-      await env.CACHE.put("fee_wallet_address", "7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU");
+      await env.CACHE.put("fee_wallet_address", "0x7a4f9c2e1b8d6a3f5c0e9d2b4a8f1c6e3d5b7a9f");
 
       const ctx = createExecutionContext();
       const request = buildRequest("GET", "/v1/fee-wallet");
@@ -48,7 +48,7 @@ describe("Fee Wallet API", () => {
       expect(response.status).toBe(200);
 
       const body = (await response.json()) as { address: string; source: string };
-      expect(body.address).toBe("7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU");
+      expect(body.address).toBe("0x7a4f9c2e1b8d6a3f5c0e9d2b4a8f1c6e3d5b7a9f");
       expect(body.source).toBe("kv");
     });
 
@@ -72,7 +72,7 @@ describe("Fee Wallet API", () => {
       const ctx = createExecutionContext();
       // No Authorization header
       const request = buildRequest("PUT", "/v1/fee-wallet", {
-        address: "7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU",
+        address: "0x7a4f9c2e1b8d6a3f5c0e9d2b4a8f1c6e3d5b7a9f",
       });
       const response = await worker.fetch(request, testEnv, ctx);
       expect(response.status).toBe(401);
@@ -83,7 +83,7 @@ describe("Fee Wallet API", () => {
       const request = buildRequest(
         "PUT",
         "/v1/fee-wallet",
-        { address: "7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU" },
+        { address: "0x7a4f9c2e1b8d6a3f5c0e9d2b4a8f1c6e3d5b7a9f" },
         { Authorization: "Bearer wrong-key" },
       );
       const response = await worker.fetch(request, testEnv, ctx);
@@ -92,7 +92,7 @@ describe("Fee Wallet API", () => {
 
     it("updates the fee wallet address in KV with valid admin key", async () => {
       const ctx = createExecutionContext();
-      const addr = "7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU";
+      const addr = "0x7a4f9c2e1b8d6a3f5c0e9d2b4a8f1c6e3d5b7a9f";
       const request = withAdmin(
         buildRequest("PUT", "/v1/fee-wallet", { address: addr }),
       );
@@ -117,7 +117,7 @@ describe("Fee Wallet API", () => {
       expect(response.status).toBe(400);
 
       const body = (await response.json()) as { error: string };
-      expect(body.error).toMatch(/invalid solana/i);
+      expect(body.error).toMatch(/Invalid EVM address/i);
     });
 
     it("rejects addresses that are too short", async () => {

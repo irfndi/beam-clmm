@@ -168,7 +168,7 @@ describe("Audit Logging API", () => {
     const request = buildRequest(
       "POST",
       "/v1/wallet",
-      { pubkey: "7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU" },
+      { pubkey: "0x7a4f9c2e1b8d6a3f5c0e9d2b4a8f1c6e3d5b7a9f" },
       { Authorization: `Bearer ${apiKey}` },
     );
     const response = await worker.fetch(request, testEnv, ctx);
@@ -178,7 +178,7 @@ describe("Audit Logging API", () => {
       buildRequest(
         "POST",
         "/v1/wallet",
-        { pubkey: "7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU" },
+        { pubkey: "0x7a4f9c2e1b8d6a3f5c0e9d2b4a8f1c6e3d5b7a9f" },
         { Authorization: `Bearer ${apiKey}` },
       ),
       testEnv,
@@ -195,7 +195,7 @@ describe("Audit Logging API", () => {
     const row = results[0] as Record<string, unknown>;
     expect(row.action).toBe("wallet_sync");
     const details = JSON.parse(row.details as string);
-    expect(details).toMatchObject({ pubkey: "7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU" });
+    expect(details).toMatchObject({ pubkey: "0x7a4f9c2e1b8d6a3f5c0e9d2b4a8f1c6e3d5b7a9f" });
     expect(row.occurrence_count).toBe(2);
   });
 

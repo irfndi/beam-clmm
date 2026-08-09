@@ -220,6 +220,13 @@ function postEngineStatus(
   status: "running" | "stopped",
   positions: number,
   unrealizedPnlUsd: number,
+  decisions?: ReadonlyArray<{
+    poolAddress: string;
+    action: string;
+    confidence: number;
+    reasoning: string;
+    executed: boolean;
+  }>,
 ): Effect.Effect<void> {
   const DEFAULT_API_BASE_URL = "https://beam-api.irfndi.workers.dev";
   const TIMEOUT_MS = 5_000;
@@ -234,7 +241,7 @@ function postEngineStatus(
           "Content-Type": "application/json",
           Authorization: `Bearer ${apiKey}`,
         },
-        body: JSON.stringify({ status, positions, pnl: unrealizedPnlUsd }),
+        body: JSON.stringify({ status, positions, pnl: unrealizedPnlUsd, decisions }),
         signal: AbortSignal.timeout(TIMEOUT_MS),
       }),
     );
@@ -4192,7 +4199,17 @@ export const program = Effect.gen(function* () {
             p.cumulativeRewardsClaimedUsd -
             p.depositedUsd;
         }
-        yield* Effect.forkChild(postEngineStatus("running", trackedPositions.size, pnl)).pipe(
+        yield* Effect.forkChild(
+          postEngineStatus("running", trackedPositions.size, pnl, cycle.decisions.map((d) => ({
+            poolAddress: d.poolAddress,
+            action: d.action,
+            confidence: d.confidence,
+            reasoning: d.reasoning,
+            // Decisions are pre-execution records; the snapshot's position
+            // count reflects what actually executed.
+            executed: false,
+          }))),
+        ).pipe(
           Effect.asVoid,
         );
       }
