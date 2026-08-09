@@ -121,10 +121,17 @@ interface UniverseCache {
 }
 
 let universeCache: UniverseCache | null = null;
+// Last-known stats per pool, kept beyond the universe window — when a pool
+// drops out of Krystal's top-500 (e.g. a crash collapsing its volume), the
+// drawdown signal must NOT silently vanish (safety audit: the rotation gate
+// disabled exactly when a pool starts crashing). Capped at ~2h freshness.
+const lastKnownStats = new Map<string, { readonly stats: KrystalPoolStats; readonly at: number }>();
+const LAST_KNOWN_TTL_MS = 2 * 60 * 60 * 1_000;
 
-/** TEST-ONLY: clear the universe cache between tests. */
+/** TEST-ONLY: clear caches between tests. */
 export function clearKrystalCache(): void {
   universeCache = null;
+  lastKnownStats.clear();
 }
 
 export async function fetchKrystalUniverse(
@@ -146,13 +153,23 @@ export async function fetchKrystalUniverse(
     const response = await fetchImpl(url, { signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
     if (!response.ok) {
       logger.warn("Krystal universe fetch rejected", { status: response.status });
-      return universeCache?.pools ?? new Map();
+      // Safety: on fetch failure return the cache ONLY if reasonably fresh
+      // (2x TTL) — a multi-day outage must not feed stale "measured" stats
+      // into the drawdown/fee gates (safety audit).
+      return universeCache !== null && now - universeCache.fetchedAt <= UNIVERSE_TTL_MS * 2
+        ? universeCache.pools
+        : new Map();
     }
     const raw: unknown = await response.json();
     const result = isObject(raw) ? raw.result : null;
     if (!Array.isArray(result)) {
       logger.warn("Krystal universe response malformed");
-      return universeCache?.pools ?? new Map();
+      // Safety: on fetch failure return the cache ONLY if reasonably fresh
+      // (2x TTL) — a multi-day outage must not feed stale "measured" stats
+      // into the drawdown/fee gates (safety audit).
+      return universeCache !== null && now - universeCache.fetchedAt <= UNIVERSE_TTL_MS * 2
+        ? universeCache.pools
+        : new Map();
     }
     const pools = new Map<string, KrystalPoolStats>();
     for (const entry of result) {
@@ -161,6 +178,7 @@ export async function fetchKrystalUniverse(
       if (stats === null) continue;
       const poolId = entry.poolAddress.toLowerCase();
       pools.set(poolId, stats);
+      lastKnownStats.set(poolId, { stats, at: Date.now() });
       // Auto-register v4 pool keys so the adapter's StateView reads can name
       // the legs. The key's fee/tickSpacing are cosmetic here (StateView reads
       // by poolId; the poolId is a one-way hash, so the key is only a symbol
@@ -193,6 +211,12 @@ export async function fetchKrystalUniverse(
       }
     }
     universeCache = { fetchedAt: Date.now(), pools };
+    // Prune stale last-known entries (>2h) so the fallback never goes cold-
+    // stale for a pool that has genuinely died.
+    const now2 = Date.now();
+    for (const [addr, entry] of lastKnownStats) {
+      if (now2 - entry.at > LAST_KNOWN_TTL_MS) lastKnownStats.delete(addr);
+    }
     logger.info("Krystal universe refreshed", { count: pools.size });
     return pools;
   } catch (e) {
@@ -208,7 +232,18 @@ export async function fetchKrystalUniverse(
 export const KrystalLive = Layer.succeed(KrystalService, {
   getPoolStats: (poolAddress: string): Effect.Effect<KrystalPoolStats | null, never> =>
     Effect.tryPromise(() =>
-      fetchKrystalUniverse().then((pools) => pools.get(poolAddress.toLowerCase()) ?? null),
+      fetchKrystalUniverse().then((pools) => {
+        const addr = poolAddress.toLowerCase();
+        const fresh = pools.get(addr);
+        if (fresh) return fresh;
+        // Safety: fall back to the last-known stats (up to 2h) so a pool that
+        // dropped out of the top-500 keeps its drawdown signal instead of
+        // silently disabling the rotation gate mid-crash.
+        const last = lastKnownStats.get(addr);
+        return last !== undefined && Date.now() - last.at <= LAST_KNOWN_TTL_MS
+          ? last.stats
+          : null;
+      }),
     ).pipe(Effect.catch(() => Effect.succeed(null))),
   getUniverse: (): Effect.Effect<ReadonlyMap<string, KrystalPoolStats>, never> =>
     Effect.tryPromise(() => fetchKrystalUniverse()).pipe(

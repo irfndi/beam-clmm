@@ -133,6 +133,7 @@ const v4PositionManagerAbi = parseAbi([
   "function tokenOfOwnerByIndex(address,uint256) view returns (uint256)",
   "function getPoolAndPositionInfo(uint256 tokenId) view returns ((address,address,uint24,int24,address) poolKey, uint256 positionInfo)",
   "function getPositionLiquidity(uint256 tokenId) view returns (uint128)",
+  "function poolKeys(bytes25 poolId) view returns ((address,address,uint24,int24,address) poolKey)",
 ]);
 
 /** v3 factory PoolCreated — canonical event, verified on 4663. */
@@ -1127,7 +1128,57 @@ export const AdapterLive = Layer.effect(AdapterService,
       };
     }
 
-    /** PoolKey for a registered v4 poolId, or a clear error. */
+    /**
+     * Resolve the TRUE PoolKey for a v4 poolId. The on-chain source of truth
+     * is the PositionManager's poolKeys(bytes25) — the left-aligned 25-byte
+     * truncation of the 32-byte poolId — returning the real currency0/1,
+     * fee, tickSpacing and hooks. The registry (Krystal-fed) is a fast path
+     * but its tickSpacing is a 400 stand-in: a wrong tickSpacing/fee would
+     * misalign range math and mint against the wrong pool identity, so
+     * execution NEVER trusts the approximation when the pool is on-chain.
+     */
+    async function resolveV4PoolKey(poolId: string): Promise<V4PoolKey> {
+      const id = poolId.toLowerCase();
+      const existing = V4_POOL_REGISTRY[id];
+      if (existing && existing.tickSpacing !== 400 && existing.fee > 0) {
+        return existing;
+      }
+      // bytes25: first 25 bytes of the poolId, right-padded to a 32-byte word.
+      const truncated = `${id.slice(0, 2 + 50)}${"0".repeat(14)}` as `0x${string}`;
+      try {
+        const pm = v4PositionManager();
+        const [key] = await pm.read.poolKeys([truncated]);
+        if (!key) throw new Error("poolKeys returned empty key");
+        const [c0, c1, feeRaw, spacingRaw, hooksRaw] = key;
+        // SAFETY (on-chain audit): poolKeys returns ALL-ZERO tuples for some
+        // live pools — never register a garbage key over a good one. A zero
+        // address or zero fee means the lookup failed; fail closed.
+        const ZERO = "0x0000000000000000000000000000000000000000";
+        if (
+          !c0 || !c1 || !hooksRaw ||
+          c0.toLowerCase() === ZERO || c1.toLowerCase() === ZERO ||
+          Number(feeRaw) <= 0 || Number(spacingRaw) <= 0
+        ) {
+          throw new Error("poolKeys returned an invalid/zero key");
+        }
+        const resolved: V4PoolKey = {
+          currency0: c0.toLowerCase() as `0x${string}`,
+          currency1: c1.toLowerCase() as `0x${string}`,
+          fee: Number(feeRaw),
+          tickSpacing: Number(spacingRaw),
+          hooks: hooksRaw.toLowerCase() as `0x${string}`,
+        };
+        registerV4Pool(id, resolved);
+        return resolved;
+      } catch (e) {
+        if (existing) return existing;
+        throw new Error(
+          `v4 pool ${id} key unresolved on-chain (${underlyingErrorMessage(e)})`,
+        );
+      }
+    }
+
+    /** PoolKey for a registered v4 poolId, resolved on-chain when needed. */
     function requireV4PoolKey(poolId: string): V4PoolKey {
       const key = V4_POOL_REGISTRY[poolId.toLowerCase()];
       if (!key) {
@@ -1141,7 +1192,7 @@ export const AdapterLive = Layer.effect(AdapterService,
     /** Pool state for a v4 pool (poolId) via the StateView — feeds the pure
      *  builders. PoolKey comes from the registry (poolId is one-way). */
     async function v4PoolQuoteState(poolId: string): Promise<PoolQuoteState> {
-      const key = requireV4PoolKey(poolId);
+      const key = await resolveV4PoolKey(poolId);
       const stateView = v4StateView();
       const poolIdHex = poolId.toLowerCase() as `0x${string}`;
       const [slot0, liquidity] = await Promise.all([
@@ -1642,7 +1693,11 @@ export const AdapterLive = Layer.effect(AdapterService,
         try {
           const tokenId = await pm.read.tokenOfOwnerByIndex([owner, BigInt(i)]);
           // New PM interface: poolKey + packed info, liquidity via lens call.
-          const [poolKey] = await pm.read.getPoolAndPositionInfo([tokenId]);
+          // Decode the REAL tick range from the packed positionInfo (200-bit
+          // poolId | 24-bit tickUpper | 24-bit tickLower | 8-bit subscriber) —
+          // a hardcoded 0/0 range made every v4 position permanently
+          // "out of range", firing the vol-gate EXIT on any volatility spike.
+          const [poolKey, positionInfo] = await pm.read.getPoolAndPositionInfo([tokenId]);
           const liquidity = await pm.read.getPositionLiquidity([tokenId]);
           const key: V4PoolKey = {
             currency0: poolKey[0],
@@ -1653,14 +1708,15 @@ export const AdapterLive = Layer.effect(AdapterService,
           };
           const poolId = await computeV4PoolId(key);
           if (poolFilter && poolId.toLowerCase() !== poolFilter.toLowerCase()) continue;
+          const { tickLower, tickUpper } = decodeV4PositionInfo(positionInfo);
           positions.push({
             id: tokenId.toString(),
             poolAddress: poolId,
             poolName: `v4:${poolId.slice(0, 10)}`,
             tokenX: key.currency0.toLowerCase(),
             tokenY: key.currency1.toLowerCase(),
-            lowerBinId: 0,
-            upperBinId: 0,
+            lowerBinId: tickLower,
+            upperBinId: tickUpper,
             liquidityShares: liquidity,
             depositedUsd: 0,
             currentValueUsd: 0,
@@ -1968,7 +2024,7 @@ export const AdapterLive = Layer.effect(AdapterService,
                 ? { tickLower: lowerBinId, tickUpper: upperBinId }
                 : {};
             if (isV4) {
-              const key = requireV4PoolKey(poolAddress);
+              const key = await resolveV4PoolKey(poolAddress);
               const built = buildV4MintCalldata({
                 poolKey: key,
                 sqrtPriceX96: state.sqrtPriceX96,
@@ -2104,7 +2160,7 @@ export const AdapterLive = Layer.effect(AdapterService,
             let mintTx: string;
             let newTokenId: string;
             if (reclaimed.isV4) {
-              const key = requireV4PoolKey(poolAddress);
+              const key = await resolveV4PoolKey(poolAddress);
               const built = buildV4MintCalldata({
                 poolKey: key,
                 sqrtPriceX96: state.sqrtPriceX96,
@@ -2311,7 +2367,18 @@ export const AdapterLive = Layer.effect(AdapterService,
             if (nativeBalance >= threshold) return;
             const desiredUsdg = BigInt(Math.round((swapAmountStable ?? GAS_TOP_UP_STABLECOIN) * 1e6));
             const usdgBalance = await getBalance(STABLECOIN_MINT, walletAddress);
-            const amountIn = usdgBalance < desiredUsdg ? usdgBalance : desiredUsdg;
+            // Never drain the stablecoin leg (safety audit): cap the top-up at
+            // 20% of the USDG balance so a swap failure cannot strand the
+            // wallet all-in-ETH with no stablecoin to fund positions.
+            const drainCap = (usdgBalance * 20n) / 100n;
+            const amountIn =
+              usdgBalance < desiredUsdg
+                ? drainCap < usdgBalance
+                  ? drainCap
+                  : usdgBalance
+                : desiredUsdg < drainCap
+                  ? desiredUsdg
+                  : drainCap;
             if (amountIn <= 0n) {
               logger.warn("swapUSDCForNative: no USDG balance to top up gas");
               return;

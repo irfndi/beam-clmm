@@ -48,9 +48,12 @@ export interface AppConfig {
   readonly challengeDrawdownExitPct?: number;
   readonly challengeRangeVolK?: number;
   readonly challengeMinScore?: number;
+  readonly challengeMinPoolAgeMs?: number;
   readonly challengePoolShareCapPct?: number;
   readonly challengeBookSize?: number;
   readonly challengeUniverseRefreshMs?: number;
+  readonly challengeHardFloorPct?: number;
+  readonly challengeLossCooldownMs?: number;
   readonly candidateMinHealthyScans: number;
   readonly candidateMinObservationMs: number;
   readonly candidateScanLimit: number;
@@ -578,6 +581,14 @@ const loadConfig = Effect.gen(function* () {
   );
   const challengeRangeVolK = yield* validatedNumber("CHALLENGE_RANGE_VOL_K", 0.5, 1.5);
   const challengeMinScore = yield* validatedNumber("CHALLENGE_MIN_SCORE", 0, 4);
+  // Launch-rug window: pools younger than this are EXCLUDED from ENTER even
+  // at extreme yield (the BROKERS profile: 32%/day yield AND -70% drawdown,
+  // hours old). The engine tracks first-seen time per pool.
+  const challengeMinPoolAgeMs = yield* validatedNumber(
+    "CHALLENGE_MIN_POOL_AGE_MS",
+    3_600_000,
+    6 * 3_600_000,
+  );
   const challengePoolShareCapPct = yield* validatedNumber(
     "CHALLENGE_POOL_SHARE_CAP_PCT",
     0.5,
@@ -588,6 +599,20 @@ const loadConfig = Effect.gen(function* () {
     "CHALLENGE_UNIVERSE_REFRESH_MS",
     60_000,
     300_000,
+  );
+  // Portfolio hard floor (safety audit): ALL ENTERs halt below this % of
+  // all-time peak equity (persistent in the DB). A rug sequence can otherwise
+  // drain the wallet through repeated re-deploys. Manual reset via
+  // `beam resume`-style operator action or clearing the DB key.
+  const challengeHardFloorPct = yield* validatedNumber("CHALLENGE_HARD_FLOOR_PCT", 0, 50);
+  // Per-pool loss cooldown (safety audit): after a position realizes a LOSS
+  // on a pool (trailing/drawdown exit), re-ENTER on that pool is blocked for
+  // this long — a crashing pool's stale Krystal stats must not lure capital
+  // back before its drawdown refreshes.
+  const challengeLossCooldownMs = yield* validatedNumber(
+    "CHALLENGE_LOSS_COOLDOWN_MS",
+    3_600_000,
+    6 * 3_600_000,
   );
 
   // WALLET_PRIVATE_KEY (env / .env) takes precedence; otherwise fall back to the local
@@ -736,7 +761,15 @@ const loadConfig = Effect.gen(function* () {
       }),
     );
   }
-  const scanIntervalMs = yield* validatedNumber("SCAN_INTERVAL_MS", 2_000, 600_000);
+  // CRITICAL (safety audit): the default 10-min scan cadence makes every
+  // crash-exit gate lag 10-20+ min (trailing stop needs 2 consecutive
+  // breaching cycles). Challenge mode defaults to 15s so the drawdown /
+  // trailing-stop gates react in seconds-to-minutes, not tens of minutes.
+  const scanIntervalMs = yield* validatedNumber(
+    "SCAN_INTERVAL_MS",
+    2_000,
+    challengeMode ? 15_000 : 600_000,
+  );
   const minPoolTvlUsd = yield* validatedNumber(
     "MIN_POOL_TVL_USD",
     0,
@@ -1473,9 +1506,12 @@ const loadConfig = Effect.gen(function* () {
     challengeDrawdownExitPct,
     challengeRangeVolK,
     challengeMinScore,
+    challengeMinPoolAgeMs,
     challengePoolShareCapPct,
     challengeBookSize,
     challengeUniverseRefreshMs,
+    challengeHardFloorPct,
+    challengeLossCooldownMs,
     minFeeIlRatio,
     minNativeForGasWei,
     minNativeForEntryWei,

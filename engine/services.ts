@@ -388,7 +388,7 @@ export interface AdapterApi {
     feeTransferTxSignature?: string;
   }) => Effect.Effect<void, never>;
   readonly swapUSDCForNative: (
-    minSolThreshold?: number,
+    minNativeThresholdWei?: bigint,
     swapAmountUSDC?: number,
   ) => Effect.Effect<void, never>;
   readonly getTokenBalance: (mintAddress: string) => Effect.Effect<bigint, Error>;

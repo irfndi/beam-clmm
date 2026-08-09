@@ -660,6 +660,10 @@ export interface PerPoolAllocationInput {
   readonly poolAddress: string;
   /** Max simultaneous positions allowed on the target pool. */
   readonly maxPositionsPerPool: number;
+  /** Target pool TVL (USD) — caps per-pool exposure at a % of pool TVL. */
+  readonly poolTvlUsd?: number;
+  /** Challenge pool-share cap (% of pool TVL, e.g. 10). */
+  readonly challengePoolShareCapPct?: number;
 }
 
 export interface PerPoolAllocationResult {
@@ -711,7 +715,12 @@ export function evaluatePerPoolAllocation(input: PerPoolAllocationInput): PerPoo
     };
   }
 
-  const perPoolCapUsd = Math.max(input.portfolioValueUsd * input.maxPerPoolAllocationPct, 0);
+  const portfolioCapUsd = Math.max(input.portfolioValueUsd * input.maxPerPoolAllocationPct, 0);
+  const tvlShareCapUsd =
+    input.challengePoolShareCapPct !== undefined && (input.poolTvlUsd ?? 0) > 0
+      ? Math.max(input.poolTvlUsd! * (input.challengePoolShareCapPct / 100), 0)
+      : Infinity;
+  const perPoolCapUsd = Math.min(portfolioCapUsd, tvlShareCapUsd);
   const headroomUsd = Math.max(perPoolCapUsd - existingPoolExposureUsd, 0);
   const adjusted = Math.min(input.proposedDepositUsd, headroomUsd);
 

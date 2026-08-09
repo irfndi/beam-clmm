@@ -585,6 +585,7 @@ export function estimatePaperRebalanceBenefit(args: {
 type PositionReconcileResult = {
   succeeded: boolean;
   unresolvedPoolAddresses: ReadonlySet<string>;
+  adoptedPoolAddresses: ReadonlyArray<string>;
 };
 
 function toRiskPosition(pos: PositionRecord): Position {
@@ -719,11 +720,11 @@ export function reconcilePositions(
 ): Effect.Effect<PositionReconcileResult> {
   return Effect.gen(function* () {
     if (!adapter.hasWallet()) {
-      return { succeeded: true, unresolvedPoolAddresses: new Set<string>() };
+      return { succeeded: true, unresolvedPoolAddresses: new Set<string>(), adoptedPoolAddresses: [] };
     }
     const walletAddress = adapter.getWalletAddress();
     if (!walletAddress) {
-      return { succeeded: true, unresolvedPoolAddresses: new Set<string>() };
+      return { succeeded: true, unresolvedPoolAddresses: new Set<string>(), adoptedPoolAddresses: [] };
     }
 
     const onChainPositions = yield* adapter.getAllWalletPositions(walletAddress).pipe(
@@ -739,6 +740,7 @@ export function reconcilePositions(
       return {
         succeeded: false,
         unresolvedPoolAddresses: new Set(poolsToScan),
+        adoptedPoolAddresses: [],
       };
     }
 
@@ -747,6 +749,7 @@ export function reconcilePositions(
     const onChainByPubkey = new Map(onChainPositions.map((p) => [p.positionPubKey, p]));
     const watchedPoolSet = new Set(poolsToScan);
     const unresolvedPoolAddresses = new Set<string>();
+    const adoptedPoolAddresses = new Set<string>();
 
     for (const [positionId, pos] of trackedPositions) {
       if (pos.positionPubKey && !onChainByPubkey.has(pos.positionPubKey)) {
@@ -796,7 +799,17 @@ export function reconcilePositions(
         }
         continue;
       }
-      if (watchedPoolSet.has(onChainPos.poolAddress)) {
+      // Adopt ANY on-chain position the DB doesn't track — even on a pool
+      // outside the scan set (safety audit: an unwatched orphan position has
+      // no exit gates, no fee claims, no stop-loss = unmanaged capital at
+      // full market risk). Add the pool to the scan set so it gets managed.
+      if (!watchedPoolSet.has(onChainPos.poolAddress) && !adoptedPoolAddresses.has(onChainPos.poolAddress)) {
+        adoptedPoolAddresses.add(onChainPos.poolAddress);
+        logger.warn("Reconcile: adopting orphan position on unwatched pool — adding pool to scan set", {
+          pool: onChainPos.poolAddress,
+        });
+      }
+      {
         console.warn(
           `Reconciling: discovered external position ${onChainPos.positionPubKey} in ${onChainPos.poolAddress} — adding to tracking`,
         );
@@ -853,7 +866,7 @@ export function reconcilePositions(
       }
     }
 
-    return { succeeded: true, unresolvedPoolAddresses };
+    return { succeeded: true, unresolvedPoolAddresses, adoptedPoolAddresses: [...adoptedPoolAddresses] };
   });
 }
 
@@ -1309,14 +1322,16 @@ export function executeLive(
       // value. When the balance read fails (null), skip the top-up entirely —
       // the post-swap recheck below will independently reject the ENTER if the
       // SOL balance cannot be confirmed.
-      const entryReserveNative =
-        Number(deps.minNativeForEntryWei ?? NATIVE_GAS_TOP_UP_THRESHOLD_WEI) / 1e9;
-      const preSwapSol = yield* adapter.getNativeBalance().pipe(
-        Effect.map((lamports) => Number(lamports) / 1e9),
-        Effect.catch(() => Effect.succeed(null)),
-      );
-      if (preSwapSol !== null && preSwapSol < entryReserveNative) {
-        const deficitSol = entryReserveNative - preSwapSol;
+      // Top-up in WEI end-to-end (safety audit: the old lamports-scaled
+      // numbers made the trigger threshold 1e9x too small — the top-up never
+      // fired — and the swap size 1e9x too large — it drained the whole
+      // stablecoin leg).
+      const entryReserveWei = deps.minNativeForEntryWei ?? NATIVE_GAS_TOP_UP_THRESHOLD_WEI;
+      const preSwapNativeWei = yield* adapter
+        .getNativeBalance()
+        .pipe(Effect.catch(() => Effect.succeed(null)));
+      if (preSwapNativeWei !== null && preSwapNativeWei < entryReserveWei) {
+        const deficitWei = entryReserveWei - preSwapNativeWei;
         // Prefer a live NATIVE price from the adapter's price chain over the static
         // config fallback: when the market price exceeds nativePriceUsd (default
         // $150) by more than the 20% buffer, the static value underfunds the
@@ -1328,16 +1343,17 @@ export function executeLive(
             Effect.map((prices) => prices[NATIVE_MINT]),
             Effect.catch(() => Effect.succeed(undefined)),
           );
-        const effectiveSolPrice =
+        const effectiveNativePrice =
           typeof liveNativePrice === "number" && liveNativePrice > 0
             ? liveNativePrice
             : nativePriceUsd;
+        const deficitEth = Number(deficitWei) / 1e18;
         const topUpUsdc =
-          effectiveSolPrice > 0
-            ? Math.max(GAS_TOP_UP_STABLECOIN, Math.ceil(deficitSol * effectiveSolPrice * 1.2))
+          effectiveNativePrice > 0
+            ? Math.max(GAS_TOP_UP_STABLECOIN, Math.ceil(deficitEth * effectiveNativePrice * 1.2))
             : GAS_TOP_UP_STABLECOIN;
         yield* adapter
-          .swapUSDCForNative(entryReserveNative, topUpUsdc)
+          .swapUSDCForNative(entryReserveWei, topUpUsdc)
           .pipe(Effect.catch(() => Effect.void));
       }
 
@@ -1536,6 +1552,25 @@ export function executeLive(
       let exitError: string | undefined = undefined;
       let exitResultData: Effect.Success<ReturnType<AdapterApi["exitPosition"]>> | null = null;
       if (pos?.positionPubKey) {
+        // Gas gate BEFORE EXIT (safety audit): a small wallet whose native
+        // balance dropped below exit cost fails every EXIT forever — the
+        // position stays open unmanaged. Surface a clear error (and the ENTER
+        // path's top-up is ENTER-only, so the operator must top up).
+        const exitGasFloorWei = deps.minNativeForGasWei ?? MIN_NATIVE_FOR_GAS_WEI;
+        const nativeBeforeExit = yield* adapter
+          .getNativeBalance()
+          .pipe(Effect.catch(() => Effect.succeed(null)));
+        if (nativeBeforeExit !== null && nativeBeforeExit < exitGasFloorWei) {
+          logger.warn("Live EXIT blocked: native balance below exit gas floor", {
+            pool: decision.poolAddress,
+            nativeWei: nativeBeforeExit.toString(),
+            floorWei: exitGasFloorWei.toString(),
+          });
+          return {
+            executed: false,
+            error: `Insufficient native for EXIT gas (need >= ${exitGasFloorWei} wei; have ${nativeBeforeExit.toString()})`,
+          };
+        }
         const exitResult = yield* adapter
           .exitPosition(decision.poolAddress, pos.positionPubKey)
           .pipe(
@@ -2420,6 +2455,14 @@ export const program = Effect.gen(function* () {
   // drawdown/yield gates run EVERY cycle (2-15s cadence), while the book
   // itself re-ranks on the slow universe cadence (5 min default).
   const harvestBookPools = new Set<string>();
+  // First-seen time per pool — powers the launch-rug age gate
+  // (CHALLENGE_MIN_POOL_AGE_MS excludes pools younger than 6h even at
+  // extreme yield: the BROKERS profile, 32%/day yield AND -70% drawdown).
+  const poolFirstSeenAt = new Map<string, number>();
+  // Challenge safety (audit): all-time peak equity for the hard floor
+  // (persisted in DB metadata) + per-pool loss cooldown blocking re-entry.
+  let challengePeakEquityUsd = 0;
+  const challengeLossCooldownUntil = new Map<string, number>();
   let lastHarvestBookRefreshAt = 0;
   const refreshHarvestBook = (): Effect.Effect<void, never, never> =>
     Effect.gen(function* () {
@@ -2573,6 +2616,13 @@ export const program = Effect.gen(function* () {
     for (const pos of trackedPositions.values()) {
       if (!poolsToScan.includes(pos.poolAddress)) {
         poolsToScan.push(pos.poolAddress);
+      }
+    }
+    // Orphan positions adopted on unwatched pools join the scan set so their
+    // exit/fee gates actually run (safety audit).
+    for (const poolAddress of reconcileResult.adoptedPoolAddresses) {
+      if (!poolsToScan.includes(poolAddress)) {
+        poolsToScan.push(poolAddress);
       }
     }
   };
@@ -3098,6 +3148,10 @@ export const program = Effect.gen(function* () {
           maxOpenPositions: config.maxOpenPositions,
           poolAddress: candidate.poolAddress,
           maxPositionsPerPool: config.maxPositionsPerPool,
+          poolTvlUsd: candidate.pool?.tvlUsd,
+          ...(config.challengePoolShareCapPct !== undefined
+            ? { challengePoolShareCapPct: config.challengePoolShareCapPct }
+            : {}),
         });
         if (!allocation.approved) {
           idleRedeployLogger.info("Idle redeploy capped by allocation", {
@@ -4023,6 +4077,30 @@ export const program = Effect.gen(function* () {
         lastWalletBalanceUsd = config.paperPortfolioUsd;
       }
 
+      // Challenge hard floor (safety audit): track all-time peak equity and
+      // persist it — a rug sequence must not re-deploy the wallet into more
+      // losses below the floor. Loaded at boot from the DB; updated here.
+      if (config.challengeMode === true && challengePeakEquityUsd <= 0) {
+        const persistedPeak = yield* db.getMetadata("challenge_peak_equity_usd").pipe(
+          Effect.catch(() => Effect.succeed(null)),
+        );
+        const parsed = persistedPeak !== null ? Number(persistedPeak) : 0;
+        challengePeakEquityUsd = Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
+      }
+      if (config.challengeMode === true) {
+        const positionsValueUsd = Array.from(trackedPositions.values()).reduce(
+          (sum, p) => sum + p.currentValueUsd,
+          0,
+        );
+        const portfolioUsd = lastWalletBalanceUsd + positionsValueUsd;
+        if (portfolioUsd > challengePeakEquityUsd) {
+          challengePeakEquityUsd = portfolioUsd;
+          yield* db
+            .setMetadata("challenge_peak_equity_usd", String(Math.round(challengePeakEquityUsd)))
+            .pipe(Effect.catch(() => Effect.void));
+        }
+      }
+
       // Issue #170: batch wallet-reserve gate — refresh the per-cycle native
       // SOL budget for SOL-funded entries. One read, reused by every ENTER
       // gate this cycle; a failed read leaves the budget UNKNOWN and the gate
@@ -4454,6 +4532,7 @@ export const program = Effect.gen(function* () {
   ): Effect.Effect<ReadonlyArray<AgentDecision>, Error, never> =>
     Effect.gen(function* () {
       const cycleId = cycle.cycleId;
+      if (!poolFirstSeenAt.has(poolAddress)) poolFirstSeenAt.set(poolAddress, Date.now());
       const rawPool = yield* adapter.getPoolState(poolAddress);
       const binArray = yield* adapter.getBinArray(poolAddress);
       pushBinHistory(poolAddress, rawPool.activeBinId);
@@ -5069,34 +5148,18 @@ export const program = Effect.gen(function* () {
         // Challenge drawdown gate FIRST: a held position on a pool whose
         // measured 24h drawdown breached the exit threshold closes this cycle
         // (capital protection on meme harvest pools — the dominant loss term
-        // is token decay, not fees). 'halve' de-risks by rebalancing to a
-        // tighter (k×0.5) range instead of closing.
+        // is token decay, not fees). The 'halve' tier ALSO exits (safety
+        // audit: a range-tighten rebalance does not de-risk dollars, just
+        // pays friction into a falling range — the strategy erring to
+        // capital protection).
         if (challengeRotation !== null && challengeRotation.action !== "hold") {
-          if (challengeRotation.action === "exit") {
-            decision = {
-              action: "EXIT",
-              poolAddress,
-              positionId: pos.positionId,
-              confidence: 0.95,
-              reasoning: `[challenge-rotation] ${challengeRotation.reason}`,
-            };
-          } else if (
-            challengeRotation.action === "halve" &&
-            Date.now() - pos.lastRebalanceAt >= config.minRebalanceIntervalMs
-          ) {
-            decision = {
-              action: "REBALANCE",
-              poolAddress,
-              positionId: pos.positionId,
-              confidence: 0.8,
-              reasoning: `[challenge-rotation] ${challengeRotation.reason} — tightening range`,
-              rebalanceParams: {
-                newLowerBinId: pool.activeBinId - Math.max(1, Math.round((challengeRange?.halfWidth ?? 20) * 0.5)),
-                newUpperBinId: pool.activeBinId + Math.max(1, Math.round((challengeRange?.halfWidth ?? 20) * 0.5)),
-                slippageBps: 50,
-              },
-            };
-          }
+          decision = {
+            action: "EXIT",
+            poolAddress,
+            positionId: pos.positionId,
+            confidence: challengeRotation.action === "exit" ? 0.95 : 0.85,
+            reasoning: `[challenge-rotation] ${challengeRotation.reason}`,
+          };
         }
 
         // IL-dominance pre-check: computed once before the exit chain so the
@@ -5963,6 +6026,10 @@ export const program = Effect.gen(function* () {
               maxOpenPositions: config.maxOpenPositions,
               poolAddress,
               maxPositionsPerPool: config.maxPositionsPerPool,
+              poolTvlUsd: pool.tvlUsd,
+              ...(config.challengePoolShareCapPct !== undefined
+                ? { challengePoolShareCapPct: config.challengePoolShareCapPct }
+                : {}),
             });
             if (!faAllocation.approved) {
               console.info(
@@ -6064,7 +6131,27 @@ export const program = Effect.gen(function* () {
             binUtilization > 0.4 &&
             pool.tvlUsd > config.minPoolTvlUsd * 2 &&
             (config.challengeMode !== true ||
-              challengePoolScore(pool).score >= (config.challengeMinScore ?? 4))
+              challengePoolScore(pool).score >= (config.challengeMinScore ?? 4)) &&
+            // Launch-rug gate: pools younger than CHALLENGE_MIN_POOL_AGE_MS
+            // (default 6h) are excluded even at extreme yield — the BROKERS
+            // profile (32%/day yield AND -70% drawdown within hours).
+            (config.challengeMode !== true ||
+              Date.now() - (poolFirstSeenAt.get(poolAddress) ?? Date.now()) >=
+                (config.challengeMinPoolAgeMs ?? 6 * 3_600_000)) &&
+            // Portfolio hard floor (safety audit): no ENTERs below the floor
+            // % of all-time peak equity — a rug sequence must not drain the
+            // wallet through repeated re-deploys.
+            (config.challengeMode !== true ||
+              challengePeakEquityUsd <= 0 ||
+              portfolioValueUsd >=
+                challengePeakEquityUsd * ((config.challengeHardFloorPct ?? 50) / 100)) &&
+            // Per-pool loss cooldown (safety audit): a pool that realized a
+            // loss (trailing/drawdown exit) is barred from re-entry until its
+            // stale Krystal drawdown has had time to refresh — a still-crashing
+            // pool must not lure capital back.
+            (config.challengeMode !== true ||
+              !challengeLossCooldownUntil.has(poolAddress) ||
+              Date.now() >= (challengeLossCooldownUntil.get(poolAddress) ?? 0))
           ) {
             const entryScore = weightedEntryScore(metrics, signalWeights);
             if (entryScore <= config.weightedEntryScoreThreshold) {
@@ -6104,6 +6191,10 @@ export const program = Effect.gen(function* () {
                 maxOpenPositions: config.maxOpenPositions,
                 poolAddress,
                 maxPositionsPerPool: config.maxPositionsPerPool,
+                poolTvlUsd: pool.tvlUsd,
+                ...(config.challengePoolShareCapPct !== undefined
+                  ? { challengePoolShareCapPct: config.challengePoolShareCapPct }
+                  : {}),
               });
               if (!allocation.approved) {
                 console.info(`[alloc-gate] Skipping ENTER ${poolAddress} — ${allocation.reason}`);
@@ -7248,6 +7339,20 @@ export const program = Effect.gen(function* () {
           // agent-adjusted) so the redeploy pass cannot re-enter this pool the
           // same cycle once the freed slot re-passes the position-count checks.
           executedExitPools.add(poolAddress);
+          // Challenge loss cooldown (safety audit): a pool that realized a
+          // LOSS (trailing/drawdown exit) is barred from re-entry for
+          // CHALLENGE_LOSS_COOLDOWN_MS — its stale Krystal drawdown must not
+          // lure capital back while it is still crashing.
+          if (
+            config.challengeMode === true &&
+            pos?.realizedPnlUsd !== null &&
+            (pos?.realizedPnlUsd ?? 0) < 0
+          ) {
+            challengeLossCooldownUntil.set(
+              poolAddress,
+              Date.now() + (config.challengeLossCooldownMs ?? 6 * 3_600_000),
+            );
+          }
           yield* alertSvc.sendAlert({
             type: "exit_executed",
             severity: "critical",
