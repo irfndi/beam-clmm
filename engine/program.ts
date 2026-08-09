@@ -218,11 +218,11 @@ const readEngineStatusApiKey = (): string | null => {
 
 /**
  * Post the engine's current status to the Beam Cloud API so the Telegram bot's
- * /status command can serve real data. Runs fully inside the Effect boundary
- * (filesystem read + HTTP request) and never fails — a missing API key or a
- * transient network error is logged and swallowed so it can never block the scan
- * cycle or the shutdown path. Mirrors the fire-and-forget `reportFeeCollection`
- * reporting pattern in this file.
+ * /status and /portfolio commands can serve real data. Runs fully inside the
+ * Effect boundary (filesystem read + HTTP request) and never fails — a missing
+ * API key or a transient network error is logged and swallowed so it can never
+ * block the scan cycle or the shutdown path. Mirrors the fire-and-forget
+ * `reportFeeCollection` reporting pattern in this file.
  */
 function postEngineStatus(
   status: "running" | "stopped",
@@ -234,6 +234,17 @@ function postEngineStatus(
     confidence: number;
     reasoning: string;
     executed: boolean;
+  }>,
+  trades?: ReadonlyArray<{
+    id: string;
+    poolAddress: string;
+    side: "open" | "closed";
+    depositedUsd: number;
+    valueUsd: number;
+    pnlUsd: number;
+    feesUsd: number;
+    openedAt: number;
+    exitedAt: number | null;
   }>,
 ): Effect.Effect<void> {
   const DEFAULT_API_BASE_URL = "https://beam-api.irfndi.workers.dev";
@@ -249,7 +260,7 @@ function postEngineStatus(
           "Content-Type": "application/json",
           Authorization: `Bearer ${apiKey}`,
         },
-        body: JSON.stringify({ status, positions, pnl: unrealizedPnlUsd, decisions }),
+        body: JSON.stringify({ status, positions, pnl: unrealizedPnlUsd, decisions, trades }),
         signal: AbortSignal.timeout(TIMEOUT_MS),
       }),
     );
@@ -4341,15 +4352,43 @@ export const program = Effect.gen(function* () {
             p.depositedUsd;
         }
         yield* Effect.forkChild(
-          postEngineStatus("running", trackedPositions.size, pnl, cycle.decisions.map((d) => ({
-            poolAddress: d.poolAddress,
-            action: d.action,
-            confidence: d.confidence,
-            reasoning: d.reasoning,
-            // Decisions are pre-execution records; the snapshot's position
-            // count reflects what actually executed.
-            executed: false,
-          }))),
+          postEngineStatus(
+            "running",
+            trackedPositions.size,
+            pnl,
+            cycle.decisions.map((d) => ({
+              poolAddress: d.poolAddress,
+              action: d.action,
+              confidence: d.confidence,
+              reasoning: d.reasoning,
+              // Decisions are pre-execution records; the snapshot's position
+              // count reflects what actually executed.
+              executed: false,
+            })),
+            // Portfolio ledger: one row per tracked position, so the deployed
+            // operator surface (API /portfolio, Telegram /portfolio) serves the
+            // same trade-level P&L the local DB shows. Replaced wholesale every
+            // cycle; the report stores it inside the snapshot's details JSON.
+            Array.from(trackedPositions.values()).map((p) => ({
+              id: p.positionId,
+              poolAddress: p.poolAddress,
+              side: p.paperExitedAt != null || p.closedAt != null ? "closed" : "open",
+              depositedUsd: p.depositedUsd,
+              valueUsd: p.currentValueUsd,
+              // Closed positions carry realized P&L (exit value - entry); open
+              // ones report the current unrealized mark (matches the aggregate
+              // `pnl` above, which includes claimed fees + rewards).
+              pnlUsd:
+                p.realizedPnlUsd ??
+                p.currentValueUsd +
+                  p.cumulativeFeesClaimedUsd +
+                  p.cumulativeRewardsClaimedUsd -
+                  p.depositedUsd,
+              feesUsd: p.cumulativeFeesClaimedUsd,
+              openedAt: p.timestamp,
+              exitedAt: p.paperExitedAt ?? p.closedAt,
+            })),
+          ),
         ).pipe(
           Effect.asVoid,
         );

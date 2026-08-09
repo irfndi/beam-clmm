@@ -136,6 +136,82 @@ describe("Engine state surface (D1)", () => {
     expect(body.decisions.map((d) => d.action).sort()).toEqual(["ENTER", "HOLD"]);
   });
 
+  it("round-trips the trade ledger through the portfolio surface", async () => {
+    const ctx = createExecutionContext();
+    const trades = [
+      {
+        id: "paper-1",
+        poolAddress: "0x52e65b17fb6e5ba00ed806f37afcd2daa50271ca",
+        side: "open" as const,
+        depositedUsd: 500,
+        valueUsd: 501.25,
+        pnlUsd: 1.25,
+        feesUsd: 0.02,
+        openedAt: 1786200000000,
+        exitedAt: null,
+      },
+      {
+        id: "paper-2",
+        poolAddress: "0xa9188730fe85be88ad499d7d52b099e800fb0334",
+        side: "closed" as const,
+        depositedUsd: 218.47,
+        valueUsd: 220.17,
+        pnlUsd: 1.7,
+        feesUsd: 0,
+        openedAt: 1786200000000,
+        exitedAt: 1786280000000,
+      },
+    ];
+    const report = buildRequest(
+      "POST",
+      "/v1/agent-status/report",
+      { status: "running", positions: 2, pnl: 2.95, trades },
+      { Authorization: `Bearer ${apiKey}` },
+    );
+    const reportResponse = await worker.fetch(report, testEnv, ctx);
+    expect(reportResponse.status).toBe(200);
+
+    // Dedicated portfolio endpoint: trades + derived stats.
+    const portfolio = buildRequest("GET", "/v1/engine/portfolio", undefined, {
+      Authorization: `Bearer ${apiKey}`,
+    });
+    const portfolioResponse = await worker.fetch(portfolio, testEnv, ctx);
+    expect(portfolioResponse.status).toBe(200);
+    const portfolioBody = (await portfolioResponse.json()) as {
+      trades: ReadonlyArray<{ id: string; side: string }>;
+      stats: {
+        totalPositions: number;
+        open: number;
+        closed: number;
+        deployedUsd: number;
+        realizedPnl: number;
+        unrealizedPnl: number;
+        feesClaimedUsd: number;
+        totalPnl: number;
+      };
+    };
+    expect(portfolioBody.trades).toHaveLength(2);
+    expect(portfolioBody.stats).toEqual({
+      totalPositions: 2,
+      open: 1,
+      closed: 1,
+      deployedUsd: 500,
+      realizedPnl: 1.7,
+      unrealizedPnl: 1.25,
+      feesClaimedUsd: 0.02,
+      totalPnl: 2.95,
+    });
+
+    // The state endpoint carries the same ledger.
+    const state = buildRequest("GET", "/v1/engine/state", undefined, {
+      Authorization: `Bearer ${apiKey}`,
+    });
+    const stateBody = (await (await worker.fetch(state, testEnv, ctx)).json()) as {
+      trades: ReadonlyArray<{ id: string }>;
+    };
+    expect(stateBody.trades.map((t) => t.id).sort()).toEqual(["paper-1", "paper-2"]);
+  });
+
   it("rejects unauthenticated reads and reports", async () => {
     const ctx = createExecutionContext();
     const badReport = buildRequest("POST", "/v1/agent-status/report", {

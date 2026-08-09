@@ -272,6 +272,7 @@ function handleHelp(botToken: string, chatId: number): Effect.Effect<void, never
       `/link - Link existing account\n` +
       `/whoami - Show your account info\n` +
       `/status - Check agent status\n` +
+      `/portfolio - Trade P&L and position summary\n` +
       `/alerts on|off - Toggle proactive alerts\n` +
       `/help - Show this help\n\n` +
       `For more info: https://github.com/irfndi/beam-clmm`,
@@ -348,6 +349,89 @@ function handleStatus(
   });
 }
 
+// Handle `/portfolio` — trade-level P&L ledger + aggregates, served by the API
+// worker from the latest engine snapshot (bot-auth, same path as /status).
+function handlePortfolio(
+  apiBaseUrl: string,
+  botToken: string,
+  chatId: number,
+  telegramId: string,
+  botApiSecret?: string,
+  fetcher?: Fetcher,
+): Effect.Effect<void, never> {
+  return Effect.gen(function* () {
+    const result = yield* callBeamApi(
+      apiBaseUrl,
+      "/v1/agent-status",
+      {
+        telegram_id: telegramId,
+      },
+      botApiSecret,
+      fetcher,
+    );
+
+    if (!result.ok || !result.data) {
+      yield* sendMessage(botToken, chatId, `Agent not running or not linked.`);
+      return;
+    }
+
+    const data = result.data as {
+      status: string;
+      positions: number;
+      pnl: number;
+      trades?: Array<{
+        poolAddress: string;
+        side: "open" | "closed";
+        depositedUsd: number;
+        valueUsd: number;
+        pnlUsd: number;
+        feesUsd: number;
+        openedAt: number;
+      }>;
+      stats?: {
+        totalPositions: number;
+        open: number;
+        closed: number;
+        deployedUsd: number;
+        realizedPnl: number;
+        unrealizedPnl: number;
+        feesClaimedUsd: number;
+        totalPnl: number;
+      };
+    };
+    const stats = data.stats;
+    if (!stats || stats.totalPositions === 0) {
+      yield* sendMessage(
+        botToken,
+        chatId,
+        `Portfolio:\n\nNo positions yet. The engine has no active or closed trades for this account.`,
+      );
+      return;
+    }
+
+    const sign = (n: number) => (n >= 0 ? `+$${n.toFixed(2)}` : `-$${Math.abs(n).toFixed(2)}`);
+    const lines = (data.trades ?? [])
+      .slice(0, 10)
+      .map((t) => {
+        const pool = t.poolAddress.slice(0, 8);
+        const pnl = sign(t.pnlUsd);
+        return `<code>${pool}…</code> ${t.side === "closed" ? "CLOSED" : "OPEN  "} ${pnl}`;
+      })
+      .join("\n");
+
+    yield* sendMessage(
+      botToken,
+      chatId,
+      `Portfolio (${escapeHtml(data.status)}):\n\n` +
+        `Open: ${stats.open} · Closed: ${stats.closed} · Total: ${stats.totalPositions}\n` +
+        `Deployed: $${stats.deployedUsd.toFixed(2)}\n` +
+        `Realized: ${sign(stats.realizedPnl)} · Unrealized: ${sign(stats.unrealizedPnl)}\n` +
+        `Fees claimed: $${stats.feesClaimedUsd.toFixed(2)} · Total P&L: ${sign(stats.totalPnl)}\n\n` +
+        (lines ? `${lines}` : ``),
+    );
+  });
+}
+
 // Handle `/alerts on|off` — toggles proactive alert delivery for the linked account.
 function handleAlerts(
   apiBaseUrl: string,
@@ -398,7 +482,7 @@ function handleAlerts(
 
 // Commands that return credentials or account data are private-chat only —
 // in groups the reply (and any API key) would be visible to every member.
-const PRIVATE_ONLY_COMMANDS = new Set(["/register", "/whoami", "/status", "/link", "/alerts"]);
+const PRIVATE_ONLY_COMMANDS = new Set(["/register", "/whoami", "/status", "/portfolio", "/link", "/alerts"]);
 
 // Process incoming Telegram update
 function processUpdate(
@@ -464,6 +548,16 @@ function processUpdate(
           break;
         case "/status":
           yield* handleStatus(
+            env.API_BASE_URL,
+            env.TELEGRAM_BOT_TOKEN,
+            chatId,
+            telegramId,
+            env.BOT_API_SECRET,
+            env.API_SERVICE,
+          );
+          break;
+        case "/portfolio":
+          yield* handlePortfolio(
             env.API_BASE_URL,
             env.TELEGRAM_BOT_TOKEN,
             chatId,

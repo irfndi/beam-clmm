@@ -660,6 +660,74 @@ export interface EngineDecisionRow {
   readonly executed: boolean;
 }
 
+/** One portfolio trade row, as pushed by the engine inside the report's
+ *  details JSON (`{ decisions, trades }`). Mirrors the engine's ledger shape. */
+export interface EngineTradeRow {
+  readonly id: string;
+  readonly poolAddress: string;
+  readonly side: "open" | "closed";
+  readonly depositedUsd: number;
+  readonly valueUsd: number;
+  readonly pnlUsd: number;
+  readonly feesUsd: number;
+  readonly openedAt: number;
+  readonly exitedAt: number | null;
+}
+
+/** Parse the trades array out of a stored snapshot's details JSON. Null-safe:
+ *  older snapshots predate the ledger, and a malformed blob must not 500 the
+ *  read surface. */
+const parseTradesFromDetails = (details: string | null): EngineTradeRow[] => {
+  if (!details) return [];
+  try {
+    const parsed = JSON.parse(details) as { trades?: unknown };
+    if (!Array.isArray(parsed.trades)) return [];
+    return parsed.trades.filter(
+      (t): t is EngineTradeRow =>
+        typeof t === "object" &&
+        t !== null &&
+        typeof (t as EngineTradeRow).id === "string" &&
+        typeof (t as EngineTradeRow).poolAddress === "string" &&
+        ((t as EngineTradeRow).side === "open" || (t as EngineTradeRow).side === "closed"),
+    );
+  } catch {
+    return [];
+  }
+};
+
+/** Aggregate stats derived from the portfolio ledger. Cheap: single pass. */
+const computePortfolioStats = (trades: EngineTradeRow[]) => {
+  let open = 0;
+  let closed = 0;
+  let deployedUsd = 0;
+  let realizedPnl = 0;
+  let unrealizedPnl = 0;
+  let feesClaimedUsd = 0;
+  for (const t of trades) {
+    const pnl = Number.isFinite(t.pnlUsd) ? t.pnlUsd : 0;
+    const fees = Number.isFinite(t.feesUsd) ? t.feesUsd : 0;
+    feesClaimedUsd += fees;
+    if (t.side === "closed") {
+      closed += 1;
+      realizedPnl += pnl;
+    } else {
+      open += 1;
+      deployedUsd += Number.isFinite(t.depositedUsd) ? t.depositedUsd : 0;
+      unrealizedPnl += pnl;
+    }
+  }
+  return {
+    totalPositions: trades.length,
+    open,
+    closed,
+    deployedUsd: Math.round(deployedUsd * 100) / 100,
+    realizedPnl: Math.round(realizedPnl * 100) / 100,
+    unrealizedPnl: Math.round(unrealizedPnl * 100) / 100,
+    feesClaimedUsd: Math.round(feesClaimedUsd * 100) / 100,
+    totalPnl: Math.round((realizedPnl + unrealizedPnl) * 100) / 100,
+  };
+};
+
 const agentStatusHandler = (db: D1Database, cache: KVNamespace, telegramId: string) =>
   Effect.gen(function* () {
     const result = yield* Effect.tryPromise(() =>
@@ -672,8 +740,21 @@ const agentStatusHandler = (db: D1Database, cache: KVNamespace, telegramId: stri
 
     const userId = typeof result.id === "string" ? result.id : null;
     if (!userId) {
-      return { status: "not_running", positions: 0, pnl: 0 };
+      return { status: "not_running", positions: 0, pnl: 0, trades: [], stats: computePortfolioStats([]) };
     }
+
+    // Portfolio ledger comes from D1 (the deployed system of record for the
+    // engine state surface): the latest snapshot's details JSON carries the
+    // engine's per-position trade rows.
+    const latest = yield* Effect.tryPromise(() =>
+      db
+        .prepare(
+          `SELECT details FROM engine_snapshots WHERE agent_id = ? ORDER BY reported_at DESC LIMIT 1`,
+        )
+        .bind(userId)
+        .first<{ details: string | null }>(),
+    ).pipe(Effect.catch(() => Effect.succeed(null)));
+    const trades = parseTradesFromDetails(latest?.details ?? null);
 
     // Try KV first for the latest engine heartbeat.
     const cached = yield* Effect.tryPromise(() => cache.get(`agent_status:${userId}`)).pipe(
@@ -692,13 +773,21 @@ const agentStatusHandler = (db: D1Database, cache: KVNamespace, telegramId: stri
           status: parsed.status,
           positions: parsed.positions,
           pnl: parsed.pnl,
+          trades,
+          stats: computePortfolioStats(trades),
         };
       } catch {
         // Malformed JSON — fall through to not_running.
       }
     }
 
-    return { status: "not_running", positions: 0, pnl: 0 };
+    return {
+      status: "not_running",
+      positions: 0,
+      pnl: 0,
+      trades,
+      stats: computePortfolioStats(trades),
+    };
   });
 
 // Engine status report (called by the engine itself via its API key).
@@ -714,7 +803,7 @@ const agentStatusReportHandler = (db: D1Database, cache: KVNamespace, apiKey: st
         status: string,
         positions: number,
         pnl: number,
-        details?: { decisions?: ReadonlyArray<EngineDecisionRow> },
+        details?: { decisions?: ReadonlyArray<EngineDecisionRow>; trades?: ReadonlyArray<EngineTradeRow> },
       ) =>
         Effect.tryPromise(() => {
           const now = Date.now();
@@ -733,7 +822,7 @@ const agentStatusReportHandler = (db: D1Database, cache: KVNamespace, apiKey: st
                 status,
                 positions,
                 pnl,
-                details ? JSON.stringify(details) : null,
+                details ? JSON.stringify({ decisions: details.decisions ?? [], trades: details.trades ?? [] }) : null,
               )
               .run(),
           ];
@@ -1170,6 +1259,7 @@ app.get("/v1/engine/state", async (c) => {
                 positions: snapshot.positions,
                 pnl: snapshot.pnl,
               },
+        trades: snapshot === null ? [] : parseTradesFromDetails(snapshot.details),
         decisions: (decisions.results ?? []).map((d) => ({
           reportedAt: d.reported_at,
           poolAddress: d.pool_address,
@@ -1185,6 +1275,63 @@ app.get("/v1/engine/state", async (c) => {
           const message = cause instanceof Error ? cause.message : String(cause);
           console.error("engine/state failed", { err: message });
           return c.json({ error: "Failed to read engine state" }, 500);
+        },
+        onSuccess: (response) => response,
+      }),
+    ),
+  );
+});
+
+// Portfolio surface — the trade-level P&L ledger the engine pushes inside each
+// snapshot's details JSON. Reads the latest snapshot from D1 and derives
+// aggregate stats on the fly (no separate table; the ledger is replaced
+// wholesale every cycle). Auth: same Bearer API key as /v1/engine/state.
+app.get("/v1/engine/portfolio", async (c) => {
+  const { DB } = c.env;
+  const apiKey = c.get("apiKey") as string;
+  if (!apiKey) {
+    return c.json({ error: "API key required" }, 401);
+  }
+
+  return Effect.runPromise(
+    Effect.gen(function* () {
+      const loginResult = yield* loginHandler(DB, apiKey);
+      const userId = (loginResult as { id: string }).id;
+      const snapshot = yield* Effect.tryPromise(() =>
+        DB.prepare(
+          `SELECT reported_at, status, positions, pnl, details
+           FROM engine_snapshots WHERE agent_id = ? ORDER BY reported_at DESC LIMIT 1`,
+        )
+          .bind(userId)
+          .first<{
+            reported_at: number;
+            status: string;
+            positions: number;
+            pnl: number;
+            details: string | null;
+          }>(),
+      );
+      const trades = parseTradesFromDetails(snapshot?.details ?? null);
+      return c.json({
+        ok: true,
+        reportedAt: snapshot?.reported_at ?? null,
+        snapshot:
+          snapshot === null
+            ? null
+            : {
+                status: snapshot.status,
+                positions: snapshot.positions,
+                pnl: snapshot.pnl,
+              },
+        trades,
+        stats: computePortfolioStats(trades),
+      });
+    }).pipe(
+      Effect.match({
+        onFailure: (cause) => {
+          const message = cause instanceof Error ? cause.message : String(cause);
+          console.error("engine/portfolio failed", { err: message });
+          return c.json({ error: "Failed to read portfolio" }, 500);
         },
         onSuccess: (response) => response,
       }),
@@ -1209,6 +1356,7 @@ app.post("/v1/agent-status/report", async (c) => {
       positions?: number;
       pnl?: number;
       decisions?: ReadonlyArray<EngineDecisionRow>;
+      trades?: ReadonlyArray<EngineTradeRow>;
     }>(c.req),
   );
 
@@ -1235,6 +1383,7 @@ app.post("/v1/agent-status/report", async (c) => {
       );
       yield* handler.storeStatus(body.status!, positions, pnl, {
         decisions: body.decisions ?? [],
+        trades: body.trades ?? [],
       });
       return c.json({ ok: true });
     }).pipe(
