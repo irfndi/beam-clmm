@@ -1842,16 +1842,28 @@ export const AdapterLive = Layer.effect(AdapterService,
           fromBlock: 0n,
         })
         .catch(() => []);
-      const received = new Map<string, bigint>();
-      for (const log of toWallet) {
-        if (log.args.id === undefined) continue;
-        received.set(log.args.id.toString(), log.args.id);
+      // Last-transfer-wins per id (NOT a net to−from set): a position that
+      // left the wallet and came back (or was self-transferred) has BOTH from
+      // and to events — the set version drops it and the 15-min re-scan can
+      // never recover it, leaving that position with no exit gate or fee
+      // claim. Ownership = the LATEST transfer event's recipient. Logs are
+      // ordered within a block, so (blockNumber, logIndex) is a total order.
+      const latest = new Map<string, { to: string; order: bigint }>();
+      for (const log of [...toWallet, ...fromWallet]) {
+        const id = log.args.id;
+        const to = log.args.to;
+        if (id === undefined || to === undefined) continue;
+        const order =
+          (log.blockNumber ?? 0n) * 1_000_000n + BigInt(log.logIndex ?? 0);
+        const prev = latest.get(id.toString());
+        if (prev === undefined || order > prev.order) {
+          latest.set(id.toString(), { to: getAddress(to), order });
+        }
       }
-      for (const log of fromWallet) {
-        if (log.args.id === undefined) continue;
-        received.delete(log.args.id.toString());
-      }
-      const owned = [...received.values()];
+      const walletAddress = getAddress(owner);
+      const owned = [...latest.entries()]
+        .filter(([, v]) => v.to === walletAddress)
+        .map(([id]) => BigInt(id));
       v4OwnedIdsCache.set(owner.toLowerCase(), { ids: owned, balance, scannedAt: Date.now() });
       logger.info("v4 position enumeration complete", {
         owner: owner.slice(0, 10),
