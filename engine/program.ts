@@ -3729,11 +3729,11 @@ export const program = Effect.gen(function* () {
               });
               if (!entrySolBudgetKnown || neededLamports > entrySolBudgetLamports) {
                 const budgetHuman = entrySolBudgetKnown
-                  ? (Number(entrySolBudgetLamports) / 1e9).toFixed(4)
+                  ? (Number(entrySolBudgetLamports) / 1e18).toFixed(4)
                   : "unknown";
-                const neededHuman = (Number(neededLamports) / 1e9).toFixed(4);
+                const neededHuman = (Number(neededLamports) / 1e18).toFixed(4);
                 idleRedeployLogger.info(
-                  "Idle redeploy skipped — free SOL below entry estimate (wallet reserve)",
+                  "Idle redeploy skipped — free ETH below entry estimate (wallet reserve)",
                   {
                     pool: candidate.poolAddress,
                     freeSol: budgetHuman,
@@ -3741,7 +3741,7 @@ export const program = Effect.gen(function* () {
                   },
                 );
                 yield* recordRedeploySkip(
-                  `[idle-redeploy] skipped — free SOL ${budgetHuman} < needed ${neededHuman} (wallet-reserve gate, capacity-limited)`,
+                  `[idle-redeploy] skipped — free ETH ${budgetHuman} < needed ${neededHuman} (wallet-reserve gate, capacity-limited)`,
                   "[idle-redeploy] wallet SOL reserve insufficient",
                 );
                 yield* finalizeAppliedProposal(
@@ -4235,8 +4235,8 @@ export const program = Effect.gen(function* () {
             const breakdown: Array<{ mint: string; amount: string }> = [];
             if (nativeSolLamports > 0n) {
               breakdown.push({
-                mint: "(native SOL)",
-                amount: (Number(nativeSolLamports) / 1e9).toFixed(6),
+                mint: "(native ETH)",
+                amount: (Number(nativeSolLamports) / 1e18).toFixed(6),
               });
             }
             for (const [mint, bal] of holdings.entries()) {
@@ -7138,7 +7138,7 @@ export const program = Effect.gen(function* () {
         // batch drain the wallet and every later entry fails
         // INSUFFICIENT_BALANCE_AFTER_SWAP — arming the execution_failures
         // safety pause and pausing the whole agent. Gate each live ENTER
-        // against the per-cycle SOL budget (free SOL = wallet SOL minus gas
+        // against the per-cycle SOL budget (free ETH = wallet SOL minus gas
         // reserve, refreshed after every live mutation): entries that do not
         // fit are SKIPPED as capacity-limited (audited, never counted as
         // execution failures), and the pool re-qualifies next cycle. Pools
@@ -7155,10 +7155,10 @@ export const program = Effect.gen(function* () {
             });
             if (!entrySolBudgetKnown || neededLamports > entrySolBudgetLamports) {
               const budgetHuman = entrySolBudgetKnown
-                ? (Number(entrySolBudgetLamports) / 1e9).toFixed(4)
+                ? (Number(entrySolBudgetLamports) / 1e18).toFixed(4)
                 : "unknown";
-              const neededHuman = (Number(neededLamports) / 1e9).toFixed(4);
-              const reason = `[wallet-reserve] free SOL ${budgetHuman} < needed ${neededHuman} — entry skipped (capacity-limited, not an error)`;
+              const neededHuman = (Number(neededLamports) / 1e18).toFixed(4);
+              const reason = `[wallet-reserve] free ETH ${budgetHuman} < needed ${neededHuman} — entry skipped (capacity-limited, not an error)`;
               yield* audit
                 .recordDecision({
                   timestamp: Date.now(),
@@ -7176,7 +7176,7 @@ export const program = Effect.gen(function* () {
               yield* memory
                 .upsert({
                   category: "warning",
-                  content: `Entry skipped for ${poolAddress}: free SOL ${budgetHuman} < needed ${neededHuman} — wallet cannot fund the batch; skipped without retry backoff.`,
+                  content: `Entry skipped for ${poolAddress}: free ETH ${budgetHuman} < needed ${neededHuman} — wallet cannot fund the batch; skipped without retry backoff.`,
                   poolAddress,
                 })
                 .pipe(Effect.catch(() => Effect.void));
