@@ -2469,6 +2469,23 @@ export const AdapterLive = Layer.effect(AdapterService,
               decimals0 = state.token0Decimals;
               decimals1 = state.token1Decimals;
             }
+            // Gas leak guard (clawpatch audit + operator report): a collect on
+            // a position with NO owed fees still burns gas. The v3 NPM's
+            // positions() exposes tokensOwed0/tokensOwed1 — skip the broadcast
+            // entirely when both are zero (v4 has no readable owed amounts on
+            // this PM's info encoding; its claims are interval-gated anyway).
+            if (!isV4 && expected0 === 0n && expected1 === 0n) {
+              return {
+                txSignature: "",
+                feeX: 0,
+                feeY: 0,
+                platformFeeX: 0,
+                platformFeeY: 0,
+                netFeeX: 0,
+                netFeeY: 0,
+                netFeesUsd: 0,
+              };
+            }
             const [pre0, pre1] = await Promise.all([
               getBalance(token0, owner),
               getBalance(token1, owner),

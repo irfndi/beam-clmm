@@ -5764,6 +5764,13 @@ export const program = Effect.gen(function* () {
               })
               .pipe(Effect.catch(() => Effect.void));
           } else {
+            // Adopted EXTERNAL positions (pubkey set, no engine deposit) are
+            // manage-to-exit only: the strategy must never re-deploy the
+            // user's own capital into new ranges (churn — the operator
+            // reported ~1,600 gas-burning txs with zero deployed book).
+            // Safety EXITs still fire; only REBALANCE is blocked.
+            const isAdoptedExternal =
+              pos.positionPubKey != null && pos.depositedUsd <= 0;
             console.info(
               `[rebalance-sim] ${poolAddress} source=${sim.source} fees=$${sim.estimatedFeesUsd.toFixed(2)} cost=$${sim.estimatedCostUsd.toFixed(2)} net=$${sim.netBenefitUsd.toFixed(2)}`,
             );
@@ -5849,8 +5856,9 @@ export const program = Effect.gen(function* () {
                   })
                   .pipe(Effect.catch(() => Effect.void));
               } else if (
-                sim.netBenefitUsd > config.minRebalanceNetBenefitUsd ||
-                recoveryProb <= config.oorRecoveryForceRebalanceThreshold
+                !isAdoptedExternal &&
+                (sim.netBenefitUsd > config.minRebalanceNetBenefitUsd ||
+                  recoveryProb <= config.oorRecoveryForceRebalanceThreshold)
               ) {
                 const forceRebalance = recoveryProb <= config.oorRecoveryForceRebalanceThreshold;
                 decision = {
@@ -6728,10 +6736,18 @@ export const program = Effect.gen(function* () {
               // from the deterministic decision by proposal validation).
               const gatePosId = validation.adjustedDecision?.positionId ?? decision.positionId;
               const gatePos = gatePosId !== undefined ? trackedPositions.get(gatePosId) : undefined;
+              const gatePosAdopted =
+                gatePos !== undefined &&
+                gatePos.positionPubKey != null &&
+                gatePos.depositedUsd <= 0;
               if (
                 validation.valid &&
                 validation.adjustedDecision?.action === "REBALANCE" &&
-                gatePos !== undefined
+                gatePos !== undefined &&
+                // Adopted external positions are manage-to-exit only — never
+                // rebalance the user's own capital (same guard as the
+                // deterministic path).
+                !gatePosAdopted
               ) {
                 const currentLowerBinId = gatePos.lowerBinId;
                 const currentUpperBinId = gatePos.upperBinId;
