@@ -5164,12 +5164,18 @@ export const program = Effect.gen(function* () {
         // pool's real 24h fees while the active bin sits in range. Do NOT
         // touch currentValueUsd: unrealized PnL already sums claimed fees
         // (pnl.ts), so crediting the value column too would double-add.
-        // Fees are trusted ONLY from the Data API (real per-pool fee data).
+        // Trusted sources are MEASURED fee data only: the Data API AND
+        // Krystal (on-chain Swap-event fees — the challenge mode's primary
+        // stats source; excluding it meant challenge paper positions booked
+        // $0 fees forever and the simulator measured nothing but IL).
         // Gecko fees are a binStep base-rate MODEL on real volume
         // (pool_fee_percentage is null for every CL pool) and heuristic fees
-        // are fabricated — accrue from neither, so paper positions book only
-        // Data-API-measured CLAIM income.
-        if (config.paperTrading && pos.positionPubKey == null && pool.statsSource === "datapi") {
+        // are fabricated — accrue from neither.
+        if (
+          config.paperTrading &&
+          pos.positionPubKey == null &&
+          (pool.statsSource === "datapi" || pool.statsSource === "krystal")
+        ) {
           const now = Date.now();
           const lastAccrualAt = paperFeeAccrualAt.get(pos.positionId);
           paperFeeAccrualAt.set(pos.positionId, now);
