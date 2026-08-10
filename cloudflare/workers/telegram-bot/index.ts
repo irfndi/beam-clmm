@@ -414,6 +414,10 @@ function handlePortfolio(
         feesClaimedUsd: number;
         totalPnl: number;
       };
+      equity?: {
+        equityUsd: number | null;
+        challengePeakEquityUsd: number | null;
+      };
     };
     const stats = data.stats;
     if (!stats || stats.totalPositions === 0) {
@@ -442,7 +446,15 @@ function handlePortfolio(
         `Open: ${stats.open} · Closed: ${stats.closed} · Total: ${stats.totalPositions}\n` +
         `Deployed: $${stats.deployedUsd.toFixed(2)}\n` +
         `Realized: ${sign(stats.realizedPnl)} · Unrealized: ${sign(stats.unrealizedPnl)}\n` +
-        `Fees claimed: $${stats.feesClaimedUsd.toFixed(2)} · Total P&L: ${sign(stats.totalPnl)}\n\n` +
+        `Fees claimed: $${stats.feesClaimedUsd.toFixed(2)} · Total P&L: ${sign(stats.totalPnl)}\n` +
+        (data.equity?.equityUsd != null
+          ? `Equity: $${data.equity.equityUsd.toFixed(2)}` +
+            (data.equity.challengePeakEquityUsd != null
+              ? ` (peak $${data.equity.challengePeakEquityUsd.toFixed(2)}, ` +
+                `${(((data.equity.equityUsd / data.equity.challengePeakEquityUsd) - 1) * 100).toFixed(1)}% vs peak)`
+              : "")
+          : "") +
+        `\n\n` +
         (lines ? `${lines}` : ``),
     );
   });

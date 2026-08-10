@@ -245,6 +245,11 @@ function postEngineStatus(
     openedAt: number;
     exitedAt: number | null;
   }>,
+  // Wallet equity (cash + position marks) — the compounding baseline for the
+  // challenge. `peakEquityUsd` is the hard-floor denominator, so the operator
+  // surface can show equity vs peak in one number.
+  equityUsd?: number,
+  peakEquityUsd?: number,
 ): Effect.Effect<void> {
   const DEFAULT_API_BASE_URL = "https://beam-api.irfndi.workers.dev";
   const TIMEOUT_MS = 5_000;
@@ -259,7 +264,15 @@ function postEngineStatus(
           "Content-Type": "application/json",
           Authorization: `Bearer ${apiKey}`,
         },
-        body: JSON.stringify({ status, positions, pnl: unrealizedPnlUsd, decisions, trades }),
+        body: JSON.stringify({
+          status,
+          positions,
+          pnl: unrealizedPnlUsd,
+          decisions,
+          trades,
+          equityUsd,
+          challengePeakEquityUsd: peakEquityUsd,
+        }),
         signal: AbortSignal.timeout(TIMEOUT_MS),
       }),
     );
@@ -791,9 +804,23 @@ export function reconcilePositions(
     // for gas refunds) but leave tracking entirely.
     const liveOnChain = onChainPositions.filter((p) => p.liquidityShares > 0n);
     const liveByPubkey = new Map(liveOnChain.map((p) => [p.positionPubKey, p]));
+    // ALL on-chain positions (incl. shells) — the owed-fee lookup for drops.
+    const onChainByPubkey = new Map(onChainPositions.map((p) => [p.positionPubKey, p]));
 
     for (const [positionId, pos] of trackedPositions) {
       if (pos.positionPubKey && !liveByPubkey.has(pos.positionPubKey)) {
+        // A liquidity-0 shell can still hold claimable owed fees — never
+        // abandon them silently. The on-chain read knows the owed amounts;
+        // warn with them so the operator can claim manually.
+        const onChain = onChainByPubkey.get(pos.positionPubKey);
+        const owedX = onChain?.tokensOwedX ?? 0n;
+        const owedY = onChain?.tokensOwedY ?? 0n;
+        if (owedX > 0n || owedY > 0n) {
+          console.warn(
+            `Reconcile: dropping position ${positionId} with UNCLAIMED owed fees ` +
+              `${owedX.toString()}/${owedY.toString()} on ${pos.poolAddress} — claim manually before burning`,
+          );
+        }
         console.warn(
           `Reconciling: position ${positionId} on ${pos.poolAddress} no longer has on-chain liquidity (gone or emptied shell) — removing from tracking`,
         );
@@ -4127,6 +4154,28 @@ export const program = Effect.gen(function* () {
         );
         const parsed = persistedPeak !== null ? Number(persistedPeak) : 0;
         challengePeakEquityUsd = Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
+        // Paper-era pollution guard: the peak tracker also ran during PAPER
+        // trading (fake $19k book + $10k seed -> a $29k peak), and a live
+        // wallet at ~$40 would sit permanently below 50% of it — the hard
+        // floor would block every ENTER forever. On a live boot, a stored
+        // peak that is absurd relative to the real wallet is re-seeded to the
+        // wallet's actual equity; only live trading moves it forward.
+        if (
+          !config.paperTrading &&
+          adapter.hasWallet() &&
+          challengePeakEquityUsd > 0 &&
+          lastWalletBalanceUsd > 0 &&
+          challengePeakEquityUsd > lastWalletBalanceUsd * 5
+        ) {
+          logger.warn("Resetting challenge peak equity — paper-era peak is inconsistent with the live wallet", {
+            storedPeak: challengePeakEquityUsd,
+            walletEquity: lastWalletBalanceUsd,
+          });
+          challengePeakEquityUsd = lastWalletBalanceUsd;
+          yield* db
+            .setMetadata("challenge_peak_equity_usd", String(Math.round(lastWalletBalanceUsd)))
+            .pipe(Effect.catch(() => Effect.void));
+        }
       }
       if (config.challengeMode === true) {
         const positionsValueUsd = Array.from(trackedPositions.values()).reduce(
@@ -4442,6 +4491,14 @@ export const program = Effect.gen(function* () {
               openedAt: p.timestamp,
               exitedAt: p.paperExitedAt ?? p.closedAt,
             })),
+            // Wallet equity = cash + position marks (the compounding baseline).
+            lastWalletBalanceUsd +
+              Array.from(trackedPositions.values()).reduce(
+                (sum, p) => sum + p.currentValueUsd,
+                0,
+              ),
+            // Hard-floor peak — the operator surface shows equity vs peak.
+            challengePeakEquityUsd > 0 ? challengePeakEquityUsd : undefined,
           ),
         ).pipe(
           Effect.asVoid,

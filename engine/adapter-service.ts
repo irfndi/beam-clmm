@@ -1757,6 +1757,10 @@ export const AdapterLive = Layer.effect(AdapterService,
             lowerBinId: Number(p[5]),
             upperBinId: Number(p[6]),
             liquidityShares: p[7],
+            // Owed fees: a liquidity-0 shell can still hold claimable fees —
+            // carried so reconcile never silently abandons them on drop.
+            tokensOwedX: p[10],
+            tokensOwedY: p[11],
             depositedUsd: 0,
             currentValueUsd: 0,
             unrealizedPnlUsd: 0,
@@ -2113,6 +2117,9 @@ export const AdapterLive = Layer.effect(AdapterService,
               // Needed by reconcile to drop zero-liquidity shells (empty
               // position NFTs must not be managed or claimed).
               liquidityShares: p.liquidityShares,
+              // Owed fees on dropped shells — never silently abandoned.
+              tokensOwedX: p.tokensOwedX ?? 0n,
+              tokensOwedY: p.tokensOwedY ?? 0n,
             }));
           },
           catch: (e) => new Error(`getAllWalletPositions: ${underlyingErrorMessage(e)}`),

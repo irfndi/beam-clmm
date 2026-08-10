@@ -278,6 +278,13 @@ export interface Position {
   lowerBinId: number;
   upperBinId: number;
   liquidityShares: bigint;
+  /**
+   * Unclaimed owed fees (v3 positions() tokensOwed0/1; v4 not readable on
+   * this PM). A liquidity-0 position can still hold owed fees — reconcile
+   * logs them when dropping a shell so they are never silently abandoned.
+   */
+  tokensOwedX?: bigint;
+  tokensOwedY?: bigint;
   depositedUsd: number;
   currentValueUsd: number;
   unrealizedPnlUsd: number;

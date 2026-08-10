@@ -1207,7 +1207,7 @@ describe("live lifecycle PnL accounting", () => {
               // The position is STILL OPEN on-chain — the failure was real.
               getAllWalletPositions: () =>
                 Effect.succeed([
-                  { poolAddress: "pool1", positionPubKey: "pos-1", lowerBinId: 0, upperBinId: 10, liquidityShares: 1n },
+                  { poolAddress: "pool1", positionPubKey: "pos-1", lowerBinId: 0, upperBinId: 10, liquidityShares: 1n, tokensOwedX: 0n, tokensOwedY: 0n },
                 ]),
             }),
             strategy: liveStrategy,

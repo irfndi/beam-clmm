@@ -700,6 +700,28 @@ const parseTradesFromDetails = (details: string | null): EngineTradeRow[] => {
   }
 };
 
+/** Wallet equity + hard-floor peak from the snapshot details (compounding
+ *  baseline; absent on older snapshots → null). */
+const parseEquityFromDetails = (
+  details: string | null,
+): { equityUsd: number | null; challengePeakEquityUsd: number | null } => {
+  if (!details) return { equityUsd: null, challengePeakEquityUsd: null };
+  try {
+    const parsed = JSON.parse(details) as {
+      equityUsd?: unknown;
+      challengePeakEquityUsd?: unknown;
+    };
+    const num = (v: unknown) =>
+      typeof v === "number" && Number.isFinite(v) ? v : null;
+    return {
+      equityUsd: num(parsed.equityUsd),
+      challengePeakEquityUsd: num(parsed.challengePeakEquityUsd),
+    };
+  } catch {
+    return { equityUsd: null, challengePeakEquityUsd: null };
+  }
+};
+
 /** Aggregate stats derived from the portfolio ledger. Cheap: single pass. */
 const computePortfolioStats = (trades: EngineTradeRow[]) => {
   let open = 0;
@@ -760,6 +782,7 @@ const agentStatusHandler = (db: D1Database, cache: KVNamespace, telegramId: stri
         .first<{ details: string | null }>(),
     ).pipe(Effect.catch(() => Effect.succeed(null)));
     const trades = parseTradesFromDetails(latest?.details ?? null);
+    const equity = parseEquityFromDetails(latest?.details ?? null);
 
     // Try KV first for the latest engine heartbeat.
     const cached = yield* Effect.tryPromise(() => cache.get(`agent_status:${userId}`)).pipe(
@@ -779,6 +802,7 @@ const agentStatusHandler = (db: D1Database, cache: KVNamespace, telegramId: stri
           positions: parsed.positions,
           pnl: parsed.pnl,
           trades,
+          equity,
           stats: computePortfolioStats(trades),
         };
       } catch {
@@ -791,6 +815,7 @@ const agentStatusHandler = (db: D1Database, cache: KVNamespace, telegramId: stri
       positions: 0,
       pnl: 0,
       trades,
+      equity,
       stats: computePortfolioStats(trades),
     };
   });
@@ -808,7 +833,12 @@ const agentStatusReportHandler = (db: D1Database, cache: KVNamespace, apiKey: st
         status: string,
         positions: number,
         pnl: number,
-        details?: { decisions?: ReadonlyArray<EngineDecisionRow>; trades?: ReadonlyArray<EngineTradeRow> },
+        details?: {
+          decisions?: ReadonlyArray<EngineDecisionRow>;
+          trades?: ReadonlyArray<EngineTradeRow>;
+          equityUsd?: number;
+          challengePeakEquityUsd?: number;
+        },
       ) =>
         Effect.tryPromise(() => {
           const now = Date.now();
@@ -827,7 +857,14 @@ const agentStatusReportHandler = (db: D1Database, cache: KVNamespace, apiKey: st
                 status,
                 positions,
                 pnl,
-                details ? JSON.stringify({ decisions: details.decisions ?? [], trades: details.trades ?? [] }) : null,
+                details
+                  ? JSON.stringify({
+                      decisions: details.decisions ?? [],
+                      trades: details.trades ?? [],
+                      equityUsd: details.equityUsd ?? null,
+                      challengePeakEquityUsd: details.challengePeakEquityUsd ?? null,
+                    })
+                  : null,
               )
               .run(),
           ];
@@ -1265,6 +1302,7 @@ app.get("/v1/engine/state", async (c) => {
                 pnl: snapshot.pnl,
               },
         trades: snapshot === null ? [] : parseTradesFromDetails(snapshot.details),
+        equity: snapshot === null ? null : parseEquityFromDetails(snapshot.details),
         decisions: (decisions.results ?? []).map((d) => ({
           reportedAt: d.reported_at,
           poolAddress: d.pool_address,
@@ -1328,6 +1366,7 @@ app.get("/v1/engine/portfolio", async (c) => {
                 positions: snapshot.positions,
                 pnl: snapshot.pnl,
               },
+        equity: parseEquityFromDetails(snapshot?.details ?? null),
         trades,
         stats: computePortfolioStats(trades),
       });
@@ -1362,6 +1401,8 @@ app.post("/v1/agent-status/report", async (c) => {
       pnl?: number;
       decisions?: ReadonlyArray<EngineDecisionRow>;
       trades?: ReadonlyArray<EngineTradeRow>;
+      equityUsd?: number;
+      challengePeakEquityUsd?: number;
     }>(c.req),
   );
 
@@ -1389,6 +1430,10 @@ app.post("/v1/agent-status/report", async (c) => {
       yield* handler.storeStatus(body.status!, positions, pnl, {
         decisions: body.decisions ?? [],
         trades: body.trades ?? [],
+        ...(body.equityUsd !== undefined ? { equityUsd: body.equityUsd } : {}),
+        ...(body.challengePeakEquityUsd !== undefined
+          ? { challengePeakEquityUsd: body.challengePeakEquityUsd }
+          : {}),
       });
       // Prune this agent's rows past the retention window. Best-effort: a
       // failed sweep must never fail the report itself — the report doubles

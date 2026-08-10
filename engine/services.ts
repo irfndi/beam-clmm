@@ -172,6 +172,9 @@ export interface AdapterApi {
       upperBinId: number;
       /** On-chain liquidity — reconcile drops positions with 0 (empty shells). */
       liquidityShares: bigint;
+      /** Unclaimed owed fees (v3; 0 for v4 — not readable on this PM). */
+      tokensOwedX: bigint;
+      tokensOwedY: bigint;
     }>,
     Error
   >;
