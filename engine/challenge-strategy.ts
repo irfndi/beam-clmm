@@ -93,13 +93,24 @@ export function challengeRangeFromVolatility(
   const sigma = Math.max(0, priceVolatilityPct) / 100;
   const priceRange = Math.log(1 + k * sigma) / Math.log(1.0001);
   const half = Math.max(2, Math.round(priceRange));
-  // Align to spacing so ticks land on usable boundaries.
+  // Align to spacing so ticks land on usable boundaries, then clamp to the
+  // SDK's usable tick domain — a pool trading near MIN/MAX_TICK (extreme
+  // price) otherwise yields a range that fails the Position ctor's
+  // TICK_LOWER/TICK_UPPER invariant (live failure: every ENTER on the
+  // harvest book reverted with 'Invariant failed: TICK_LOWER').
+  const MIN_TICK = -887272;
+  const MAX_TICK = 887272;
   const align = (t: number): number => {
     const snapped = Math.round(t / tickSpacing) * tickSpacing;
     return snapped === 0 ? 0 : snapped;
   };
-  const lower = align(activeTick - half);
-  const upper = align(activeTick + half);
+  const lower = Math.max(MIN_TICK, align(activeTick - half));
+  let upper = Math.min(MAX_TICK, align(activeTick + half));
+  if (upper <= lower) {
+    // Volatility width smaller than one spacing collapses to a single
+    // aligned tick — enforce the minimum usable range.
+    upper = Math.min(MAX_TICK, lower + tickSpacing);
+  }
   return { lowerBinId: lower, upperBinId: upper, halfWidth: half };
 }
 

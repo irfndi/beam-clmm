@@ -1,4 +1,5 @@
 import { Layer } from "effect";
+import { TickMath } from "@uniswap/v3-sdk";
 import { StrategyService, type StrategyApi } from "./services.js";
 import type {
   BinArray,
@@ -255,10 +256,18 @@ export const DLMMStrategy: StrategyApi = {
     halfWidthOverride?: number,
   ): { lowerBinId: number; upperBinId: number } {
     const halfWidth = halfWidthOverride ?? baselineHalfWidthForBinStep(binStep);
-    return {
-      lowerBinId: activeBinId - halfWidth,
-      upperBinId: activeBinId + halfWidth,
-    };
+    // Align to the pool's tick spacing (usable ticks — the SDK Position ctor
+    // rejects unaligned bounds with TICK_LOWER/TICK_UPPER) and clamp to the
+    // usable tick domain. A volatility width SMALLER than one spacing
+    // collapses both bounds to the same aligned tick — enforce the minimum
+    // usable range (one spacing) instead of returning a degenerate range.
+    const align = (t: number): number => Math.round(t / binStep) * binStep;
+    let lower = Math.max(TickMath.MIN_TICK, align(activeBinId - halfWidth));
+    let upper = Math.min(TickMath.MAX_TICK, align(activeBinId + halfWidth));
+    if (upper <= lower) {
+      upper = Math.min(TickMath.MAX_TICK, lower + binStep);
+    }
+    return { lowerBinId: lower, upperBinId: upper };
   },
 
   passesPreFilter(

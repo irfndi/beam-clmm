@@ -225,18 +225,34 @@ describe("DLMMStrategy", () => {
   });
 
   describe("recommendBinRange", () => {
-    it("uses wider range for low bin step", () => {
-      const narrow = DLMMStrategy.recommendBinRange(5000, 5);
-      const wide = DLMMStrategy.recommendBinRange(5000, 50);
-      const narrowWidth = narrow.upperBinId - narrow.lowerBinId;
-      const wideWidth = wide.upperBinId - wide.lowerBinId;
-      expect(narrowWidth).toBeGreaterThan(wideWidth);
+    it("returns aligned, at-least-one-spacing-wide ranges for any bin step", () => {
+      for (const binStep of [5, 50, 400]) {
+        const range = DLMMStrategy.recommendBinRange(5000, binStep);
+        expect(range.upperBinId).toBeGreaterThan(range.lowerBinId);
+        expect(range.lowerBinId % binStep).toBe(0);
+        expect(range.upperBinId % binStep).toBe(0);
+        expect(range.upperBinId - range.lowerBinId).toBeGreaterThanOrEqual(binStep);
+      }
     });
 
-    it("centers range on active bin", () => {
+    it("enforces at least one tick spacing wide when the width collapses", () => {
+      // halfWidth 5 with spacing 10: both bounds align to the same tick —
+      // the min usable range (one spacing) is enforced instead.
+      const range = DLMMStrategy.recommendBinRange(5000, 10, 5);
+      expect(range.upperBinId - range.lowerBinId).toBe(10);
+      expect(range.lowerBinId % 10).toBe(0);
+      expect(range.upperBinId % 10).toBe(0);
+    });
+
+    it("returns aligned ticks within one spacing of the active bin", () => {
       const range = DLMMStrategy.recommendBinRange(5000, 10);
+      // Ticks must be usable (aligned to the pool's spacing) or the SDK
+      // Position ctor rejects them — alignment shifts the center by at most
+      // half a spacing from the active bin.
+      expect(range.lowerBinId % 10).toBe(0);
+      expect(range.upperBinId % 10).toBe(0);
       const center = (range.lowerBinId + range.upperBinId) / 2;
-      expect(center).toBe(5000);
+      expect(Math.abs(center - 5000)).toBeLessThanOrEqual(5);
     });
   });
 

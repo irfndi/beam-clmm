@@ -651,11 +651,16 @@ export function positionsForPool(
 export function ownBookPositionCounts(
   trackedPositions: Map<string, PositionRecord>,
   poolAddress: string,
+  includePaper = true,
 ): { open: number; pool: number } {
   let open = 0;
   let pool = 0;
   for (const pos of trackedPositions.values()) {
     if (pos.paperExitedAt != null) continue; // closed/blocker rows
+    // Paper rows are not real positions in LIVE mode — a stray paper run's
+    // fake book must not consume the live position cap (it once blocked all
+    // ENTERs with 'Max open positions reached (4/4)').
+    if (pos.positionPubKey == null && !includePaper) continue;
     if (pos.positionPubKey != null && pos.depositedUsd <= 0) continue; // adopted external
     open += 1;
     if (pos.poolAddress === poolAddress) pool += 1;
@@ -1452,6 +1457,15 @@ export function executeLive(
         pool.binStep,
         entryRangeHalfWidth,
       );
+      // A pool trading at the tick-domain edge with a wide volatility range
+      // clamps to a degenerate range (lower >= upper) — entering it is
+      // impossible; fail cleanly instead of letting the SDK invariant crash.
+      if (recommended.lowerBinId >= recommended.upperBinId) {
+        return {
+          executed: false,
+          error: `ENTER skipped: pool at tick-domain edge — range ${recommended.lowerBinId}-${recommended.upperBinId} is degenerate`,
+        };
+      }
       const enterResult = yield* adapter
         .enterPosition(
           decision.poolAddress,
@@ -3179,7 +3193,7 @@ export const program = Effect.gen(function* () {
         // The pass never pushes past the hard open-position cap; the same count
         // is re-checked against fresh state by allocation below and by risk
         // gate 6 at execution.
-        const ownBook = ownBookPositionCounts(trackedPositions, candidate.poolAddress);
+        const ownBook = ownBookPositionCounts(trackedPositions, candidate.poolAddress, config.paperTrading);
         if (ownBook.open >= config.maxOpenPositions) {
           yield* recordRedeploySkip(
             `[idle-redeploy] skipped — max open positions reached (${ownBook.open}/${config.maxOpenPositions})`,
@@ -4215,6 +4229,28 @@ export const program = Effect.gen(function* () {
         }
       }
 
+      // Challenge pool first-seen clock (safety audit): the 6h launch-rug age
+      // gate reads this map — persisted so restarts don't reset every pool's
+      // clock to "now" and silently block all ENTERs for 6h post-reboot.
+      if (config.challengeMode === true && poolFirstSeenAt.size === 0) {
+        const persistedFirstSeen = yield* db.getMetadata("challenge_pool_first_seen").pipe(
+          Effect.catch(() => Effect.succeed(null)),
+        );
+        if (persistedFirstSeen !== null) {
+          try {
+            const parsed = JSON.parse(persistedFirstSeen) as Record<string, unknown>;
+            for (const [pool, seenAt] of Object.entries(parsed)) {
+              const seenMs = typeof seenAt === "number" ? seenAt : Number(seenAt);
+              if (Number.isFinite(seenMs) && seenMs > 0) {
+                poolFirstSeenAt.set(pool.toLowerCase(), seenMs);
+              }
+            }
+          } catch {
+            // Malformed blob — start with an empty first-seen map.
+          }
+        }
+      }
+
       // Issue #170: batch wallet-reserve gate — refresh the per-cycle native
       // SOL budget for SOL-funded entries. One read, reused by every ENTER
       // gate this cycle; a failed read leaves the budget UNKNOWN and the gate
@@ -4682,7 +4718,17 @@ export const program = Effect.gen(function* () {
   ): Effect.Effect<ReadonlyArray<AgentDecision>, Error, never> =>
     Effect.gen(function* () {
       const cycleId = cycle.cycleId;
-      if (!poolFirstSeenAt.has(poolAddress)) poolFirstSeenAt.set(poolAddress, Date.now());
+      if (!poolFirstSeenAt.has(poolAddress)) {
+        poolFirstSeenAt.set(poolAddress, Date.now());
+        // Persist: the 6h launch-rug age gate reads this map, and an
+        // in-memory-only clock means every restart resets it to "now" —
+        // silently blocking every ENTER for 6h after each reboot (the
+        // pool-age gate rejects with no audit record, so it looked like
+        // "no signal"). Same metadata-store pattern as the loss cooldowns.
+        yield* db
+          .setMetadata("challenge_pool_first_seen", JSON.stringify(Object.fromEntries(poolFirstSeenAt)))
+          .pipe(Effect.catch(() => Effect.void));
+      }
       const rawPool = yield* adapter.getPoolState(poolAddress);
       const binArray = yield* adapter.getBinArray(poolAddress);
       pushBinHistory(poolAddress, rawPool.activeBinId);
@@ -4714,6 +4760,27 @@ export const program = Effect.gen(function* () {
           : geckoStats !== null
             ? enrichPoolFromGecko(rawPool, geckoStats)
             : rawPool;
+
+      // Launch-rug age clock: a pool with MEASURED 24h fees is by definition
+      // older than 24h — backdate its first-seen so the 6h age gate doesn't
+      // block established book pools after every restart (first-seen was
+      // in-memory-only and reset on reboot, silently blocking all ENTERs).
+      if (
+        config.challengeMode === true &&
+        pool.statsSource === "krystal" &&
+        (pool.fees24hUsd ?? 0) > 0 &&
+        poolFirstSeenAt.get(poolAddress) !== undefined &&
+        Date.now() - (poolFirstSeenAt.get(poolAddress) ?? Date.now()) <
+          (config.challengeMinPoolAgeMs ?? 6 * 3_600_000)
+      ) {
+        poolFirstSeenAt.set(poolAddress, Date.now() - 26 * 3_600_000);
+        yield* db
+          .setMetadata(
+            "challenge_pool_first_seen",
+            JSON.stringify(Object.fromEntries(poolFirstSeenAt)),
+          )
+          .pipe(Effect.catch(() => Effect.void));
+      }
 
       // TVL velocity + IL price-drift need a previous reference point, so the
       // previous snapshot must be read BEFORE persisting the current one.
@@ -6189,8 +6256,8 @@ export const program = Effect.gen(function* () {
               poolAddress,
               maxPositionsPerPool: config.maxPositionsPerPool,
               poolTvlUsd: pool.tvlUsd,
-              countedOpenPositions: ownBookPositionCounts(trackedPositions, poolAddress).open,
-              countedPoolPositions: ownBookPositionCounts(trackedPositions, poolAddress).pool,
+              countedOpenPositions: ownBookPositionCounts(trackedPositions, poolAddress, config.paperTrading).open,
+              countedPoolPositions: ownBookPositionCounts(trackedPositions, poolAddress, config.paperTrading).pool,
               ...(config.challengePoolShareCapPct !== undefined
                 ? { challengePoolShareCapPct: config.challengePoolShareCapPct }
                 : {}),
@@ -6356,8 +6423,8 @@ export const program = Effect.gen(function* () {
                 poolAddress,
                 maxPositionsPerPool: config.maxPositionsPerPool,
                 poolTvlUsd: pool.tvlUsd,
-                countedOpenPositions: ownBookPositionCounts(trackedPositions, poolAddress).open,
-                countedPoolPositions: ownBookPositionCounts(trackedPositions, poolAddress).pool,
+                countedOpenPositions: ownBookPositionCounts(trackedPositions, poolAddress, config.paperTrading).open,
+                countedPoolPositions: ownBookPositionCounts(trackedPositions, poolAddress, config.paperTrading).pool,
                 ...(config.challengePoolShareCapPct !== undefined
                   ? { challengePoolShareCapPct: config.challengePoolShareCapPct }
                   : {}),
