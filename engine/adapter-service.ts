@@ -741,11 +741,15 @@ export function buildV4MintCalldata(args: V4MintCalldataArgs): V4MintCalldataRes
     deadline,
     recipient: getAddress(recipient),
     hookData: "0x",
-    // Native (address-zero) may legally be EITHER leg in a v4 pool — the old
-    // c0-only check made ETH-quote pools permanently unenterable (dry-run
-    // revert with no msg.value). addCallParameters computes the msg.value
-    // from the native leg amount whichever side it sits on.
-    ...(c0.isNative || c1.isNative ? { useNative: Ether.onChain(CHAIN_ID) } : {}),
+    // The v4 SDK hardcodes native as currency0: sortsBefore sorts address
+    // zero first, V4Pool re-sorts, and addCallParameters sets
+    // msg.value = amount0Max ("native currency will always be currency0 in
+    // v4"). Canonical on-chain keys are therefore always native-first, and a
+    // NON-canonical key with native as currency1 must fail HERE (the SDK's
+    // NATIVE_NOT_SET invariant, clean + gas-free) — a c1.isNative branch
+    // would build a leg-swapped mint with msg.value from the token leg and
+    // burn gas on-chain. Reverted from an earlier || fix on that evidence.
+    ...(c0.isNative ? { useNative: Ether.onChain(CHAIN_ID) } : {}),
   });
   return {
     calldata: calldata as Hex,

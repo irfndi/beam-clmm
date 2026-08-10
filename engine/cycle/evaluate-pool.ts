@@ -28,8 +28,15 @@
  *     live session state absent in replay; replay treats every pool as
  *     approved and paper (all gates pass).
  *   - Jupiter token-risk ENTER consult: network overlay, fail-open in replay.
- *   - Challenge pool-score/age candidate conjuncts + threshold/weight
- *     evolution: replay uses the config defaults, not DB-evolved values.
+ *   - Challenge pool-score/age candidate conjuncts: NOT replayed — they are
+ *     absent, not defaulted. The replay input carries no fee/volume/token-
+ *     symbol fields for challengePoolScore, and the live 6h launch-rug age
+ *     gate is in-memory session state. The only caller (ops/backtest.ts)
+ *     hardcodes challengeMode: false, so the gap is inert; enabling
+ *     challenge mode in the backtest requires adding the score conjunct
+ *     first (evaluateReplayPool warns loudly if challengeMode is ever set).
+ *   - Threshold/weight evolution: replay uses the config defaults, not
+ *     DB-evolved values.
  *   - TVL-velocity/volume/fee gates act on the snapshot's metrics exactly as
  *     the live pool metrics; challenge rotation uses `drawdown24hPct` input
  *     (snapshots do not persist Krystal drawdown).
@@ -145,6 +152,17 @@ const DEFAULT_SIGNAL_WEIGHTS: SignalWeights = {
 
 export function evaluateReplayPool(input: ReplayEvaluationInput): ReplayEvaluation {
   const { position, poolAddress, metrics } = input;
+  // The challenge score/age candidate conjuncts are NOT replayed (see the
+  // header delta note). Only ops/backtest.ts calls this and hardcodes
+  // challengeMode: false — if that ever changes, fail loudly instead of
+  // silently admitting young or sub-floor-score pools.
+  if (input.challengeMode === true) {
+    console.warn(
+      "[cycle/evaluate-pool] challengeMode=true in the replay is NOT fully supported: " +
+        "the challengePoolScore and 6h age candidate conjuncts are absent (header delta note). " +
+        "Add them before trusting challenge-mode backtest ENTERs.",
+    );
+  }
   const feeIlRatio = metrics.feeIlRatio;
   const volumeAuth = metrics.volumeAuthenticity;
   let decision: AgentDecision | null = null;
