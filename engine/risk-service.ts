@@ -664,6 +664,17 @@ export interface PerPoolAllocationInput {
   readonly poolTvlUsd?: number;
   /** Challenge pool-share cap (% of pool TVL, e.g. 10). */
   readonly challengePoolShareCapPct?: number;
+  /**
+   * The strategy's OWN-book counts (engine-opened positions only): adopted
+   * external positions (pubkey set, depositedUsd 0) and paper-exited blocker
+   * rows must NOT consume the compounding cadence — a wallet that already
+   * holds 16 positions would otherwise block every new ENTER (16/4). The
+   * exposure list (`openPositions`) still carries them so per-pool allocation
+   * % keeps counting their real value. Omitted → legacy behavior (count ALL).
+   */
+  readonly countedOpenPositions?: number;
+  /** Own-book per-pool count; omitted → poolPositions.length (legacy). */
+  readonly countedPoolPositions?: number;
 }
 
 export interface PerPoolAllocationResult {
@@ -683,20 +694,22 @@ export interface PerPoolAllocationResult {
  */
 export function evaluatePerPoolAllocation(input: PerPoolAllocationInput): PerPoolAllocationResult {
   const poolPositions = input.openPositions.filter((p) => p.poolAddress === input.poolAddress);
-  if (poolPositions.length >= input.maxPositionsPerPool) {
+  const countedPoolPositions = input.countedPoolPositions ?? poolPositions.length;
+  const countedOpenPositions = input.countedOpenPositions ?? input.openPositions.length;
+  if (countedPoolPositions >= input.maxPositionsPerPool) {
     return {
       approved: false,
       reason:
-        `Per-pool position cap reached (${poolPositions.length}/${input.maxPositionsPerPool}) ` +
+        `Per-pool position cap reached (${countedPoolPositions}/${input.maxPositionsPerPool}) ` +
         `for pool ${input.poolAddress}`,
       adjustedDepositUsd: 0,
     };
   }
 
-  if (input.openPositions.length >= input.maxOpenPositions) {
+  if (countedOpenPositions >= input.maxOpenPositions) {
     return {
       approved: false,
-      reason: `Max open positions reached (${input.openPositions.length}/${input.maxOpenPositions}) — split across ${input.maxOpenPositions} pools max`,
+      reason: `Max open positions reached (${countedOpenPositions}/${input.maxOpenPositions}) — split across ${input.maxOpenPositions} pools max`,
       adjustedDepositUsd: 0,
     };
   }

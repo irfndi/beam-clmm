@@ -627,6 +627,30 @@ export function positionsForPool(
   return out;
 }
 
+/**
+ * The strategy's OWN-book counts for the ENTER count caps: engine-opened
+ * positions only. Adopted external positions (pubkey set + depositedUsd 0 —
+ * the wallet's pre-existing book) and paper-exited blocker rows must not
+ * consume the compounding cadence — a wallet that already holds 16 positions
+ * would otherwise reject every new ENTER with "16/4 max open positions".
+ * Exposure-based gates (allocation %, portfolio value) still count adopted
+ * positions via the full openPositions list; only the COUNT caps use this.
+ */
+export function ownBookPositionCounts(
+  trackedPositions: Map<string, PositionRecord>,
+  poolAddress: string,
+): { open: number; pool: number } {
+  let open = 0;
+  let pool = 0;
+  for (const pos of trackedPositions.values()) {
+    if (pos.paperExitedAt != null) continue; // closed/blocker rows
+    if (pos.positionPubKey != null && pos.depositedUsd <= 0) continue; // adopted external
+    open += 1;
+    if (pos.poolAddress === poolAddress) pool += 1;
+  }
+  return { open, pool };
+}
+
 /** Mean age of tracked positions in minutes (0 when none open). */
 export function avgTrackedPositionAgeMin(
   trackedPositions: Map<string, PositionRecord>,
@@ -3156,10 +3180,11 @@ export const program = Effect.gen(function* () {
         // The pass never pushes past the hard open-position cap; the same count
         // is re-checked against fresh state by allocation below and by risk
         // gate 6 at execution.
-        if (openPositions.length >= config.maxOpenPositions) {
+        const ownBook = ownBookPositionCounts(trackedPositions, candidate.poolAddress);
+        if (ownBook.open >= config.maxOpenPositions) {
           yield* recordRedeploySkip(
-            `[idle-redeploy] skipped — max open positions reached (${openPositions.length}/${config.maxOpenPositions})`,
-            `[idle-redeploy] max open positions reached (${openPositions.length}/${config.maxOpenPositions})`,
+            `[idle-redeploy] skipped — max open positions reached (${ownBook.open}/${config.maxOpenPositions})`,
+            `[idle-redeploy] max open positions reached (${ownBook.open}/${config.maxOpenPositions})`,
           );
           return;
         }
@@ -3191,6 +3216,8 @@ export const program = Effect.gen(function* () {
           poolAddress: candidate.poolAddress,
           maxPositionsPerPool: config.maxPositionsPerPool,
           poolTvlUsd: candidate.pool?.tvlUsd,
+          countedOpenPositions: ownBook.open,
+          countedPoolPositions: ownBook.pool,
           ...(config.challengePoolShareCapPct !== undefined
             ? { challengePoolShareCapPct: config.challengePoolShareCapPct }
             : {}),
@@ -6121,6 +6148,8 @@ export const program = Effect.gen(function* () {
               poolAddress,
               maxPositionsPerPool: config.maxPositionsPerPool,
               poolTvlUsd: pool.tvlUsd,
+              countedOpenPositions: ownBookPositionCounts(trackedPositions, poolAddress).open,
+              countedPoolPositions: ownBookPositionCounts(trackedPositions, poolAddress).pool,
               ...(config.challengePoolShareCapPct !== undefined
                 ? { challengePoolShareCapPct: config.challengePoolShareCapPct }
                 : {}),
@@ -6286,6 +6315,8 @@ export const program = Effect.gen(function* () {
                 poolAddress,
                 maxPositionsPerPool: config.maxPositionsPerPool,
                 poolTvlUsd: pool.tvlUsd,
+                countedOpenPositions: ownBookPositionCounts(trackedPositions, poolAddress).open,
+                countedPoolPositions: ownBookPositionCounts(trackedPositions, poolAddress).pool,
                 ...(config.challengePoolShareCapPct !== undefined
                   ? { challengePoolShareCapPct: config.challengePoolShareCapPct }
                   : {}),
