@@ -2110,6 +2110,9 @@ export const AdapterLive = Layer.effect(AdapterService,
               positionPubKey: p.id,
               lowerBinId: p.lowerBinId,
               upperBinId: p.upperBinId,
+              // Needed by reconcile to drop zero-liquidity shells (empty
+              // position NFTs must not be managed or claimed).
+              liquidityShares: p.liquidityShares,
             }));
           },
           catch: (e) => new Error(`getAllWalletPositions: ${underlyingErrorMessage(e)}`),

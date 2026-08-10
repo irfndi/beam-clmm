@@ -1020,8 +1020,8 @@ describe("reconcilePositions — multiple positions per pool", () => {
         const adapter = makeReconcileAdapter({
           getAllWalletPositions: () =>
             Effect.succeed([
-              { poolAddress: POOL, positionPubKey: "pk-A", lowerBinId: 4980, upperBinId: 5020 },
-              { poolAddress: POOL, positionPubKey: "pk-B", lowerBinId: 4980, upperBinId: 5020 },
+              { poolAddress: POOL, positionPubKey: "pk-A", lowerBinId: 4980, upperBinId: 5020, liquidityShares: 1n },
+              { poolAddress: POOL, positionPubKey: "pk-B", lowerBinId: 4980, upperBinId: 5020, liquidityShares: 1n },
             ]),
         });
         yield* reconcilePositions(adapter, db, noopMemory, tracked, [POOL]);
@@ -1050,7 +1050,7 @@ describe("reconcilePositions — multiple positions per pool", () => {
           getAllWalletPositions: () =>
             Effect.succeed([
               // pk-A vanished (closed via the Meteora UI); pk-B is still there.
-              { poolAddress: POOL, positionPubKey: "pk-B", lowerBinId: 4980, upperBinId: 5020 },
+              { poolAddress: POOL, positionPubKey: "pk-B", lowerBinId: 4980, upperBinId: 5020, liquidityShares: 1n },
             ]),
         });
         yield* reconcilePositions(adapter, db, noopMemory, tracked, [POOL]);
@@ -1079,8 +1079,8 @@ describe("reconcilePositions — multiple positions per pool", () => {
         const adapter = makeReconcileAdapter({
           getAllWalletPositions: () =>
             Effect.succeed([
-              { poolAddress: POOL, positionPubKey: "pk-A", lowerBinId: 4990, upperBinId: 5030 },
-              { poolAddress: POOL, positionPubKey: "pk-B", lowerBinId: 4980, upperBinId: 5020 },
+              { poolAddress: POOL, positionPubKey: "pk-A", lowerBinId: 4990, upperBinId: 5030, liquidityShares: 1n },
+              { poolAddress: POOL, positionPubKey: "pk-B", lowerBinId: 4980, upperBinId: 5020, liquidityShares: 1n },
             ]),
         });
         yield* reconcilePositions(adapter, db, noopMemory, tracked, [POOL]);
@@ -1123,8 +1123,8 @@ describe("reconcilePositions — multiple positions per pool", () => {
         const adapter = makeReconcileAdapter({
           getAllWalletPositions: () =>
             Effect.succeed([
-              { poolAddress: POOL, positionPubKey: "pk-A", lowerBinId: 4980, upperBinId: 5020 },
-              { poolAddress: POOL, positionPubKey: "pk-C", lowerBinId: 4900, upperBinId: 5100 },
+              { poolAddress: POOL, positionPubKey: "pk-A", lowerBinId: 4980, upperBinId: 5020, liquidityShares: 1n },
+              { poolAddress: POOL, positionPubKey: "pk-C", lowerBinId: 4900, upperBinId: 5100, liquidityShares: 1n },
             ]),
           getPoolState: () => Effect.succeed(poolState),
         });

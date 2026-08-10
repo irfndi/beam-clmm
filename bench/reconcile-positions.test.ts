@@ -166,6 +166,7 @@ describe("reconcilePositions — integration", () => {
                 positionPubKey: "pubkey1",
                 lowerBinId: 4990,
                 upperBinId: 5030,
+liquidityShares: 1n,
               },
             ]),
         });
@@ -214,6 +215,7 @@ describe("reconcilePositions — integration", () => {
                 positionPubKey: "some-other-pubkey",
                 lowerBinId: 4990,
                 upperBinId: 5030,
+liquidityShares: 1n,
               },
             ]),
           getPoolState: () =>
@@ -269,6 +271,7 @@ describe("reconcilePositions — integration", () => {
                 positionPubKey: "external-pubkey",
                 lowerBinId: 4980,
                 upperBinId: 5020,
+liquidityShares: 1n,
               },
             ]),
           getPoolState: () =>
@@ -322,6 +325,7 @@ describe("reconcilePositions — integration", () => {
                 positionPubKey: "external-pubkey",
                 lowerBinId: 4980,
                 upperBinId: 5020,
+liquidityShares: 1n,
               },
             ]),
         });
@@ -353,6 +357,7 @@ describe("reconcilePositions — integration", () => {
                 positionPubKey: "external-pubkey",
                 lowerBinId: 4980,
                 upperBinId: 5020,
+liquidityShares: 1n,
               },
             ]),
           getPoolState: () => Effect.fail(new Error("pool unavailable")),

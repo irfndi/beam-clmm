@@ -170,6 +170,8 @@ export interface AdapterApi {
       positionPubKey: string;
       lowerBinId: number;
       upperBinId: number;
+      /** On-chain liquidity — reconcile drops positions with 0 (empty shells). */
+      liquidityShares: bigint;
     }>,
     Error
   >;

@@ -780,29 +780,36 @@ export function reconcilePositions(
 
     // Match by position identity, not pool: a pool can hold several positions
     // (tight+wide pairs), so per-pool matching would conflate siblings.
-    const onChainByPubkey = new Map(onChainPositions.map((p) => [p.positionPubKey, p]));
     const watchedPoolSet = new Set(poolsToScan);
     const unresolvedPoolAddresses = new Set<string>();
     const adoptedPoolAddresses = new Set<string>();
 
+    // Empty shells: the wallet's 16/17 positions had liquidity 0 (fully
+    // drained, NFT never burned) — the engine was churning them with zero-fee
+    // claims and rebalances for nothing. Only positions with on-chain
+    // liquidity are real. Shells stay in the wallet (the owner can burn them
+    // for gas refunds) but leave tracking entirely.
+    const liveOnChain = onChainPositions.filter((p) => p.liquidityShares > 0n);
+    const liveByPubkey = new Map(liveOnChain.map((p) => [p.positionPubKey, p]));
+
     for (const [positionId, pos] of trackedPositions) {
-      if (pos.positionPubKey && !onChainByPubkey.has(pos.positionPubKey)) {
+      if (pos.positionPubKey && !liveByPubkey.has(pos.positionPubKey)) {
         console.warn(
-          `Reconciling: position ${positionId} on ${pos.poolAddress} no longer on-chain — removing from tracking`,
+          `Reconciling: position ${positionId} on ${pos.poolAddress} no longer has on-chain liquidity (gone or emptied shell) — removing from tracking`,
         );
         trackedPositions.delete(positionId);
         yield* persist(`deletePosition ${positionId}`, db.deletePosition(positionId));
         yield* memory
           .upsert({
             category: "warning",
-            content: `Position ${positionId} on ${pos.poolAddress} was closed externally (e.g. via Solscan/Meteora UI). Removed from tracking.`,
+            content: `Position ${positionId} on ${pos.poolAddress} was closed externally or is an empty shell (liquidity 0). Removed from tracking.`,
             poolAddress: pos.poolAddress,
           })
           .pipe(Effect.catch(() => Effect.void));
       }
     }
 
-    for (const onChainPos of onChainPositions) {
+    for (const onChainPos of liveOnChain) {
       const tracked = trackedPositions.get(onChainPos.positionPubKey);
       if (tracked) {
         // A tracked position whose on-chain range moved under the same pubkey
