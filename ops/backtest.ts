@@ -222,7 +222,6 @@ export function runBacktestFromTicks(
   // loss-cooldown gates carry state across cycles.
   let trailingStopBreaches = 0;
   let challengePeakEquityUsd = initialValue;
-  let lossCooldownUntilMs = 0;
 
   const strategyReturns: number[] = [0];
   let prevPortfolioValue = initialValue;
@@ -322,12 +321,6 @@ export function runBacktestFromTicks(
       positionPeakUsd = positionSizeUsd;
       trailingStopBreaches = 0;
     } else if (replay.decision.action === "EXIT") {
-      // Challenge loss cooldown (safety audit): a pool that realized a LOSS is
-      // barred from re-entry until its stale drawdown has refreshed. The
-      // evaluator only enforces it when challengeMode is enabled (live gate).
-      if (replayPosition && replayPosition.currentValueUsd < replayPosition.depositedUsd) {
-        lossCooldownUntilMs = Date.now() + 6 * 3_600_000;
-      }
       hasPosition = false;
       positionSizeUsd = 0;
       positionPeakUsd = 0;

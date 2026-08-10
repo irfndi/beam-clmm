@@ -1,13 +1,4 @@
-import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { defineConfig } from "tsdown";
-
-// See tsdown.config.ts: bigint-buffer's dist/browser.js is the bindings-free
-// pure-JS entry, so the bundle never inlines require('bindings') and never warns.
-const bigintBufferPureJs = path.resolve(
-  path.dirname(fileURLToPath(import.meta.url)),
-  "node_modules/bigint-buffer/dist/browser.js",
-);
 
 export default defineConfig({
   entry: ["cli/index.ts"],
@@ -17,9 +8,6 @@ export default defineConfig({
   clean: true,
   sourcemap: true,
   dts: false,
-  alias: {
-    "bigint-buffer": bigintBufferPureJs,
-  },
   deps: {
     neverBundle: ["bun:sqlite"],
   },
@@ -29,7 +17,8 @@ export default defineConfig({
   // Bundle every runtime dependency so the artifact is version-consistent and
   // self-contained. @xenova/transformers stays external: it is only loaded for
   // the optional ONNX embeddings backend and its import failure is already
-  // caught with a fallback to hash vectors.
+  // caught with a fallback to hash vectors. viem and the @uniswap SDKs are
+  // the core EVM runtime and must be bundled for the same reason.
   noExternal: [
     "sqlite-vec",
     "effect",
@@ -38,8 +27,9 @@ export default defineConfig({
     "dotenv",
     "@clack/prompts",
     "semver",
-
-
-
+    "viem",
+    "@uniswap/sdk-core",
+    "@uniswap/v3-sdk",
+    "@uniswap/v4-sdk",
   ],
 });

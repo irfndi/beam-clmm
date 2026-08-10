@@ -44,6 +44,11 @@ DISCOVERY_MIN_FEE_RATIO=1.5
 
 # Runtime: "stable" | "beta" | "dev"
 UPDATE_CHANNEL=stable
+
+# Install telemetry: on first setup the CLI sends one anonymous install event
+# (install id + version only) to https://beam-api.irfndi.workers.dev/v1/installs/ping.
+# Set BEAM_FEEDBACK_OPT_OUT=true to disable.
+BEAM_FEEDBACK_OPT_OUT=false
 `;
 
 let cachedId = null;
@@ -101,6 +106,21 @@ function pingInstall(event) {
   })();
 }
 
+function readEnvOptOut() {
+  // The generated .env (DEFAULT_ENV) documents the opt-out and the endpoint;
+  // honor a value set there even when the var is not exported to the process.
+  try {
+    if (!fs.existsSync(ENV_PATH)) return "";
+    for (const line of fs.readFileSync(ENV_PATH, "utf-8").split("\n")) {
+      const match = line.match(/^BEAM_FEEDBACK_OPT_OUT=(.*)$/);
+      if (match) return match[1].trim();
+    }
+  } catch {
+    return "";
+  }
+  return "";
+}
+
 function main() {
   let isFirstRun = false;
   if (fs.existsSync(ENV_PATH)) {
@@ -115,25 +135,38 @@ function main() {
   // Generate the embedded sqlite-vec extension for source installs so that
   // `bun run build` works immediately after `bun install`. The extension is
   // platform-specific, so this only runs when the engine source tree is present.
-  // Failure here aborts the install: bundled installs provide the native
-  // extension via BEAM_VEC0_PATH, but source installs need the embed.
+  // Failure here must NOT abort the install: bundled installs provide the
+  // native extension via BEAM_VEC0_PATH, and the embed can be regenerated
+  // manually with `bun run scripts/generate-vec-embed.ts` later.
   const engineDir = path.join(REPO_ROOT, "engine");
   const vecEmbedPath = path.join(engineDir, "sqlite-vec-embedded.ts");
   if (fs.existsSync(engineDir) && !fs.existsSync(vecEmbedPath)) {
-    const result = spawnSync(
-      "bun",
-      [
-        "run",
-        path.join(REPO_ROOT, "scripts", "generate-vec-embed.ts"),
-        process.platform,
-        process.arch,
-      ],
-      { cwd: REPO_ROOT, stdio: "inherit" },
-    );
-    if (result.status !== 0) {
-      throw new Error(`generate-vec-embed.ts failed with exit code ${result.status ?? "null"}`);
+    try {
+      const result = spawnSync(
+        "bun",
+        [
+          "run",
+          path.join(REPO_ROOT, "scripts", "generate-vec-embed.ts"),
+          process.platform,
+          process.arch,
+        ],
+        { cwd: REPO_ROOT, stdio: "inherit" },
+      );
+      if (result.status !== 0) {
+        console.warn(
+          `⚠ generate-vec-embed.ts failed (exit ${result.status ?? "null"}); ` +
+            "skipping embedded sqlite-vec extension. Bundled installs provide it via BEAM_VEC0_PATH; " +
+            "run `bun run scripts/generate-vec-embed.ts` to generate it later.",
+        );
+      } else {
+        console.log("✓ Generated embedded sqlite-vec extension for source build");
+      }
+    } catch (error) {
+      console.warn(
+        `⚠ Could not generate embedded sqlite-vec extension (${String(error)}); skipping. ` +
+          "Bundled installs provide it via BEAM_VEC0_PATH.",
+      );
     }
-    console.log("✓ Generated embedded sqlite-vec extension for source build");
   }
 
   console.log("");
@@ -143,8 +176,8 @@ function main() {
   // Parse BEAM_FEEDBACK_OPT_OUT as an explicit boolean
   // (1/true/yes/on, case-insensitive). An empty string or "false" both
   // keep telemetry on, matching the .env default of
-  // BEAM_FEEDBACK_OPT_OUT=false.
-  const optOutRaw = (process.env.BEAM_FEEDBACK_OPT_OUT ?? "").toLowerCase();
+  // BEAM_FEEDBACK_OPT_OUT=false. Environment wins over the .env file.
+  const optOutRaw = (process.env.BEAM_FEEDBACK_OPT_OUT ?? readEnvOptOut()).toLowerCase();
   const isOptedOut = ["1", "true", "yes", "on"].includes(optOutRaw);
   if (isFirstRun && !isOptedOut) {
     pingInstall("install");

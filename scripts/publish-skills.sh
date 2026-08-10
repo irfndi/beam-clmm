@@ -52,18 +52,17 @@ publish_mcp() {
   log_info "Publishing MCP server to npm..."
   cd "$REPO_ROOT/mcp-server"
 
-  if [ ! -f "dist/index.js" ]; then
-    log_warn "MCP server not built. Running npm run build..."
-    if [ "$DRY_RUN" != "--dry-run" ]; then
-      npm run build
-    fi
+  if [ "$DRY_RUN" = "--dry-run" ]; then
+    # Preview only: never build or mutate anything. No dist/ is required for
+    # the preview, so a fresh checkout can still be dry-run.
+    log_info "$(dry_run_prefix)npm publish --access public"
+    log_info "$(dry_run_prefix)MCP server published."
+    return
   fi
 
-  if [ "$DRY_RUN" = "--dry-run" ]; then
-    log_info "$(dry_run_prefix)npm publish --access public"
-  else
-    npm publish --access public
-  fi
+  # Always rebuild so a stale dist/ from a previous run can never be published.
+  npm run build
+  npm publish --access public
 
   log_info "MCP server published."
 }
@@ -79,12 +78,16 @@ publish_python_pkg() {
   log_info "Publishing $pkg_name to PyPI..."
   cd "$pkg_dir"
 
-  if [ ! -d "dist" ] || [ -z "$(ls -A dist 2>/dev/null)" ]; then
-    log_warn "$pkg_name not built. Running python3 -m build..."
-    if [ "$DRY_RUN" != "--dry-run" ]; then
-      python3 -m build
-    fi
+  if [ "$DRY_RUN" = "--dry-run" ]; then
+    # Preview only: never build or mutate anything. The literal glob mirrors
+    # what twine would receive after a build without requiring dist to exist.
+    log_info "$(dry_run_prefix)python3 -m twine upload dist/*"
+    log_info "$(dry_run_prefix)$pkg_name published."
+    return
   fi
+
+  # Always rebuild so a stale dist/ from a previous run can never be published.
+  python3 -m build
 
   # Fail fast on an empty dist instead of passing a literal glob to twine.
   shopt -s nullglob
@@ -95,11 +98,7 @@ publish_python_pkg() {
     exit 1
   fi
 
-  if [ "$DRY_RUN" = "--dry-run" ]; then
-    log_info "$(dry_run_prefix)python3 -m twine upload ${dist_files[*]}"
-  else
-    python3 -m twine upload "${dist_files[@]}"
-  fi
+  python3 -m twine upload "${dist_files[@]}"
 
   log_info "$pkg_name published."
 }
@@ -129,8 +128,10 @@ main() {
     exit 1
   fi
 
-  # Preflight the Python build/publish toolchain before any publish runs so a
-  # mid-run failure does not leave a partial release.
+  # Preflight the Python build/publish toolchain. This only validates that the
+  # tools exist and run — it cannot guarantee a fully atomic release: an auth,
+  # network, or registry failure mid-run can still leave earlier packages
+  # published while a later one fails. Packages publish in sequence below.
   if ! python3 -m build --version &>/dev/null; then
     log_error "python3 -m build is required but not available (pip install build)."
     exit 1
@@ -159,7 +160,14 @@ main() {
   echo "Next steps:"
   echo "  1. Verify packages on npmjs.com and pypi.org"
   echo "  2. Update marketplaces/README.md with published versions"
-  echo "  3. Tag release: git tag -a v$(node -p 'require("./package.json").version') -m \"Release v$(node -p 'require("./package.json").version')\""
+  # The tag hint needs node; don't fail the whole run when it is absent.
+  if command -v node &>/dev/null; then
+    local pkg_version
+    pkg_version="$(node -p 'require("./package.json").version')"
+    echo "  3. Tag release: git tag -a v${pkg_version} -m \"Release v${pkg_version}\""
+  else
+    echo "  3. Tag release: git tag -a v<version> -m \"Release v<version>\" (node not on PATH)"
+  fi
 }
 
 main "$@"

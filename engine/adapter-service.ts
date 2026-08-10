@@ -13,7 +13,6 @@ import {
   toHex,
   type Address,
   type Hex,
-  type PublicClient,
   type TransactionReceipt,
 } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
@@ -29,7 +28,7 @@ import {
 import { Pool as V4Pool, Position as V4Position, V4PositionManager } from "@uniswap/v4-sdk";
 import { ConfigService } from "./config-service.js";
 import { AdapterService, type AdapterApi, type DiscoveredPool } from "./services.js";
-import type { EntryDepositMode, EntryStrategyShape } from "./types.js";
+import type { EntryDepositMode } from "./types.js";
 import type { BinArray, BinData, PoolState, Position } from "./types.js";
 import {
   GAS_TOP_UP_STABLECOIN,
@@ -177,11 +176,6 @@ function sqrtPriceX96ToPrice(sqrtPriceX96: bigint): number {
 
 const decimalsCache = new Map<string, number>();
 
-/** viem encodes struct params as positional tuples — convert our PoolKey object. */
-function poolKeyTuple(key: V4PoolKey): readonly [Address, Address, number, number, Address] {
-  return [key.currency0, key.currency1, key.fee, key.tickSpacing, key.hooks];
-}
-
 /** v4 poolId = keccak256(abi.encode(poolKey)) — canonical v4 pool identity. */
 async function computeV4PoolId(key: V4PoolKey): Promise<string> {
   const encoded = encodeAbiParameters(
@@ -202,20 +196,12 @@ async function computeV4PoolId(key: V4PoolKey): Promise<string> {
 const v3MintDecodeAbi = parseAbi([
   "function mint((address,address,uint24,int24,int24,uint256,uint256,uint256,uint256,address,uint256))",
 ]);
-const v3NpmTxAbi = parseAbi([
-  "function mint((address,address,uint24,int24,int24,uint256,uint256,uint256,uint256,address,uint256)) payable returns (uint256,uint128,uint256,uint256)",
-  "function collect((uint256,address,uint128,uint128)) returns (uint256,uint256)",
-  "function decreaseLiquidity((uint256,uint128,uint256,uint256,uint256)) returns (uint256,uint256)",
-  "function burn(uint256) payable",
-  "function multicall(bytes[]) payable returns (bytes[])",
-]);
 const swapRouter02Abi = parseAbi([
   "function exactInputSingle((address,address,uint24,address,uint256,uint256,uint256,uint160)) payable returns (uint256)",
   "function unwrapWETH9(uint256,address) payable",
   "function multicall(bytes[]) payable returns (bytes[])",
 ]);
 const universalRouterAbi = parseAbi(["function execute(bytes,bytes[],uint256) payable"]);
-const v4PositionManagerTxAbi = parseAbi(["function modifyLiquidities(bytes,uint256)"]);
 
 /** Permit2 (canonical 0x000…22D4 deployment, used by the v4 PositionManager
  *  and UniversalRouter as a forwarder). */
@@ -1098,7 +1084,7 @@ export const AdapterLive = Layer.effect(AdapterService,
       // bump once before giving up.
       const receipt = await publicClient
         .waitForTransactionReceipt({ hash: txHash, timeout: 60_000 })
-        .catch(async (err: unknown): Promise<TransactionReceipt> => {
+        .catch(async (_err: unknown): Promise<TransactionReceipt> => {
           const pendingCount = BigInt(
             await publicClient.getTransactionCount({ address: owner, blockTag: "pending" }),
           );
@@ -1294,17 +1280,6 @@ export const AdapterLive = Layer.effect(AdapterService,
           `v4 pool ${id} key unresolved on-chain (${underlyingErrorMessage(e)})`,
         );
       }
-    }
-
-    /** PoolKey for a registered v4 poolId, resolved on-chain when needed. */
-    function requireV4PoolKey(poolId: string): V4PoolKey {
-      const key = V4_POOL_REGISTRY[poolId.toLowerCase()];
-      if (!key) {
-        throw new Error(
-          `v4 pool ${poolId} is not registered (feed V4_POOL_REGISTRY via registerV4Pool / Krystal service)`,
-        );
-      }
-      return key;
     }
 
     /** Pool state for a v4 pool (poolId) via the StateView — feeds the pure
@@ -2044,7 +2019,7 @@ export const AdapterLive = Layer.effect(AdapterService,
               }
               const stateView = v4StateView();
               const poolIdHex = poolAddress.toLowerCase() as `0x${string}`;
-              const [slot0, liquidity] = await Promise.all([
+              const [slot0] = await Promise.all([
                 stateView.read.getSlot0([poolIdHex]),
                 stateView.read.getLiquidity([poolIdHex]),
               ]);
@@ -2178,14 +2153,14 @@ export const AdapterLive = Layer.effect(AdapterService,
           },
           catch: () => null,
         }).pipe(Effect.catch(() => Effect.succeed(null))),
-      simulateRebalance: (poolAddress, positionPubKey, newLowerBinId, newUpperBinId) =>
+      simulateRebalance: (_poolAddress, _positionPubKey, _newLowerBinId, _newUpperBinId) =>
         Effect.succeed({
           estimatedFeesUsd: 0,
           estimatedCostUsd: 0,
           netBenefitUsd: 0,
           source: "pool-heuristic" as const,
         }),
-      enterPosition: (poolAddress, lowerBinId, upperBinId, positionSizeUsd, options) =>
+      enterPosition: (poolAddress, lowerBinId, upperBinId, positionSizeUsd, _options) =>
         Effect.tryPromise({
           try: async () => {
             const owner = requireWallet();
@@ -2340,8 +2315,8 @@ export const AdapterLive = Layer.effect(AdapterService,
           },
           catch: (e) => new Error(`exitPosition: ${underlyingErrorMessage(e)}`),
         }),
-      placeLimitOrder: (poolAddress, request) => NOT_IMPLEMENTED("placeLimitOrder"),
-      cancelLimitOrder: (poolAddress, orderPubKey, binIds) => NOT_IMPLEMENTED("cancelLimitOrder"),
+      placeLimitOrder: (_poolAddress, _request) => NOT_IMPLEMENTED("placeLimitOrder"),
+      cancelLimitOrder: (_poolAddress, _orderPubKey, _binIds) => NOT_IMPLEMENTED("cancelLimitOrder"),
       rebalancePosition: (poolAddress, positionPubKey, newLowerBinId, newUpperBinId, topUp) =>
         Effect.tryPromise({
           try: async () => {
@@ -2535,7 +2510,7 @@ export const AdapterLive = Layer.effect(AdapterService,
           },
           catch: (e) => new Error(`claimFees: ${underlyingErrorMessage(e)}`),
         }),
-      convertClaimedFees: (poolAddress, destination, feeX, feeY) =>
+      convertClaimedFees: (_poolAddress, destination, _feeX, _feeY) =>
         Effect.succeed({
           destination,
           // Uniswap v3/v4 have no fee-conversion module (the Meteora convert
@@ -2544,7 +2519,7 @@ export const AdapterLive = Layer.effect(AdapterService,
           outputUsd: null,
           txSignatures: [],
         }),
-      claimRewards: (poolAddress, positionPubKey) =>
+      claimRewards: (_poolAddress, _positionPubKey) =>
         Effect.succeed({
           skipped: true,
           skipReason: "no LM farm rewards on Uniswap v3/v4 (Robinhood Chain)",
@@ -2631,7 +2606,7 @@ export const AdapterLive = Layer.effect(AdapterService,
           try: async () => (walletAddress ? getBalance(mint, walletAddress) : 0n),
           catch: (e) => new Error(`getTokenBalance: ${underlyingErrorMessage(e)}`),
         }),
-      getTokenPrices: (mints, opts) =>
+      getTokenPrices: (mints, _opts) =>
         Effect.tryPromise({
           try: async () => {
             const out: Record<string, number> = {};
@@ -2647,9 +2622,9 @@ export const AdapterLive = Layer.effect(AdapterService,
         }),
       // EVM ERC-20 has no on-chain mint/freeze authority registry; nulls are
       // the fail-open contract (callers treat absent authorities as unknown).
-      getMintAuthorities: (mintAddress) =>
+      getMintAuthorities: (_mintAddress) =>
         Effect.succeed({ mintAuthority: null, freezeAuthority: null }),
-      swapToken: (inputMint, outputMint, amountAtomic, quoteData) =>
+      swapToken: (inputMint, outputMint, amountAtomic, _quoteData) =>
         Effect.tryPromise({
           try: async () => {
             const { outAmountAtomic, route } = await quotePair(inputMint, outputMint, amountAtomic);
@@ -2747,7 +2722,6 @@ export const AdapterLive = Layer.effect(AdapterService,
         }),
       submitSwap: (prepared, onBroadcast) =>
         Effect.gen(function* () {
-          const owner = requireWallet();
           const raw = prepared.quote.rawQuote;
           const calldata = (`0x${Buffer.from(prepared.transactionBase64, "base64").toString("hex")}`) as Hex;
           const route: SwapRoute =

@@ -23,24 +23,14 @@ jobs:
   flush:
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v7
+
+      # Logic lives in scripts/alert-flush.sh (unit-tested by
+      # scripts/test-alert-flush.sh): checks the HTTP status and fails on
+      # non-2xx / curl failure, and sanitizes both '::' and legacy '##['
+      # workflow-command prefixes from the response body.
       - name: Flush undelivered alerts via the bot
         continue-on-error: true
         env:
           BOT_API_SECRET: ${{ secrets.BOT_API_SECRET }}
-        run: |
-          set +e
-          body=$(curl -sS --max-time 60 -X POST \
-            https://beam-telegram-bot.irfndi.workers.dev/internal/flush-alerts \
-            -H "X-Bot-Api-Secret: $BOT_API_SECRET" \
-            -w '\nHTTP_STATUS:%{http_code}')
-          code=$?
-          # Sanitize '::'-prefixed lines: GitHub Actions parses them as workflow
-          # commands, and the response body embeds alert-derived (user-influenced)
-          # text, so a crafted value could inject log annotations.
-          clean=$(printf '%s\n' "$body" | sed 's/^::/:: /')
-          echo "response body: $clean"
-          echo "curl exit code: $code"
-          if [ "$code" -ne 0 ]; then
-            echo "::error::alert flush failed (curl exit $code)"
-            exit "$code"
-          fi
+        run: bash scripts/alert-flush.sh

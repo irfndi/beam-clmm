@@ -1411,7 +1411,7 @@ describe("program — multiple positions per pool", () => {
       >,
     );
 
-    console.log("DECISIONS:", JSON.stringify(decisions, (k, v) => typeof v === "bigint" ? v.toString() : v));
+    console.log("DECISIONS:", JSON.stringify(decisions, (_, v) => typeof v === "bigint" ? v.toString() : v));
 
     // Two positions on the same pool, keyed by distinct synthetic ids.
     expect(positions).toHaveLength(2);
@@ -1922,7 +1922,7 @@ describe("program — multiple positions per pool", () => {
     const layer = makeProgramLayer({
       adapter,
       gecko: {
-        getPoolStats: (addr: string) => Effect.succeed(makeGeckoStats()),
+        getPoolStats: (_addr: string) => Effect.succeed(makeGeckoStats()),
       },
       configOverrides: {
         watchlistPools: [],

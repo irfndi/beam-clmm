@@ -91,7 +91,6 @@ import {
   type DiscoveredPool,
   type StrategyApi,
   type RevenueConfigApi,
-  type EntryPreparationOutcome,
   type AgentStateApi,
 } from "./services.js";
 import { GeckoTerminalLive, enrichPoolFromGecko } from "./gecko-terminal-service.js";
@@ -1226,38 +1225,6 @@ function operationRecord(input: {
   };
 }
 
-function settlementJobsForReceipts(input: {
-  readonly context: AutonomousExecutionContext;
-  readonly positionId: string;
-  readonly poolAddress: string;
-  readonly receipts: EntryPreparationOutcome["receipts"];
-  readonly now: number;
-}): ReadonlyArray<SettlementJobRecord> {
-  return input.receipts.map((receipt) => ({
-    id: randomUUID(),
-    walletAddress: input.context.walletAddress,
-    agentInstanceId: input.context.agentInstanceId,
-    positionId: input.positionId,
-    poolAddress: input.poolAddress,
-    tokenMint: receipt.outputMint,
-    amountAtomic: receipt.acquiredAmountAtomic.toString(),
-    destinationAsset: "ETH",
-    status: "pending",
-    attempts: 0,
-    nextRetryAt: input.now,
-    txSignature: null,
-    confirmedOutputAtomic: null,
-    outputUsd: null,
-    executionCostUsd: null,
-    finalizedAt: null,
-    realizedPnlUsd: null,
-    expiresAt: input.now + input.context.settlementMaxPendingMs,
-    error: null,
-    createdAt: input.now,
-    updatedAt: input.now,
-  }));
-}
-
 /**
  * Execute a live decision. Entry token preparation is part of the live-tx
  * milestone (the EVM adapter rejects live ENTERs today); callers
@@ -1444,8 +1411,6 @@ export function executeLive(
         return { executed: false, error };
       }
     }
-
-    let preparation: EntryPreparationOutcome | null = null;
 
     if (decision.action === "ENTER" && decision.positionSizeUsd) {
       const recommended = strategy.recommendBinRange(

@@ -34,6 +34,12 @@ jobs:
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
         with:
+          # Deliberate pin on the canary line: engines.bun requires bun >=
+          # 1.4.0-canary.1 and the newest stable release (1.3.14) predates that
+          # floor. Bun publishes canary builds only under the moving `canary`
+          # tag (no immutable per-build artifact), so this is the tightest pin
+          # that installs; switch to a stable version here (one-line change)
+          # once a stable release satisfies the floor.
           bun-version: canary
 
       - name: Setup Node.js
@@ -94,6 +100,12 @@ jobs:
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
         with:
+          # Deliberate pin on the canary line: engines.bun requires bun >=
+          # 1.4.0-canary.1 and the newest stable release (1.3.14) predates that
+          # floor. Bun publishes canary builds only under the moving `canary`
+          # tag (no immutable per-build artifact), so this is the tightest pin
+          # that installs; switch to a stable version here (one-line change)
+          # once a stable release satisfies the floor.
           bun-version: canary
 
       - name: Install dependencies
@@ -107,6 +119,92 @@ jobs:
       - name: Run worker tests (shard ${{ matrix.shard }}/${{ matrix.total }})
         run: bunx vitest run --shard=${{ matrix.shard }}/${{ matrix.total }}
         working-directory: cloudflare
+
+  # PR-time rehearsal of the canary publish pipeline (flatten → manifest →
+  # gate) with synthetic bundles and no secrets. The production pipeline only
+  # runs on main with real R2 credentials; this job exercises the same
+  # commands on every PR so a regression in the flatten/manifest/gate steps is
+  # caught before it ever reaches the publish path. Also lints the workflow
+  # YAML (syntax-only — see the actionlint step for why shellcheck is off).
+  canary-rehearsal:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          # see canary-build for the deliberate canary-line pin rationale
+          bun-version: canary
+
+      # Synthesize the 4 platform bundles with the exact filenames
+      # build-bundle.ts emits (beam-v${VERSION}-${platform}.tar.gz[.sha256]),
+      # laid out like actions/download-artifact would unpack them.
+      - name: Synthesize platform bundles
+        run: |
+          VERSION="0.0.0-rehearsal"
+          for dir in canary-bundle-linux-x64 canary-bundle-linux-arm64 canary-bundle-darwin-x64 canary-bundle-darwin-arm64; do
+            mkdir -p "canary-assets/${dir}"
+            touch "canary-assets/${dir}/PLATFORM"
+            tar -czf "canary-assets/${dir}/beam-v${VERSION}-${dir#canary-bundle-}.tar.gz" -C "canary-assets/${dir}" PLATFORM
+            sha256sum "canary-assets/${dir}/beam-v${VERSION}-${dir#canary-bundle-}.tar.gz" > "canary-assets/${dir}/beam-v${VERSION}-${dir#canary-bundle-}.tar.gz.sha256"
+          done
+
+      # Same loop as canary-publish's "Flatten bundle artifacts", including the
+      # fail-on-no-match behavior and the exactly-4 assertion.
+      - name: Flatten bundle artifacts (mirrors canary-publish)
+        run: |
+          mkdir -p canary-assets
+          for dir in canary-assets/canary-bundle-*/; do
+            if [ -d "$dir" ]; then
+              if ! mv "$dir"beam-v* canary-assets/ 2>/dev/null; then
+                echo "::error::no bundle files found in ${dir}"
+                exit 1
+              fi
+              rmdir "$dir" 2>/dev/null || true
+            fi
+          done
+          BUNDLE_COUNT=$(ls canary-assets/beam-v*.tar.gz 2>/dev/null | wc -l | tr -d ' ')
+          if [ "$BUNDLE_COUNT" -ne 4 ]; then
+            echo "::error::expected 4 platform bundles after flatten, found ${BUNDLE_COUNT}"
+            exit 1
+          fi
+          ls -lh canary-assets/
+
+      # Same manifest generation + fail-closed 4-bundle gate as canary-publish.
+      - name: Generate canary manifest and gate (mirrors canary-publish)
+        env:
+          VERSION: 0.0.0-rehearsal
+          CHANNEL: canary
+          R2_BASE_URL: https://example.invalid
+          R2_KEY_PREFIX: releases/canary/rehearsal
+          REQUIRE_ALL_BUNDLES: "true"
+        run: |
+          cd canary-assets
+          VERSION="${VERSION}" CHANNEL="${CHANNEL}" R2_BASE_URL="${R2_BASE_URL}" R2_KEY_PREFIX="${R2_KEY_PREFIX}" REQUIRE_ALL_BUNDLES="${REQUIRE_ALL_BUNDLES}" bun run ../scripts/generate-release-manifest.ts
+          cd ..
+          BUNDLE_COUNT=$(jq -e '.bundles | length' canary-assets/manifest.json) || { echo "::error::could not read bundle count from manifest"; exit 1; }
+          case "$BUNDLE_COUNT" in
+            *[!0-9]*|'') echo "::error::bundle count is not numeric: '${BUNDLE_COUNT}'"; exit 1 ;;
+          esac
+          if [ "$BUNDLE_COUNT" -lt 4 ]; then
+            echo "::error::Manifest has only ${BUNDLE_COUNT} platform bundles; expected 4"
+            jq '.bundles | keys' canary-assets/manifest.json
+            exit 1
+          fi
+          echo "→ Rehearsal manifest has ${BUNDLE_COUNT} platform bundles"
+
+      - name: Lint workflow YAML (actionlint, syntax-only)
+        run: |
+          curl -sSfL https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz | tar -xz actionlint
+          # -shellcheck= keeps this a YAML-syntax/property gate: the canary GC
+          # step embeds a node -e script that shellcheck mis-parses as shell,
+          # so full shellcheck would fail on that false positive.
+          ./actionlint -shellcheck=
 
   # Canary release channel: build + publish a per-merge canary bundle to R2
   # whenever CI passes on main. Mirrors release.yml's bundle/manifest patterns
@@ -135,6 +233,12 @@ jobs:
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
         with:
+          # Deliberate pin on the canary line: engines.bun requires bun >=
+          # 1.4.0-canary.1 and the newest stable release (1.3.14) predates that
+          # floor. Bun publishes canary builds only under the moving `canary`
+          # tag (no immutable per-build artifact), so this is the tightest pin
+          # that installs; switch to a stable version here (one-line change)
+          # once a stable release satisfies the floor.
           bun-version: canary
 
       - name: Install dependencies
@@ -185,6 +289,12 @@ jobs:
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
         with:
+          # Deliberate pin on the canary line: engines.bun requires bun >=
+          # 1.4.0-canary.1 and the newest stable release (1.3.14) predates that
+          # floor. Bun publishes canary builds only under the moving `canary`
+          # tag (no immutable per-build artifact), so this is the tightest pin
+          # that installs; switch to a stable version here (one-line change)
+          # once a stable release satisfies the floor.
           bun-version: canary
 
       - name: Setup Node.js
@@ -232,6 +342,12 @@ jobs:
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
         with:
+          # Deliberate pin on the canary line: engines.bun requires bun >=
+          # 1.4.0-canary.1 and the newest stable release (1.3.14) predates that
+          # floor. Bun publishes canary builds only under the moving `canary`
+          # tag (no immutable per-build artifact), so this is the tightest pin
+          # that installs; switch to a stable version here (one-line change)
+          # once a stable release satisfies the floor.
           bun-version: canary
 
       - name: Setup Node.js
@@ -253,10 +369,27 @@ jobs:
           mkdir -p canary-assets
           for dir in canary-assets/canary-bundle-*/; do
             if [ -d "$dir" ]; then
-              mv "$dir"beam-v* canary-assets/ 2>/dev/null || true
+              # A platform dir with no bundle is a build failure — surface it
+              # here instead of silently continuing (a missing bundle would
+              # otherwise vanish into a sparse manifest).
+              if ! mv "$dir"beam-v* canary-assets/ 2>/dev/null; then
+                echo "::error::no bundle files found in ${dir}"
+                ls -la "$dir" || true
+                exit 1
+              fi
               rmdir "$dir" 2>/dev/null || true
             fi
           done
+          # Assert exactly the 4 expected platform bundles landed before the
+          # manifest step. Names are platform-keyed by build-bundle.ts, so this
+          # also catches any future rename that would reintroduce the
+          # cross-platform filename collision this loop used to swallow.
+          BUNDLE_COUNT=$(ls canary-assets/beam-v*.tar.gz 2>/dev/null | wc -l | tr -d ' ')
+          if [ "$BUNDLE_COUNT" -ne 4 ]; then
+            echo "::error::expected 4 platform bundles after flatten, found ${BUNDLE_COUNT}"
+            ls -lh canary-assets/
+            exit 1
+          fi
           ls -lh canary-assets/
 
       - name: Stamp package.json canary version
@@ -307,7 +440,12 @@ jobs:
           cd canary-assets
           VERSION="${VERSION}" CHANNEL=canary COMMIT="${FULL_SHA}" R2_BASE_URL="https://pub-2f55c98709e74d1d900b89ec20f8f1fc.r2.dev" R2_KEY_PREFIX="${BUILD_DIR}" REQUIRE_ALL_BUNDLES=true bun run ../scripts/generate-release-manifest.ts
           cd ..
-          BUNDLE_COUNT=$(jq '.bundles | length' canary-assets/manifest.json)
+          BUNDLE_COUNT=$(jq -e '.bundles | length' canary-assets/manifest.json) || { echo "::error::could not read bundle count from manifest"; exit 1; }
+          # Fail closed: a non-numeric count (jq error, missing key) must not
+          # pass the -lt comparison below, or the gate would silently succeed.
+          case "$BUNDLE_COUNT" in
+            *[!0-9]*|'') echo "::error::bundle count is not numeric: '${BUNDLE_COUNT}'"; exit 1 ;;
+          esac
           if [ "$BUNDLE_COUNT" -lt 4 ]; then
             echo "::error::Manifest has only ${BUNDLE_COUNT} platform bundles; expected 4"
             jq '.bundles | keys' canary-assets/manifest.json

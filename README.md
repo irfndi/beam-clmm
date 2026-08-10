@@ -2,13 +2,13 @@
 
 ![License](https://img.shields.io/badge/license-MIT-blue)
 ![Runtime](https://img.shields.io/badge/runtime-Bun_1.4-black)
-![Chain](https://img.shields.io/badge/chain-Solana-9945FF)
+![Chain](https://img.shields.io/badge/chain-Robinhood_Chain_EVM-0070F3)
 
-An autonomous liquidity agent that watches liquidity pools on Solana (currently Meteora DLMM), reasons over live on-chain data, and rebalances positions before they bleed.
+An autonomous liquidity agent that watches Uniswap v3 & v4 concentrated-liquidity pools on Robinhood Chain (EVM, chain id 4663), reasons over live on-chain data, and rebalances positions before they bleed.
 
 ## What it does
 
-Concentrated liquidity earns fees only when the active price bin sits inside your range. When the market drifts, your position silently collects impermanent loss instead. Most LPs either do not notice or react too late.
+Concentrated liquidity earns fees only when the active price sits inside your range. When the market drifts, your position silently collects impermanent loss instead. Most LPs either do not notice or react too late.
 
 Beam fixes this with a rule-based agent that runs every 10 minutes, checks every pool in your watchlist, and either **holds**, **shifts the range**, **pulls liquidity entirely**, or **enters new pools**.
 
@@ -16,8 +16,8 @@ Every cycle follows the same sequence:
 
 ```
 1. recall     -> query memory for past patterns on this pool
-2. observe    -> fetch pool state, bin array, volume authenticity
-3. reason     -> compute fee/IL ratio, bin drift, TVL velocity
+2. observe    -> fetch pool state, tick array, volume authenticity
+3. reason     -> compute fee/IL ratio, tick drift, TVL velocity
 4. simulate   -> if REBALANCE, estimate IL cost before committing
 5. record     -> write new observations back to memory
 6. decide     -> HOLD | REBALANCE | EXIT | ENTER
@@ -33,14 +33,14 @@ This is what makes it self-improving: it gets slower to enter pools it has been 
 
 ## Volume authenticity
 
-Before any decision, the agent scores each pool's volume on a 0-1 scale. Volume/TVL ratio above 10x, fee rate outside the 0.02%-2% band, or low TVL with outsized volume all push the score down. Pools below 0.70 are skipped entirely. This alone filters most of the wash-traded noise on DLMM.
+Before any decision, the agent scores each pool's volume on a 0-1 scale. Volume/TVL ratio above 10x, fee rate outside the 0.02%-2% band, or low TVL with outsized volume all push the score down. Pools below 0.70 are skipped entirely. This alone filters most of the wash-traded noise on Uniswap pools.
 
 ## Pool stats sources
 
 Volume, TVL and fees come from the first source that answers, and the pool is tagged with where they came from:
 
-1. **Meteora Data API** — real TVL/volume/fees, and the only source of the safety signals (blacklist / freeze / verification / farm).
-2. **GeckoTerminal** — real 24h volume and reserve TVL from the keyless public API (fees derived as real volume × the pool's base fee rate), used when the Data API is down.
+1. **Robinhood Chain RPC** — real on-chain state (reserves, fee tier, ticks) read via viem from `ROBINHOOD_RPC_URL` (defaults to the public mainnet RPC).
+2. **USD price feeds** — optional oracle feeds (Pyth Hermes poller, see `.env.example`) for USD pricing.
 3. **Heuristic** — on-chain reserves × a modeled turnover. The last-resort safety net for a total API outage; it fabricates volume/fees.
 
 Fabricated (heuristic) stats never pass a gate: when only the heuristic is available, the volume-authenticity and fee/IL gates are skipped rather than acting on made-up numbers, so a pool is held (not entered or force-exited) until real data returns.
@@ -53,7 +53,7 @@ Fabricated (heuristic) stats never pass a gate: when only the heuristic is avail
 curl -fsSL https://raw.githubusercontent.com/irfndi/beam-clmm/main/scripts/install.sh | bash
 export PATH="$HOME/.local/bin:$PATH"   # if not already on PATH
 beam register
-beam setup --non-interactive --rpc-url=https://your-paid-rpc.example.com
+beam setup --non-interactive --rpc-url=https://rpc.mainnet.chain.robinhood.com
 beam dev                               # paper trading by default
 ```
 
@@ -67,7 +67,7 @@ curl -fsSL https://raw.githubusercontent.com/irfndi/beam-clmm/main/scripts/insta
   | BEAM_VERSION=1.2.3 bash
 export PATH="$HOME/.local/bin:$PATH"
 beam register
-beam setup --non-interactive --rpc-url=https://your-paid-rpc.example.com
+beam setup --non-interactive --rpc-url=https://rpc.mainnet.chain.robinhood.com
 beam dev
 ```
 
@@ -94,8 +94,7 @@ curl -fsSL https://raw.githubusercontent.com/irfndi/beam-clmm/main/scripts/insta
 export PATH="$HOME/.local/bin:$PATH"
 beam register
 beam version
-beam doctor
-beam setup --non-interactive --rpc-url=https://your-paid-rpc.example.com
+beam setup --non-interactive --rpc-url=https://rpc.mainnet.chain.robinhood.com
 beam dev
 ```
 
@@ -131,8 +130,7 @@ curl -fsSL https://raw.githubusercontent.com/irfndi/beam-clmm/main/scripts/insta
 export PATH="$HOME/.local/bin:$PATH"
 
 beam register                                    # required — creates the agent account
-beam setup --non-interactive --rpc-url="$SOLANA_RPC_URL" # Helius is optional
-beam doctor
+beam setup --non-interactive --rpc-url="$ROBINHOOD_RPC_URL"
 beam dev                                         # start paper trading
 ```
 
@@ -140,8 +138,7 @@ If `beam` is not on `PATH` after the one-liner install, invoke the CLI directly:
 
 ```bash
 beam register
-beam setup --non-interactive --rpc-url="$SOLANA_RPC_URL"
-beam doctor
+beam setup --non-interactive --rpc-url="$ROBINHOOD_RPC_URL"
 beam dev
 ```
 
@@ -149,18 +146,21 @@ Common agent commands:
 
 | Command                                                          | Purpose                                                           |
 | ---------------------------------------------------------------- | ----------------------------------------------------------------- |
-| `beam setup` / `beam setup --non-interactive --rpc-url=...` | Write `.env` (RPC providers, watchlist, optional API key)       |
-| `beam doctor [--fix]`                                           | Validate registration, environment, providers, and local state  |
+| `beam setup` / `beam setup --non-interactive --rpc-url=...` | Write `.env` (RPC provider, watchlist, optional API key)       |
+| `beam register`                                                 | Create the required cloud account and store its API key          |
+| `beam login <key>`                                              | Validate an existing API key and store it locally                 |
+| `beam whoami`                                                   | Show current user / API key info (requires `register`)            |
 | `beam dev`                                                      | Start the registered trading agent (paper by default)             |
 | `beam backtest --days 7`                                        | Run a historical simulation against synthetic data                |
 | `beam backtest --source replay --days 7 --pools <addr>`         | Replay live on-chain snapshots through the strategy               |
-| `beam register`                                                 | Create the required cloud account and store its API key          |
+| `beam status --message`                                         | Chat-ready summary for agent runtimes                             |
+| `beam version`                                                  | Show the current version                                          |
+| `beam update`                                                   | Self-update from R2/GitHub releases (with smoke tests + rollback) |
 | `beam feedback "..."`                                          | Store structured feedback in Beam Cloud D1                      |
 | `beam issue "..."`                                             | Store an issue in Beam Cloud D1                                  |
-| `beam whoami`                                                   | Show current user / API key info (requires `register`)            |
 | `beam link-telegram`                                            | Issue a `LINK-<16 hex>` code to link `@beam_agent_bot` (optional)  |
-| `beam update`                                                   | Self-update from R2/GitHub releases (with smoke tests + rollback) |
-| `beam wallet {generate,import,show}`                            | Non-custodial local keypair (required for live trading)           |
+| `beam telemetry`                                                | Inspect or control client error telemetry                         |
+| `beam config`                                                   | Inspect or edit DB-backed config (env > DB > defaults)            |
 
 For the bundle-install paths (one-liner and pinned release), do NOT manually edit `.env` or bypass the `beam` wrapper — always invoke `beam` so the install root and config directories are resolved consistently. If you are developing on Beam from source, use `bun run dev` directly instead; the source workflow does not create `~/.local/bin/beam` or run `install.sh`. See [docs/agent-harness.md](docs/agent-harness.md) for the full agent guide and common anti-patterns.
 
@@ -173,11 +173,23 @@ bun run backtest --days 30 --pools <addr>    # custom range
 
 ### Replay backtest from live snapshots
 
-Set `ENABLE_SNAPSHOT_CAPTURE=true` while the agent runs in paper mode. Every cycle dumps the full pool state + bin array into `pool_snapshots` in SQLite. Later, replay that real on-chain data through the strategy:
+Set `ENABLE_SNAPSHOT_CAPTURE=true` while the agent runs in paper mode. Every cycle dumps the full pool state + tick array into `pool_snapshots` in SQLite. Later, replay that real on-chain data through the strategy:
 
 ```bash
 bun run backtest --source replay --db ./beam.db --days 7 --pools <addr>
 ```
+
+## Telemetry
+
+The first `bun install` (postinstall) sends a single anonymous install ping — install id, platform, and package version — to
+`https://beam-api.irfndi.workers.dev/v1/installs/ping`. The ping is **opt-out**:
+
+- Set `BEAM_FEEDBACK_OPT_OUT=true` (or `1`/`true`/`yes`/`on`) in the environment **or** in `.env` to skip it entirely. The opt-out is read on every install run, so it also works retroactively.
+
+Feedback and issue submissions (`beam feedback` / `beam issue`) use the registered Beam account and are not telemetry. Client error
+reporting is enabled by default for registered clients (`BEAM_ERROR_REPORTING=true`) and can be pointed at a private endpoint via
+`BEAM_ERROR_ENDPOINT`; `beam telemetry` inspects or controls it. Telegram alerts are a user-requested utility, not telemetry —
+`BEAM_FEEDBACK_OPT_OUT` does not affect them.
 
 ## Configuration
 
@@ -185,7 +197,7 @@ Key `.env` variables:
 
 | Variable                  | Default      | Description                              |
 | ------------------------- | ------------ | ---------------------------------------- |
-| `WATCHLIST_POOLS`         | --           | Comma-separated pool addresses           |
+| `WATCHLIST_POOLS`         | --           | Comma-separated Uniswap v3 pool addresses / v4 pool ids |
 | `ENABLE_POOL_DISCOVERY`   | `false`      | Opt-in automatic discovery; live mode should use approved watchlist pools |
 | `DISCOVERY_MIN_TVL_USD`    | `1000000`    | Minimum TVL for automatic discovery     |
 | `PAPER_TRADING`           | `true`       | Disable to execute on-chain              |
@@ -196,21 +208,19 @@ Key `.env` variables:
 | `TRAILING_STOP_PCT`       | `0.10`       | Drawdown from peak that triggers EXIT    |
 | `SQLITE_DB_PATH`          | `./beam.db` | SQLite database file path                |
 | `ENABLE_SNAPSHOT_CAPTURE` | `false`      | Dump pool snapshots to DB (paper only)   |
-| `MAX_POSITIONS_PER_POOL`  | `2`          | Concurrent positions per pool (Wave 10)  |
+| `MAX_POSITIONS_PER_POOL`  | `2`          | Concurrent positions per pool            |
 | `ENTRY_STRATEGY_TYPE`     | `spot`       | Deposit shape: spot\|curve\|bidask\|auto |
 | `VOLATILITY_ADAPTIVE_RANGES` | `true`    | Scale range width by realized volatility (set false for static widths) |
-| `FARM_REWARDS_ENABLED`    | `true`       | Claim LM farm rewards periodically       |
-| `FEE_DESTINATION`         | `compound`   | Fee routing: compound\|accumulate-quote\|accumulate-sol |
+| `FARM_REWARDS_ENABLED`    | `true`       | Claim and compound position fees periodically |
+| `FEE_DESTINATION`         | `compound`   | Fee routing: compound\|accumulate-quote\|accumulate-eth |
 | `ALERTS_ENABLED`          | `true`       | Proactive Telegram alert delivery        |
 | `COPY_SIGNALS_ENABLED`    | `false`      | Opt-in copy-trading signal boost         |
-| `STABLECOIN_MINTS`        | `USDC/USDT/PYUSD` | Trusted stablecoin mints exempt from freeze screening + depeg detection (allowlist); empty disables |
-| `FREEZE_SMART_SCREENING`  | `false`      | Pass untrusted freeze-enabled pools on instead of rejecting |
+| `STABLECOIN_MINTS`        | `USDC/USDT/PYUSD` | Trusted stablecoin tokens exempt from depeg screening (allowlist); empty disables |
 | `IL_PROTECTION_ENABLED`   | `true`       | IL gates: entry fee/IL floor + IL-dominance EXIT |
 | `MIN_FEE_IL_RATIO`        | `1.2`        | Min fee/IL to hold; ENTER floor when IL protection is on |
 | `IL_DOMINANCE_EXIT_FACTOR` | `2`         | IL (USD) over fees × this triggers EXIT when out of range |
 | `IL_DOMINANCE_MIN_USD`    | `5`          | Minimum IL (USD) before the IL-dominance EXIT |
-| `JUPITER_TOKEN_RISK_ENABLED` | `true`    | Jupiter/Data-API token-risk overlay (freeze + ENTER gate) |
-| `JUPITER_TOKEN_RISK_CACHE_TTL_MIN` | `30` | Minutes a token-risk signal is cached (min 1) |
+| `ROBINHOOD_RPC_URL`       | (public mainnet RPC) | Robinhood Chain EVM RPC endpoint; empty uses the public default |
 
 Live entries that fail because the wallet lacks a pool token are backed off
 exponentially for that pool, starting at 30 minutes and capped at 6 hours.
@@ -310,13 +320,13 @@ HOLD executes nothing, so it skips risk evaluation entirely. Deterministic EXIT 
 ### Entry and IL-protection gates (run inside the decision loop)
 
 - **Entry fee/IL floor** (`IL_PROTECTION_ENABLED` + `MIN_FEE_IL_RATIO`): when IL protection is on, ENTER is rejected when the pool's fee/IL ratio is below the minimum — entry fees must beat estimated IL. The ratio is never unknown, so this fails closed on 0.
-- **Token-risk gate** (`JUPITER_TOKEN_RISK_ENABLED`): ENTER is rejected when either leg carries a Jupiter hard-risk signal (aggregated suspicious-audit flag, or a low organic score). Advisory and fail-open — unknown signals never block. Freeze-screening works the same way: freeze-authority tokens on `STABLECOIN_MINTS` are exempt, and other freeze tokens pass when Data-API- or Jupiter-verified instead of being rejected by design.
+- **Depeg / liquidity-drain gate**: a position leg that depegs from its stablecoin peg (`DEPEG_ABSOLUTE_USD` / `DEPEG_RELATIVE_PCT`) or whose pool liquidity drains (`LIQUIDITY_DRAIN_PCT`) triggers an exit. Stablecoin tokens on `STABLECOIN_MINTS` are exempt from depeg screening (allowlist); unknown signals fail closed.
 - **IL-dominance EXIT**: while a position is out of range, if its impermanent loss (USD) exceeds cumulative claimed fees × `IL_DOMINANCE_EXIT_FACTOR` and `IL_DOMINANCE_MIN_USD`, the position exits immediately.
 
 ### Rebalance-specific gates (run inside the decision loop, not at execution)
 
 - **Gas-aware** (`GAS_AWARE_MIN_DAYS_OF_FEES_PAID_AHEAD`): skip REBALANCE when the on-chain gas cost would not be repaid by N days of position fees (default 3 days)
-- **Volatility-adjusted sizing** (`VOLATILITY_EXIT_STDDEV`): if recent active-bin stddev exceeds the threshold AND drift > 60%, EXIT to wallet instead of REBALANCE
+- **Volatility-adjusted sizing** (`VOLATILITY_EXIT_STDDEV`): if recent active-tick stddev exceeds the threshold AND drift > 60%, EXIT to wallet instead of REBALANCE
 - **OOR recovery prediction** (`OOR_RECOVERY_HOLD_THRESHOLD`): if mean-reversion probability > threshold, HOLD and wait for the price to come back; below `OOR_RECOVERY_FORCE_REBALANCE_THRESHOLD`, REBALANCE regardless
 - **Multi-pool allocation** (`MAX_PER_POOL_ALLOCATION_PCT`): ENTER is capped so a single pool cannot exceed this percentage of the portfolio.
 - **Open-positions concurrency** (`MAX_OPEN_POSITIONS`): ENTER is rejected when this many positions are already open.
@@ -329,9 +339,9 @@ HOLD executes nothing, so it skips risk evaluation entirely. Deterministic EXIT 
 ## Stack
 
 - **Runtime**: Bun 1.4.0
-- **Strategy**: Rule-based engine with DLMM probes
-- **Memory**: SQLite + sqlite-vec, 30-day recency decay
-- **On-chain**: `@meteora-ag/dlmm` SDK, Helius RPC
+- **Strategy**: Rule-based engine over Uniswap v3/v4 tick ranges
+- **Memory**: SQLite + sqlite-vec vector memory with automatic expiry
+- **On-chain**: viem + `@uniswap/v3-sdk` + `@uniswap/v4-sdk`, Robinhood Chain RPC
 - **Config**: Effect-TS Config module with `orElseSucceed` fallbacks; every value has a sensible default and test mode auto-injects dummy API keys
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for the full component map and agent loop.

@@ -10,12 +10,18 @@
     "esModuleInterop": true,
     "skipLibCheck": true,
     "resolveJsonModule": true,
+    // Restricts ambient @types/* auto-inclusion to bun-types on purpose (Bun's
+    // runtime already provides node globals). Any new @types/* dependency MUST
+    // be listed here manually or its globals will be silently ignored.
     "types": ["bun-types"],
     "noUncheckedIndexedAccess": true,
     "noImplicitOverride": true,
     "exactOptionalPropertyTypes": true,
-    "noFallthroughCasesInSwitch": true
+    "noFallthroughCasesInSwitch": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "forceConsistentCasingInFileNames": true
   },
-  "include": ["engine/**/*", "ops/**/*", "types/**/*", "bench/**/*", "cli/**/*", "*.config.ts"],
+  "include": ["engine/**/*", "ops/**/*", "types/**/*", "bench/**/*", "cli/**/*", "scripts/**/*", "*.config.ts"],
   "exclude": ["node_modules", "dist"]
 }

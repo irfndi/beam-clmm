@@ -296,27 +296,38 @@ log_done "Checksum verified"
 
 log_step "Installing Beam to ${INSTALL_DIR}"
 mkdir -p "$BIN_DIR" "$INSTALL_DIR"
-PRESERVE_DIR="${TMP_DIR}/preserve"
-mkdir -p "$PRESERVE_DIR"
-for _state_file in .env beam.db; do
-  if [ -e "${INSTALL_DIR}/${_state_file}" ]; then
-    cp -p "${INSTALL_DIR}/${_state_file}" "${PRESERVE_DIR}/${_state_file}"
-  fi
-done
-if [ -d "${INSTALL_DIR}/logs" ]; then
-  cp -R "${INSTALL_DIR}/logs" "${PRESERVE_DIR}/logs"
+# Atomic replace: move the previous install aside (same filesystem → atomic
+# mv, never a half-deleted state), extract the new bundle, then restore state
+# files (.env/beam.db/logs) from the old install. A failure before the swap
+# leaves the previous install intact — the old rm -rf-then-extract flow could
+# permanently destroy .env/beam.db/logs if extraction or restore failed after
+# the wipe (clawpatch audit: data-loss HIGH). The backup dir is a SIBLING of
+# INSTALL_DIR (persists across the trap that cleans TMP_DIR); it is removed
+# only after a fully successful install.
+PRESERVE_DIR="${INSTALL_DIR}.backup-$$"
+if [ -d "$INSTALL_DIR" ] && [ -n "$(ls -A "$INSTALL_DIR" 2>/dev/null)" ]; then
+  mv "$INSTALL_DIR" "$PRESERVE_DIR"
 fi
-rm -rf "$INSTALL_DIR"
 mkdir -p "$INSTALL_DIR"
-tar -xzf "${TMP_DIR}/${TARBALL_NAME}" -C "$INSTALL_DIR"
-for _state_file in .env beam.db; do
-  if [ -e "${PRESERVE_DIR}/${_state_file}" ]; then
-    cp -p "${PRESERVE_DIR}/${_state_file}" "${INSTALL_DIR}/${_state_file}"
+if ! tar -xzf "${TMP_DIR}/${TARBALL_NAME}" -C "$INSTALL_DIR"; then
+  log_error "Extraction failed — restoring previous installation"
+  rm -rf "$INSTALL_DIR"
+  if [ -d "$PRESERVE_DIR" ]; then
+    mv "$PRESERVE_DIR" "$INSTALL_DIR"
   fi
-done
-if [ -d "${PRESERVE_DIR}/logs" ]; then
-  rm -rf "${INSTALL_DIR}/logs"
-  cp -R "${PRESERVE_DIR}/logs" "${INSTALL_DIR}/"
+  exit 1
+fi
+if [ -d "$PRESERVE_DIR" ]; then
+  for _state_file in .env beam.db; do
+    if [ -e "${PRESERVE_DIR}/${_state_file}" ]; then
+      cp -p "${PRESERVE_DIR}/${_state_file}" "${INSTALL_DIR}/${_state_file}"
+    fi
+  done
+  if [ -d "${PRESERVE_DIR}/logs" ]; then
+    rm -rf "${INSTALL_DIR}/logs"
+    cp -R "${PRESERVE_DIR}/logs" "${INSTALL_DIR}/"
+  fi
+  rm -rf "$PRESERVE_DIR"
 fi
 
 mkdir -p "$CONFIG_DIR" "$DATA_DIR"

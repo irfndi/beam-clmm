@@ -425,7 +425,7 @@ describe("portfolio value math (Wave 2)", () => {
       >,
     );
 
-    console.log("PNEW:", JSON.stringify(decisions.find((d) => d.poolAddress === POOL_NEW), (k, v) => typeof v === "bigint" ? v.toString() : v));
+    console.log("PNEW:", JSON.stringify(decisions.find((d) => d.poolAddress === POOL_NEW), (_, v) => typeof v === "bigint" ? v.toString() : v));
     const enter = decisions.find((d) => d.poolAddress === POOL_NEW && d.action === "ENTER");
     expect(
       enter,
@@ -595,7 +595,7 @@ describe("agent position context wiring", () => {
         ...AgentNoOp,
         getStatus: () =>
           Effect.succeed({ connected: true, transport: "acp", lastPromptAt: null, errorCount: 0 }),
-        enhanceDecision: (decision, context) => {
+        enhanceDecision: (_decision, context) => {
           capturedContext = context;
           return Effect.succeed(null);
         },

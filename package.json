@@ -1,6 +1,6 @@
 {
   "name": "beam-clmm",
-  "version": "0.0.1",
+  "version": "0.1.11",
   "description": "Autonomous concentrated-liquidity agent for Uniswap v3 & v4 on Robinhood Chain",
   "keywords": [
     "ai-agent",
@@ -16,23 +16,35 @@
     "viem"
   ],
   "license": "MIT",
+  "private": true,
+  "files": [
+    "dist",
+    "engine",
+    "cli",
+    "scripts",
+    "package.json",
+    "README.md",
+    "LICENSE"
+  ],
   "bin": {
     "beam": "./scripts/beam.sh"
   },
   "type": "module",
+  "packageManager": "bun@1.4.0",
   "scripts": {
-    "start": "bun cli/index.ts dev",
-    "dev": "bun run --watch cli/index.ts dev",
+    "start": "bun $(bun scripts/cli-entry.mjs) dev",
+    "dev": "bun run --watch $(bun scripts/cli-entry.mjs) dev",
     "build": "bun tsdown",
-    "setup": "bun cli/index.ts setup",
+    "setup": "bun $(bun scripts/cli-entry.mjs) setup",
     "setup:env": "bun run scripts/postinstall.js",
     "postinstall": "bun run scripts/postinstall.js",
-    "backtest": "bun cli/index.ts backtest",
+    "backtest": "bun $(bun scripts/cli-entry.mjs) backtest",
+    "pretest": "tsc --noEmit",
     "test": "bun --bun vitest run",
     "test:watch": "bun --bun vitest",
-    "lint": "tsc --noEmit && oxlint engine ops bench cli scripts",
-    "format": "oxfmt --write engine ops bench cli scripts",
-    "format:check": "oxfmt --check engine ops bench cli scripts",
+    "lint": "bash scripts/lint.sh",
+    "format": "oxfmt --write $(bun scripts/tool-dirs.mjs)",
+    "format:check": "oxfmt --check $(bun scripts/tool-dirs.mjs)",
     "coverage": "bun --bun vitest run --coverage",
     "prepare": "effect-tsgo patch --oxlint || echo \"warning: effect-tsgo patch failed (unsupported platform or version mismatch) — type-aware effect lint disabled\""
   },
@@ -63,9 +75,6 @@
     "tsdown": "^0.22.14",
     "typescript": "^7.0.2",
     "vitest": "^4.1.10"
-  },
-  "overrides": {
-    "typescript": "$typescript"
   },
   "engines": {
     "bun": ">=1.4.0-canary.1"

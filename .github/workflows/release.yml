@@ -14,6 +14,13 @@ env:
 permissions:
   contents: write
 
+# Serialize runs for the same release target: back-to-back pushes of the same
+# tag must not race the channel manifest write (latest.json etc.). Different
+# tags run in parallel; a run is never cancelled mid-release.
+concurrency:
+  group: release-${{ github.ref_name }}
+  cancel-in-progress: false
+
 jobs:
   version-guard:
     runs-on: ubuntu-latest
@@ -98,6 +105,12 @@ jobs:
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
         with:
+          # Deliberate pin on the canary line: engines.bun requires bun >=
+          # 1.4.0-canary.1 and the newest stable release (1.3.14) predates that
+          # floor. Bun publishes canary builds only under the moving `canary`
+          # tag (no immutable per-build artifact), so this is the tightest pin
+          # that installs; switch to a stable version here (one-line change)
+          # once a stable release satisfies the floor.
           bun-version: canary
 
       - name: Install dependencies
@@ -135,11 +148,14 @@ jobs:
             echo "CHANNEL=beta" >> "$GITHUB_ENV"
           elif [[ "${GITHUB_REF_NAME}" == *-dev* ]]; then
             echo "CHANNEL=dev" >> "$GITHUB_ENV"
-          elif [[ "${GITHUB_REF_NAME}" != v*.*.* ]]; then
+          elif [[ "${GITHUB_REF_NAME}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            # Anchored regex, NOT a glob: v1.2.3-rc.1 matches v*.*.* but is a
+            # prerelease — it must fail here, never fall through to stable and
+            # overwrite latest.json with a prerelease build.
+            echo "CHANNEL=stable" >> "$GITHUB_ENV"
+          else
             echo "::error::unsupported prerelease tag '${GITHUB_REF_NAME}'; use vX.Y.Z-beta.N or vX.Y.Z-dev.N"
             exit 1
-          else
-            echo "CHANNEL=stable" >> "$GITHUB_ENV"
           fi
           echo "→ VERSION=${VERSION} CHANNEL=${CHANNEL}"
 
@@ -151,6 +167,12 @@ jobs:
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
         with:
+          # Deliberate pin on the canary line: engines.bun requires bun >=
+          # 1.4.0-canary.1 and the newest stable release (1.3.14) predates that
+          # floor. Bun publishes canary builds only under the moving `canary`
+          # tag (no immutable per-build artifact), so this is the tightest pin
+          # that installs; switch to a stable version here (one-line change)
+          # once a stable release satisfies the floor.
           bun-version: canary
 
       - name: Install dependencies
@@ -227,7 +249,12 @@ jobs:
 
       - name: Verify release manifest completeness
         run: |
-          BUNDLE_COUNT=$(jq '.bundles | length' manifest.json)
+          BUNDLE_COUNT=$(jq -e '.bundles | length' manifest.json) || { echo "::error::could not read bundle count from manifest"; exit 1; }
+          # Fail closed: a non-numeric count (jq error, missing key) must not
+          # pass the -lt comparison below, or the gate would silently succeed.
+          case "$BUNDLE_COUNT" in
+            *[!0-9]*|'') echo "::error::bundle count is not numeric: '${BUNDLE_COUNT}'"; exit 1 ;;
+          esac
           if [ "$BUNDLE_COUNT" -lt 4 ]; then
             echo "::error::Manifest has only ${BUNDLE_COUNT} platform bundles; expected 4"
             jq '.bundles | keys' manifest.json
@@ -235,13 +262,21 @@ jobs:
           fi
           echo "✓ Manifest has ${BUNDLE_COUNT} platform bundles"
 
-      - name: Sign tarball and bundles (GPG, optional)
+      - name: Sign tarballs, checksums and manifest (GPG, optional)
         if: env.HAS_GPG_KEY == 'true'
         env:
           GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
         run: |
           echo "$GPG_PRIVATE_KEY" | gpg --import
-          for f in "release-assets/beam-v${VERSION}.tar.gz" "release-assets/beam-v${VERSION}"-*.tar.gz; do
+          # Sign everything a consumer needs to verify: each tarball, each
+          # .sha256 checksum, and the manifest itself. Consumers must verify
+          # the matching .asc files.
+          for f in \
+            "release-assets/beam-v${VERSION}.tar.gz" \
+            "release-assets/beam-v${VERSION}.tar.gz.sha256" \
+            "release-assets/beam-v${VERSION}"-*.tar.gz \
+            "release-assets/beam-v${VERSION}"-*.tar.gz.sha256 \
+            "release-assets/manifest.json"; do
             [ -e "$f" ] || continue
             gpg --batch --yes --armor --detach-sign "$f"
           done
@@ -286,7 +321,9 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: |
-          for f in "release-assets/beam-v${VERSION}"*.tar.gz.asc; do
+          # Every .asc (tarballs, checksums, manifest) is uploaded alongside
+          # its target so consumers can verify each artifact's signature.
+          for f in "release-assets/"*.asc; do
             [ -e "$f" ] || continue
             npx wrangler r2 object put "beam-backups/releases/v${VERSION}/$(basename "$f")" --file "$f" --remote
           done

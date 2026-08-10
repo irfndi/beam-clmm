@@ -11,7 +11,6 @@ import {
   type AdapterApi,
   type StrategyApi,
   type RevenueConfigApi,
-  type EntryPrepApi,
 } from "../engine/services.js";
 import { executePaper, executeLive, computePaperFeeAccrualUsd } from "../engine/program.js";
 import {
@@ -770,8 +769,6 @@ const liveRevenueConfig: RevenueConfigApi = {
       feeWalletAddress: "",
     }),
 };
-
-const liveEntryPrep: EntryPrepApi = { prepareEntryTokens: () => Effect.succeed(undefined) };
 
 describe("live lifecycle PnL accounting", () => {
   it("ENTER stores entry basis; REBALANCE inline claim accumulates fees + events; EXIT realizes PnL", async () => {

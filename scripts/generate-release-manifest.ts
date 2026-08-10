@@ -1,5 +1,8 @@
 import fs from "fs";
 import path from "path";
+import { fileURLToPath } from "url";
+
+const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 const version = process.env.VERSION ?? "";
 const channel = (process.env.CHANNEL ?? "stable") as "stable" | "beta" | "dev" | "canary";
@@ -16,8 +19,24 @@ if (!version) {
   process.exit(1);
 }
 
+// VERSION is interpolated into artifact URLs and the R2 key prefix; reject
+// anything that could escape the key path or break bundle-name matching
+// (mirrors the validation in scripts/build-bundle.ts).
+if (!/^[0-9A-Za-z][0-9A-Za-z._+-]*$/.test(version)) {
+  console.error(`Invalid VERSION: ${version}`);
+  console.error(
+    "VERSION must start with a letter or digit and contain only letters, digits, '.', '_', '-' or '+'.",
+  );
+  process.exit(1);
+}
+
 if (!["stable", "beta", "dev", "canary"].includes(channel)) {
   console.error(`Invalid channel: ${channel}`);
+  process.exit(1);
+}
+
+if (!keyPrefix) {
+  console.error("R2_KEY_PREFIX resolved to an empty string; refusing to emit a manifest with an empty key path");
   process.exit(1);
 }
 
@@ -57,7 +76,18 @@ if (Object.keys(bundles).length === 0) {
 }
 
 const tarballUrl = `${r2Base}/${keyPrefix}/beam-v${version}.tar.gz`;
-const signatureUrl = `${tarballUrl}.asc`;
+
+// The CLI's own version (engine/version.ts reads package.json) is the minimum
+// that can consume this manifest; deriving it here keeps the two from drifting.
+let minCliVersion = "0.0.0";
+try {
+  const pkg = JSON.parse(fs.readFileSync(path.join(repoRoot, "package.json"), "utf-8")) as {
+    version?: string;
+  };
+  if (typeof pkg.version === "string" && pkg.version) minCliVersion = pkg.version;
+} catch {
+  // fall back to "0.0.0" if package.json is unreadable
+}
 
 const manifest: Record<string, unknown> = {
   version,
@@ -65,9 +95,8 @@ const manifest: Record<string, unknown> = {
   ...(commit ? { commit } : {}),
   tarball_url: tarballUrl,
   sha256_url: `${tarballUrl}.sha256`,
-  signature_url: signatureUrl,
   published_at: new Date().toISOString(),
-  min_cli_version: "1.0.0",
+  min_cli_version: minCliVersion,
   bundles,
 };
 

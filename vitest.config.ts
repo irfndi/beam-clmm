@@ -20,12 +20,15 @@ export default defineConfig({
         "engine/types.ts",
         "engine/services.ts",
         "engine/logger.ts",
-        // Measured 2026-07: program.ts has ~13 scenario test files but sits at
-        // 63.6% stmts / 70.3% branch / 65.3% lines — the ~4700-line Effect.gen
-        // loop has deep branches mocks don't reach. adapter-service.ts sits at
-        // 66.6% stmts / 66.9% lines on mock-SDK tests. Both are tested; they
-        // fail the 75% gate, so they stay excluded pending branch-level tests
-        // rather than diluting the gate for everything else.
+        // Measured 2026-08-10 from their own tests (program.test.ts +
+        // program-autonomous-token.test.ts + adapter-live-tx.test.ts):
+        // program.ts 6.4% stmts / 8.5% branch, adapter-service.ts (EVM
+        // rewrite) 13.9% stmts / 11.0% branch. Both are tested but fail the
+        // 75/60 gate by a wide margin — the ~8000-line Effect.gen decision
+        // loop and the live-chain adapter have deep branches mocks don't
+        // reach. REVIEW DATE: 2026-08-10 — re-include whenever branch-level
+        // tests land or the adapter seam is rewritten; until then they stay
+        // excluded so the gate keeps gating everything else.
         "engine/adapter-service.ts",
         "engine/program.ts",
         // Runtime boundaries require external processes, WebSockets, or live

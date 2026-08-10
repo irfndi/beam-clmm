@@ -693,7 +693,7 @@ export function AgentLive(config: AppConfig): Layer.Layer<AgentService, never, n
               });
               return Effect.succeed(null);
             }),
-            Effect.catchCause((cause) => {
+            Effect.catchCause((_cause) => {
               // Interruption (the outer AGENT_PROPOSAL_TIMEOUT_MS deadline in
               // program.ts) bypasses catch — record the elapsed sample so
               // the latency window learns the model could not answer, and

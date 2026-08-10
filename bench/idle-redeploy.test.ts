@@ -1019,7 +1019,7 @@ describe("program — idle-redeploy follow-up fidelity (post-merge review)", () 
         [POOL_B]: makePool({ address: POOL_B }),
       }),
       gecko: {
-        getPoolStats: (addr: string) => Effect.succeed(makeGeckoStats()),
+        getPoolStats: (_addr: string) => Effect.succeed(makeGeckoStats()),
       },
       configOverrides: {
         watchlistPools: [POOL_A, POOL_B],

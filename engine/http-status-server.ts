@@ -11,7 +11,7 @@ import { getCurrentVersion } from "./version.js";
 
 const logger = createLogger("HttpStatusServer");
 
-function sanitizeConfig(cfg: AppConfig, snapshot: BeamStateSnapshot): Record<string, unknown> {
+function sanitizeConfig(cfg: AppConfig, _snapshot: BeamStateSnapshot): Record<string, unknown> {
   return {
     paperTrading: cfg.paperTrading,
     scanIntervalMs: cfg.scanIntervalMs,

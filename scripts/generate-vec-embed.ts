@@ -54,22 +54,37 @@ export function getEmbeddedVec0Path(): string | null {
     return null;
   }
   const prefix = hashPrefix(EMBEDDED_VEC0.data);
-  const tmpDir = path.join(os.tmpdir(), \`beam-vec0-\${prefix}\`);
-  fs.mkdirSync(tmpDir, { recursive: true });
-  // Restrict the temp dir so only the owner can access the loader path.
-  fs.chmodSync(tmpDir, 0o700);
-  const tmpPath = path.join(tmpDir, \`vec0.\${EMBEDDED_VEC0.ext}\`);
-  const embedded = Buffer.from(EMBEDDED_VEC0.data, "base64");
-  if (fs.existsSync(tmpPath)) {
-    const existing = fs.readFileSync(tmpPath);
-    if (existing.equals(embedded)) {
-      return tmpPath;
+  try {
+    // Per-user component in the dir name so two users sharing the system tmp
+    // dir never collide on (or get locked out of) the 0700 directory; the
+    // content hash keeps the path stable across lookups.
+    const uid = typeof os.userInfo().uid === "number" ? os.userInfo().uid : "unknown";
+    const tmpDir = path.join(os.tmpdir(), \`beam-vec0-\${uid}-\${prefix}\`);
+    fs.mkdirSync(tmpDir, { recursive: true });
+    // Restrict the temp dir so only the owner can access the loader path.
+    fs.chmodSync(tmpDir, 0o700);
+    const tmpPath = path.join(tmpDir, \`vec0.\${EMBEDDED_VEC0.ext}\`);
+    const embedded = Buffer.from(EMBEDDED_VEC0.data, "base64");
+    if (fs.existsSync(tmpPath)) {
+      const existing = fs.readFileSync(tmpPath);
+      if (existing.equals(embedded)) {
+        return tmpPath;
+      }
+      console.warn(\`Existing \${tmpPath} does not match the embedded vec0; overwriting\`);
     }
-    console.warn(\`Existing \${tmpPath} does not match the embedded vec0; overwriting\`);
+    // Write to a temp name and rename into place so a concurrent reader never
+    // observes a partially-written loader file.
+    const staging = path.join(tmpDir, \`vec0.\${EMBEDDED_VEC0.ext}.\${process.pid}.tmp\`);
+    fs.writeFileSync(staging, embedded);
+    fs.chmodSync(staging, 0o755);
+    fs.renameSync(staging, tmpPath);
+    return tmpPath;
+  } catch (error) {
+    // Degrade gracefully (e.g. an existing 0700 dir owned by another user):
+    // callers fall back to loading the extension from elsewhere.
+    console.warn(\`Could not materialize embedded vec0 loader: \${error}\`);
+    return null;
   }
-  fs.writeFileSync(tmpPath, embedded);
-  fs.chmodSync(tmpPath, 0o755);
-  return tmpPath;
 }
 `;
 

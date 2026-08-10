@@ -18,7 +18,6 @@ import {
 import type { ProposalBackoff } from "../engine/proposal-backoff.js";
 import type { AgentDecision } from "../engine/types.js";
 import { ConfigService } from "../engine/config-service.js";
-import { EntryPrepError } from "../engine/errors.js";
 import {
   AdapterService,
   StrategyService,

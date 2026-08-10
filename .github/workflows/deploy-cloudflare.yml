@@ -38,6 +38,11 @@ on:
       - "cloudflare/**"
       - ".github/workflows/deploy-cloudflare.yml"
 
+# Least-privilege GITHUB_TOKEN: the deploy talks to Cloudflare via its own
+# secrets and never needs write access to the repo.
+permissions:
+  contents: read
+
 # Serialize production deploys: back-to-back pushes must not run two
 # simultaneous `alchemy deploy --stage prod` jobs against the shared stack.
 # cancel-in-progress: false (never cancel mid-apply — that can leave the
@@ -50,7 +55,20 @@ concurrency:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # 60 min: 30 could cancel a production deploy mid-apply. The retry loop
+    # below is additionally self-bounded (it stops before the hard deadline),
+    # so the job timeout can never kill an in-flight `alchemy deploy`.
+    timeout-minutes: 60
+    # Single source of truth for the worker secrets: declared once here, read
+    # by the validation step and by the deploy step (no duplicated env block to
+    # keep in sync). The validation name list must match these keys; drift
+    # fails closed (a listed-but-unset var refuses the deploy).
+    env:
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_WEBHOOK_SECRET: ${{ secrets.TELEGRAM_WEBHOOK_SECRET }}
+      BOT_API_SECRET: ${{ secrets.BOT_API_SECRET }}
+      ADMIN_API_KEY: ${{ secrets.ADMIN_API_KEY }}
+      FEE_WALLET_ADDRESS: ${{ secrets.FEE_WALLET_ADDRESS }}
     defaults:
       run:
         working-directory: ./cloudflare
@@ -60,6 +78,12 @@ jobs:
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
         with:
+          # Deliberate pin on the canary line: engines.bun requires bun >=
+          # 1.4.0-canary.1 and the newest stable release (1.3.14) predates that
+          # floor. Bun publishes canary builds only under the moving `canary`
+          # tag (no immutable per-build artifact), so this is the tightest pin
+          # that installs; switch to a stable version here (one-line change)
+          # once a stable release satisfies the floor.
           bun-version: canary
 
       - name: Install dependencies
@@ -72,9 +96,11 @@ jobs:
         run: bun run typecheck && bun run build:workers
 
       # Fail fast if any required secret is unset, instead of deploying with
-      # empty secret_text values that fail closed in production. Main-only:
-      # GitHub does not provide secrets to fork PRs, so this step must not run
-      # on PRs (the typecheck above is the PR gate; the deploy below is main-only).
+      # empty secret_text values that fail closed in production. Values come
+      # from the job-level env block (single source); this list must match
+      # those keys. Main-only: GitHub does not provide secrets to fork PRs, so
+      # this step must not run on PRs (the typecheck above is the PR gate; the
+      # deploy below is main-only).
       - name: Validate required secrets
         if: github.ref == 'refs/heads/main'
         run: |
@@ -84,12 +110,6 @@ jobs:
               exit 1
             fi
           done
-        env:
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_WEBHOOK_SECRET: ${{ secrets.TELEGRAM_WEBHOOK_SECRET }}
-          BOT_API_SECRET: ${{ secrets.BOT_API_SECRET }}
-          ADMIN_API_KEY: ${{ secrets.ADMIN_API_KEY }}
-          FEE_WALLET_ADDRESS: ${{ secrets.FEE_WALLET_ADDRESS }}
 
       # Production deploy (main only). `bun run deploy` at the workspace root
       # chains `build:workers` (esbuild → cloudflare/dist/), then delegates to
@@ -113,6 +133,13 @@ jobs:
               exit 0
             fi
             if [ "$attempt" -lt 3 ]; then
+              # Self-bound: never start a 130s backoff (or a third attempt)
+              # when the job's hard timeout is near — the timeout must never
+              # cancel an in-flight alchemy apply.
+              if [ "$SECONDS" -gt 3300 ]; then
+                echo "::error::job timeout approaching; aborting deploy retries"
+                exit 1
+              fi
               echo "Deploy attempt $attempt failed — retrying in 130s (Cloudflare API backoff)..."
               sleep 130
             fi
@@ -121,11 +148,6 @@ jobs:
           exit 1
         env:
           # Cloudflare provider credentials (Alchemy auth + remote state store).
+          # Worker secrets are in the job-level env (see above).
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          # Worker secrets (Config.redacted -> secret_text on the workers).
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_WEBHOOK_SECRET: ${{ secrets.TELEGRAM_WEBHOOK_SECRET }}
-          BOT_API_SECRET: ${{ secrets.BOT_API_SECRET }}
-          ADMIN_API_KEY: ${{ secrets.ADMIN_API_KEY }}
-          FEE_WALLET_ADDRESS: ${{ secrets.FEE_WALLET_ADDRESS }}
