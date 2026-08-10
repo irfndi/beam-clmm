@@ -203,6 +203,8 @@ const swapRouter02Abi = parseAbi([
 ]);
 const universalRouterAbi = parseAbi(["function execute(bytes,bytes[],uint256) payable"]);
 
+const weth9Abi = parseAbi(["function deposit() payable"]);
+
 /** Permit2 (canonical 0x000…22D4 deployment, used by the v4 PositionManager
  *  and UniversalRouter as a forwarder). */
 export const PERMIT2: Address = getAddress("0x000000000022D473030F116dDEE9F6B43aC78BA3");
@@ -2202,18 +2204,25 @@ export const AdapterLive = Layer.effect(AdapterService,
             }
             // Wallet-funding check → single-sided deposit when only one leg is
             // fundable (full size in the held leg), per the interface docs.
+            // A WETH leg is fundable with NATIVE ETH (wrapped before mint):
+            // v3 pools are WETH-paired and the wallet holds native — without
+            // this mapping every v3 single-sided entry was rejected as
+            // 'can fund neither leg' or reverted on the mint's WETH transfer.
+            const nativeBal = await publicClient.getBalance({ address: owner });
             const [bal0, bal1] = await Promise.all([
               getBalance(state.token0, owner),
               getBalance(state.token1, owner),
             ]);
+            const wrapable0 = getAddress(state.token0) === WETH9 ? bal0 + nativeBal : bal0;
+            const wrapable1 = getAddress(state.token1) === WETH9 ? bal1 + nativeBal : bal1;
             let mode: EntryDepositMode = "two-sided";
             if (bal0 >= amount0 && bal1 >= amount1) {
               // both legs fundable — two-sided
-            } else if (bal0 >= amount0) {
+            } else if (wrapable0 >= amount0) {
               mode = "single-sided-x";
               amount1 = 0n;
               amount0 = usdToAtomic(positionSizeUsd, price0, state.token0Decimals);
-            } else if (bal1 >= amount1) {
+            } else if (wrapable1 >= amount1) {
               mode = "single-sided-y";
               amount0 = 0n;
               amount1 = usdToAtomic(positionSizeUsd, price1, state.token1Decimals);
@@ -2263,6 +2272,28 @@ export const AdapterLive = Layer.effect(AdapterService,
                 amountXUsd: usdOf(built.amount0, state.token0Decimals, price0),
                 amountYUsd: usdOf(built.amount1, state.token1Decimals, price1),
               };
+            }
+            // Native → WETH wrap for the funded leg BEFORE the mint: the v3
+            // NPM transfers WETH, and the wallet holds native ETH. Wrap the
+            // deficit (deposit into WETH9) so the mint's transfer succeeds.
+            if (!isV4) {
+              for (const [mint, amount] of [
+                [state.token0, amount0],
+                [state.token1, amount1],
+              ] as const) {
+                if (amount <= 0n || getAddress(mint) !== WETH9) continue;
+                const wethBal = await getBalance(WETH9, owner);
+                if (wethBal >= amount) continue;
+                const deficit = amount - wethBal;
+                await sendTx({
+                  to: WETH9,
+                  data: encodeFunctionData({
+                    abi: weth9Abi,
+                    functionName: "deposit",
+                  }),
+                  value: deficit,
+                });
+              }
             }
             const built = buildV3MintCalldata({
               token0: state.token0,
