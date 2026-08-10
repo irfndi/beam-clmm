@@ -133,6 +133,19 @@ const v4PositionManagerAbi = parseAbi([
   "function poolKeys(bytes25 poolId) view returns ((address,address,uint24,int24,address) poolKey)",
 ]);
 
+/** ERC-721 Transfer event — the enumeration source for the non-enumerable
+ *  v4 PositionManager (tokenOfOwnerByIndex reverts; ownerOf multicall batches
+ *  revert on ANY burned id). Mint = from 0x00, burn = to 0x00. */
+const erc721TransferEvent = {
+  type: "event",
+  name: "Transfer",
+  inputs: [
+    { type: "address", name: "from", indexed: true },
+    { type: "address", name: "to", indexed: true },
+    { type: "uint256", name: "id", indexed: true },
+  ],
+} as const;
+
 /** v3 factory PoolCreated — canonical event, verified on 4663. */
 const poolCreatedEvent = {
   type: "event",
@@ -1787,16 +1800,76 @@ export const AdapterLive = Layer.effect(AdapterService,
     }
 
     /** v4 positions of an owner via the PositionManager. */
+    // ── v4 owned-token enumeration ────────────────────────────────────────────
+    // This PM is NOT ERC721Enumerable: tokenOfOwnerByIndex reverts on 4663
+    // (probe-verified), and multicall-batched ownerOf() reverts atomically on
+    // the first BURNED id (NOT_MINTED) — both probe-verified. Enumeration
+    // instead derives ownership from ERC-721 Transfer logs (mint = from
+    // 0x00…0, burn = to 0x00…0): owned = {transfers to wallet} − {transfers
+    // from wallet}, exact for ERC-721. Gated by a 15-min TTL + balanceOf
+    // change so the log queries run at most once per window.
+    const v4OwnedIdsCache = new Map<
+      string,
+      { ids: bigint[]; balance: number; scannedAt: number }
+    >();
+    const V4_OWNED_IDS_TTL_MS = 15 * 60 * 1000;
+
+    async function v4OwnedTokenIds(owner: Address): Promise<bigint[]> {
+      const pm = v4PositionManager();
+      const balance = Number(await pm.read.balanceOf([owner]));
+      if (balance === 0) return [];
+      const cached = v4OwnedIdsCache.get(owner.toLowerCase());
+      if (
+        cached &&
+        cached.balance === balance &&
+        Date.now() - cached.scannedAt < V4_OWNED_IDS_TTL_MS
+      ) {
+        return cached.ids;
+      }
+      const toWallet = await publicClient
+        .getLogs({
+          address: V4_POSITION_MANAGER,
+          event: erc721TransferEvent,
+          args: { to: getAddress(owner) },
+          fromBlock: 0n,
+        })
+        .catch(() => []);
+      const fromWallet = await publicClient
+        .getLogs({
+          address: V4_POSITION_MANAGER,
+          event: erc721TransferEvent,
+          args: { from: getAddress(owner) },
+          fromBlock: 0n,
+        })
+        .catch(() => []);
+      const received = new Map<string, bigint>();
+      for (const log of toWallet) {
+        if (log.args.id === undefined) continue;
+        received.set(log.args.id.toString(), log.args.id);
+      }
+      for (const log of fromWallet) {
+        if (log.args.id === undefined) continue;
+        received.delete(log.args.id.toString());
+      }
+      const owned = [...received.values()];
+      v4OwnedIdsCache.set(owner.toLowerCase(), { ids: owned, balance, scannedAt: Date.now() });
+      logger.info("v4 position enumeration complete", {
+        owner: owner.slice(0, 10),
+        owned: owned.length,
+        balance,
+      });
+      return owned;
+    }
+
     async function v4PositionsOf(
       owner: Address,
       poolFilter?: string,
     ): Promise<ReadonlyArray<Position>> {
       const pm = v4PositionManager();
-      const balance = Number(await pm.read.balanceOf([owner]));
+      const ownedIds = await v4OwnedTokenIds(owner);
       const positions: Position[] = [];
-      for (let i = 0; i < balance; i++) {
+      for (const tokenId of ownedIds) {
         try {
-          const tokenId = await pm.read.tokenOfOwnerByIndex([owner, BigInt(i)]);
           // New PM interface: poolKey + packed info, liquidity via lens call.
           // Decode the REAL tick range from the packed positionInfo (200-bit
           // poolId | 24-bit tickUpper | 24-bit tickLower | 8-bit subscriber) —
