@@ -6017,7 +6017,11 @@ export const program = Effect.gen(function* () {
           !approvedPoolAddresses.includes(poolAddress) &&
           !autonomousCandidatePools.has(poolAddress) &&
           !marketScanPools.has(poolAddress) &&
-          !(config.challengeMode === true && harvestBookPools.has(poolAddress))
+          // Krystal universe keys are lowercase; v3 scan addresses are
+          // checksummed — without normalization every book pool was
+          // "unmanaged" and no live ENTER ever fired (operator report:
+          // 116 skips while the engine holds real ETH).
+          !(config.challengeMode === true && harvestBookPools.has(poolAddress.toLowerCase()))
         ) {
           logger.info("Skipping ENTER for unmanaged pool", { pool: poolAddress });
           enterGateRejected = true;
