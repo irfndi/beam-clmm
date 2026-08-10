@@ -2002,7 +2002,13 @@ export const AdapterLive = Layer.effect(AdapterService,
           try: async () => {
             // v4 poolIds are 66-char 0x-hex; v3 pools are 42-char addresses.
             if (poolAddress.length === 66) {
-              const key = V4_POOL_REGISTRY[poolAddress.toLowerCase()];
+              // On-chain-verified key (poolKeys) — the registry entry carries
+              // Krystal's cosmetic tickSpacing (400) that differs from the
+              // pool's real spacing (e.g. 60); sizing ranges off 400 produced
+              // unusable ticks and every v4 mint dry-run reverted.
+              const key = await resolveV4PoolKey(poolAddress).catch(
+                () => V4_POOL_REGISTRY[poolAddress.toLowerCase()] ?? null,
+              );
               if (!key) {
                 return {
                   address: poolAddress.toLowerCase(),
@@ -2053,7 +2059,9 @@ export const AdapterLive = Layer.effect(AdapterService,
         Effect.tryPromise({
           try: async () => {
             if (poolAddress.length === 66) {
-              const key = V4_POOL_REGISTRY[poolAddress.toLowerCase()];
+              const key = await resolveV4PoolKey(poolAddress).catch(
+                () => V4_POOL_REGISTRY[poolAddress.toLowerCase()] ?? null,
+              );
               if (!key) {
                 return {
                   lowerBinId: 0,
