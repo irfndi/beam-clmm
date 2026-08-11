@@ -1,6 +1,6 @@
 import { Effect, Fiber, Layer } from "effect";
 import { ConfigService, ConfigLive, type AppConfig } from "./config-service.js";
-import { AdapterLive } from "./adapter-service.js";
+import { AdapterLive, usdToAtomic, WETH9 } from "./adapter-service.js";
 import { StrategyLive } from "./strategy-service.js";
 import { MemoryLive } from "./memory-service.js";
 import {
@@ -1281,6 +1281,74 @@ export function executePaper(
     return { executed: true, error: undefined };
   });
 }
+
+/**
+ * Paper-mode swap dry-run. Paper trades never broadcast, so the swap/unwrap
+ * calldata path (buildV3ExactInputSingleCalldataV2 + unwrapWETH9 multicall via
+ * prepareSwap, and the eth_call simulation via simulateSwap) is otherwise never
+ * exercised by an ENTER when the engine runs in paper mode. This runs the REAL
+ * quote → prepare → simulate sequence against one non-native leg of the pool
+ * and logs the outcome, so the tx-layer swap fix is validated without real
+ * funds. Non-blocking: any failure (missing adapter methods, no wallet, an
+ * unpriceable leg, or a simulation revert) is caught and only logged — it never
+ * fails the paper ENTER.
+ */
+const paperSwapDryRun = (
+  adapter: AdapterApi,
+  decision: AgentDecision,
+  pool: PoolState,
+): Effect.Effect<void, never> =>
+  Effect.gen(function* () {
+    if (decision.action !== "ENTER" || !decision.positionSizeUsd) return;
+    if (!adapter.quoteSwap || !adapter.prepareSwap || !adapter.simulateSwap) {
+      console.info("[PAPER][swap-dry-run] swap path not available on adapter — skipping");
+      return;
+    }
+    // Pick a non-native leg to swap → native ETH (exercises the unwrap multicall).
+    const isNativeLike = (m: string) =>
+      m === NATIVE_MINT || m.toLowerCase() === WETH9.toLowerCase() || m.toLowerCase() === STABLECOIN_MINT.toLowerCase();
+    const leg = !isNativeLike(pool.tokenX) ? pool.tokenX : !isNativeLike(pool.tokenY) ? pool.tokenY : pool.tokenX;
+    const amountAtomic = usdToAtomic(Math.max(decision.positionSizeUsd, 1), 1, 6);
+    if (amountAtomic <= 0n) {
+      console.info("[PAPER][swap-dry-run] leg unpriceable at dry-run size — skipping");
+      return;
+    }
+    // Timeout-guard the dry-run so a hanging RPC never stalls the paper loop.
+    const result = yield* Effect.result(
+      Effect.timeout(
+        Effect.gen(function* () {
+          const quote = yield* adapter.quoteSwap!({
+            inputMint: leg,
+            outputMint: NATIVE_MINT,
+            amountAtomic,
+            slippageBps: 100,
+          });
+          const prepared = yield* adapter.prepareSwap!(quote);
+          const sim = yield* adapter.simulateSwap!(prepared);
+          return {
+            ok: true,
+            leg,
+            amountAtomic,
+            outAtomic: quote.outAmountAtomic,
+            minOut: quote.minimumOutAmountAtomic,
+            calldataBytes: prepared.transactionBase64.length,
+            simulated: sim.successful,
+          };
+        }),
+        "5 seconds",
+      ),
+    );
+    if (result._tag !== "Success") {
+      console.info(`[PAPER][swap-dry-run] ${leg.slice(0, 8)} → ETH dry-run failed: ${String(result.failure)}`);
+      return;
+    }
+    const d = result.success;
+    console.info(
+      `[PAPER][swap-dry-run] ${leg.slice(0, 8)} → ETH ${d.amountAtomic.toString()} in, ` +
+        `${d.outAtomic.toString()} out (min ${d.minOut.toString()}), calldata ${d.calldataBytes}B, ` +
+        `simulated ${d.simulated ? "OK" : "FAIL"}`,
+    );
+  });
 
 // ─── Live execution ──────────────────────────────────────────────────────────
 
@@ -7807,6 +7875,14 @@ export const program = Effect.gen(function* () {
           );
           executed = paperResult.executed;
           executionError = paperResult.error;
+          // Paper swap dry-run: paper mode NEVER broadcasts, so the swap/unwrap
+          // calldata path (buildV3ExactInputSingleCalldataV2 + unwrapWETH9
+          // multicall) is otherwise never exercised by an ENTER. After a paper
+          // ENTER, quote+prepare+simulate the exit leg → native ETH through the
+          // REAL swap path and log the outcome. Non-blocking: a dry-run failure
+          // (e.g. no wallet/funds, or an unpriceable leg) never fails the paper
+          // ENTER — it only records what the live path would have done.
+          yield* paperSwapDryRun(adapter, decision, pool).pipe(Effect.catch(() => Effect.void));
         } else if (config.autonomousTokenMode === "shadow" && decision.action !== "HOLD") {
           executionSkipped = true;
         } else {
