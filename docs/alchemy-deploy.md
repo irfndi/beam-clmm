@@ -1,8 +1,10 @@
 # Alchemy (Cloudflare) Deployment Plan
 
-Research report (2026-08-08). The wrangler→alchemy migration in `cloudflare/infra/`
-is ~90% done and already deployed: D1 `beam-db`, R2 `beam-backups` +
-`telemetryArchive`, Vectorize `beam-memory`, Workers `api` + `telegramBot`.
+Research report (2026-08-08, updated 2026-08-11). The wrangler→alchemy migration
+in `cloudflare/infra/` is complete and deployed: D1 `beam-db`, R2
+`beam-backups` + `telemetryArchive`, Vectorize `beam-memory`, Workers `api` +
+`telegramBot`. Production site `beam.pryx.dev`; deploys on merge to main via
+`.github/workflows/deploy-cloudflare.yml`.
 
 ## Remaining work
 
@@ -13,10 +15,17 @@ is ~90% done and already deployed: D1 `beam-db`, R2 `beam-backups` +
    `Cloudflare.Workers.cron` + `CronEventSourceLive`, bound to `beam-db` (D1),
    `beam-memory` (Vectorize), `Config.redacted` secrets (EVM private key, RPC,
    LLM key). Optional `AgentLock` Durable Object for overlap protection.
+   Today the autonomous agent runs outside Cloudflare (dev process / operator
+   host); the Cloudflare stack hosts only the API + Telegram ingestion surface.
 2. **Effect version skew**: `cloudflare/infra/package.json` pins effect
-   `-beta.102`; root is `-beta.105`. Align them.
-3. **CI**: swap wrangler deploy for `bun alchemy deploy --stage prod --yes`
-   (remote state); GitHub Action `alchemy-run/alchemy@v1` handles PR previews.
+   `-beta.102`; root is `-beta.106`. This is an intentional split today — the
+   Worker runtime runs its own Effect line and the Alchemy CLI needs Effect 4 —
+   and is not a deployment blocker. Align only if root engine code is shared
+   into a Worker.
+3. **CI**: done — production deploy uses `bun alchemy deploy` via
+   `.github/workflows/deploy-cloudflare.yml`. `ci.yml` still calls
+   `wrangler r2 object put` for canary R2 asset publishing, which is an
+   intentional out-of-band use and not a Worker deploy.
 4. **sqlite-vec stays local-only** — the engine's vector memory cannot run on
    D1; vectors on the edge go through the already-provisioned Vectorize index.
 

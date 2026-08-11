@@ -37,6 +37,10 @@ on:
     paths:
       - "cloudflare/**"
       - ".github/workflows/deploy-cloudflare.yml"
+  # Manual redeploy: lets operators force a deploy from the Actions UI without
+  # pushing a matching change (e.g. after updating a secret or re-running a
+  # failed apply).
+  workflow_dispatch:
 
 # Least-privilege GITHUB_TOKEN: the deploy talks to Cloudflare via its own
 # secrets and never needs write access to the repo.

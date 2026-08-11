@@ -13,7 +13,7 @@ Blockscout verified ABIs, and live `eth_call`s on
 | TickLens                                  | `0x7dfd4f31be6814d2906bde155c3e1b146eac1468`          |
 | QuoterV2                                  | `0x33e885ed0ec9bf04ecfb19341582aadcb4c8a9e7`          |
 | SwapRouter02                              | `0xcaf681a66d020601342297493863e78c959e5cb2`          |
-| UniversalRouter (**2.1.1**, V4_SWAP=0x10) | `0x8876789976decbfcbbbe364623c63652db8c0904`          |
+| UniversalRouter (**2.1.1**, V4_SWAP=0x10) | `0x06AfBA43Fd06227fA663b0DAecF536f6EaA6bf99`          |
 | Permit2                                   | `0x000000000022D473030F116dDEE9F6B43aC78BA3`          |
 | v4 PoolManager                            | `0x8366a39cc670b4001a1121b8f6a443a643e40951`          |
 | v4 PositionManager (**NEW interface**)    | `0x58daec3116aae6d93017baaea7749052e8a04fa7`          |

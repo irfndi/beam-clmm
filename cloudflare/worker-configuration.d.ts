@@ -6,9 +6,11 @@ declare namespace Cloudflare {
     DB: D1Database;
     CACHE: KVNamespace;
     BACKUPS: R2Bucket;
+    TELEMETRY_ARCHIVE?: R2Bucket;
     MEMORY: VectorizeIndex;
     ENVIRONMENT: string;
     TELEGRAM_WEBHOOK_URL: string;
+    TELEGRAM_BOT_URL?: string;
     API_BASE_URL: string;
     API_SERVICE?: Fetcher;
     FEE_WALLET_ADDRESS?: string;

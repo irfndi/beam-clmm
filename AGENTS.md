@@ -1,12 +1,13 @@
 # AGENTS.md
 
 Notes for AI agent harnesses working in `beam-clmm`. This repo was scaffolded
-from `irfndi/prism-liquidity-agent` (Solana / Meteora DLMM) and is being
-refactored into an autonomous concentrated-liquidity agent for **Uniswap v3 &
-v4 on Robinhood Chain** (EVM, chain id 4663), deployed on Cloudflare via the
-Alchemy framework. The refactor is IN PROGRESS — the code does not compile
-until the EVM adapter seam is rebuilt. See `.ulw-notepad.md` for the current
-handoff state and next steps.
+from `irfndi/prism-liquidity-agent` (Solana / Meteora DLMM) and has been
+ported into an autonomous concentrated-liquidity agent for **Uniswap v3 & v4
+on Robinhood Chain** (EVM, chain id 4663), deployed on Cloudflare via the
+Alchemy framework. The EVM port is COMPLETE: the code compiles, typechecks,
+and the full test suite passes. See `.ulw-notepad.md` for the verified
+chain-fact handoff and `.github/workflows/deploy-cloudflare.yml` for the
+deployment path.
 
 ## Project
 
@@ -18,7 +19,8 @@ live on-chain execution requires an EVM wallet private key and
 
 The engine architecture (Effect-TS services, decision loop, risk gates,
 SQLite state, memory, alerts) carries over from Prism unchanged in shape; the
-chain-specific layer is being rewritten Solana → EVM.
+chain-specific layer is fully ported to EVM (`engine/adapter-service.ts`,
+`engine/evm-token-risk.ts`, viem + Uniswap SDKs).
 
 ## Verified chain facts (2026-08)
 
@@ -33,41 +35,48 @@ chain-specific layer is being rewritten Solana → EVM.
 | Uniswap v4 PoolManager | `0x8366a39cc670b4001a1121b8f6a443a643e40951` |
 | v4 PositionManager | `0x58daec3116aae6d93017baaea7749052e8a04fa7` |
 | v4 Quoter / StateView | `0x8dc178eFB8111BB0973Dd9d722ebeFF267c98F94` / `0xF3334192D15450CdD385c8B70e03f9A6bD9E673b` |
-| Universal Router | `0x8876789976decbfcbbbe364623c63652db8c0904` |
+| Universal Router | `0x06AfBA43Fd06227fA663b0DAecF536f6EaA6bf99` |
+| SwapRouter02 | `0xCaf681a66D020601342297493863E78C959E5cb2` |
+| Multicall3 | `0xcA11bDe05977b3631167028862bE2a173976CA11` |
+| WETH | `0x0Bd7D308f8E1639FAb988df18A8011f41EAcAD73` |
 | Permit2 | `0x000000000022D473030F116dDEE9F6B43aC78BA3` |
 
-viem does not ship a built-in chain for 4663 — define it with
-`defineChain({ id: 4663, ... })` (see handoff). `@uniswap/v3-sdk` +
-`@uniswap/v4-sdk` + `@uniswap/sdk-core` + `viem` are already in
+viem does not ship a built-in chain for 4663 — it is defined with
+`defineChain({ id: 4663, ... })` in `engine/adapter-service.ts`.
+`@uniswap/v3-sdk` + `@uniswap/v4-sdk` + `@uniswap/sdk-core` + `viem` are in
 `package.json`.
 
 ## Current state
 
-- Removed: all Solana/Meteora modules (`adapter-service`, `meteora-datapi`,
-  `gecko-*`, `entry-prep`, `entry-sol-budget`, `rewards`, `token-risk`,
-  `rugcheck`, `screener`, `market-gate`, `candidate-*`, `fallen-angel-*`,
-  `tp-ladder`, `discovery-policy`, revenue/referral services) and their
-  tests. `cli/doctor.ts`, `cli/wallet.ts`, `ops/fetch-history.ts` removed.
+- **Complete EVM port.** All Solana/Meteora-specific execution modules were
+  ported to EVM; the Uniswap v3/v4 integration lives in
+  `engine/adapter-service.ts` (EVM adapter), `engine/evm-token-risk.ts`
+  (honeypot/tax/owner/upgradability probes), and `engine/constants.ts`
+  (ETH native, USDG, wei reserves). The engine compiles (`tsc --noEmit` exits
+  0) and the full test suite passes (93 files / 1331 tests).
 - Renamed: `prism` → `beam` everywhere (env vars `PRISM_*` → `BEAM_*`, config
   dir, CLI binary `beam`, `scripts/beam.sh`, skills, packages).
-- `engine/constants.ts` rewritten for EVM (ETH native, USDG, wei reserves).
-  `cli/setup.ts` / `ops/setup.ts` now prompt for `ROBINHOOD_RPC_URL`.
-- **Broken seam (next agent's job #1):** `engine/types.ts`, `engine/services.ts`
-  (AdapterService Tag), `engine/program.ts`, `engine/config-service.ts`,
-  `engine/strategy-service.ts`, `engine/risk-service.ts`, `cli/portfolio.ts`,
-  `ops/backtest.ts` still carry Solana shapes and import deleted modules.
-  Tests importing `program.ts` / `services.ts` (decision-loop-*,
-  multi-position, idle-redeploy, il-protection, metrics-*, pnl-accounting,
-  reconcile-positions, volatility-adaptive-range, program.test) will fail
-  until the seam is ported.
+- `cli/setup.ts` / `ops/setup.ts` prompt for `ROBINHOOD_RPC_URL`.
+- Deployment: Cloudflare Workers (`api` + `telegramBot`) + D1 + KV + R2 +
+  Vectorize, managed as TypeScript via Alchemy (`cloudflare/infra/alchemy.run.ts`).
+  Production site `beam.pryx.dev`. Deploys on merge to main via
+  `.github/workflows/deploy-cloudflare.yml`.
 
 ## Build / test
 
 ```bash
 bun install
-bun run lint        # tsc --noEmit && oxlint
+bun run lint        # tsc --noEmit && oxlint (scripts/lint.sh)
 bun run format      # oxfmt --write
 bun run test        # vitest (bench/**, Bun required)
+```
+
+Cloudflare subproject (separate workspace, own Effect line):
+
+```bash
+cd cloudflare && bun install
+bun run typecheck   # tsc --noEmit workspaces
+bunx vitest run     # worker tests (api, telegram-bot, ...)
 ```
 
 ## Conventions (kept from Prism)
@@ -83,9 +92,7 @@ bun run test        # vitest (bench/**, Bun required)
 
 ## Where to look first
 
-- Handoff + next steps: `.ulw-notepad.md`
-- Seam to rebuild: `engine/services.ts` → `engine/types.ts` → new
-  `engine/adapter-service.ts` → `engine/program.ts`
-- Deployment target: Cloudflare Workers + D1 via Alchemy (`bun alchemy deploy`),
-  see handoff; the old `cloudflare/` wrangler subproject still exists but is
-  the legacy deployment path.
+- Verified chain-fact handoff: `.ulw-notepad.md`
+- EVM adapter + decision loop: `engine/adapter-service.ts`, `engine/program.ts`
+- Deployment (Alchemy): `cloudflare/infra/alchemy.run.ts`,
+  `.github/workflows/deploy-cloudflare.yml`, `docs/alchemy-deploy.md`

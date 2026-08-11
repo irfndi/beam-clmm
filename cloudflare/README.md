@@ -28,10 +28,10 @@ cloudflare/
 ```
 
 > **One Effect runtime, one workspace.** All of `cloudflare/` (workers,
-> `hono`, and the Alchemy composition root) runs on `effect@4.0.0-beta.105`.
-> Alchemy v2 (`alchemy@2.0.0-beta.64`) requires the Effect 4 runtime
+> `hono`, and the Alchemy composition root) runs on `effect@4.0.0-beta.102`.
+> Alchemy v2 (`alchemy@2.0.0-beta.70`) requires the Effect 4 runtime
 > (`peerDependencies effect ">=4.0.0-beta.100 || >=4.0.0"`). The workers and
-> `infra/` are pinned to the same `4.0.0-beta.105` line, so a single `bun
+> `infra/` are pinned to the same `4.0.0-beta.102` line, so a single `bun
 > install` at `cloudflare/` resolves one Effect tree for the whole
 > subproject. The worker `main` entries (`../workers/...`) are bundled by
 > Alchemy with a resolver rooted at the entry file.
@@ -41,13 +41,13 @@ cloudflare/
 | Resource              | Value                                         | Status    |
 | --------------------- | --------------------------------------------- | --------- |
 | API Worker            | https://beam-api.irfndi.workers.dev          | ✅ Live   |
-| Telegram Bot          | https://beam-telegram-bot.irfndi.workers.dev | ✅ Live   |
+| Telegram Bot          | https://beam.pryx.dev (custom domain)        | ✅ Live   |
 | Telegram Bot Username | @beam_agent_bot                              | ✅ Active |
 | Cloudflare Account ID | `a37da71c38a2f7ab732057d87d5d0f6e`            | Active    |
 
 ## Deploying via Alchemy
 
-Infrastructure is declared in TypeScript in `cloudflare/infra/alchemy.run.ts` (Alchemy v2, "Infrastructure-as-Effects"). One typed program declares both Workers plus the D1 / KV / R2 / Vectorize resources they bind, replacing the old `wrangler.toml` / `wrangler.telegram.toml` pipeline (both files are deleted). `wrangler` stays a devDependency of the workspace root only for the vitest-pool-workers test suite and the out-of-band release R2 writes; the Alchemy CLI ships in the `infra/` workspace package as the exact-pinned dependency `alchemy@2.0.0-beta.64` (with the Effect-4 runtime its peers require — see the workspace note above).
+Infrastructure is declared in TypeScript in `cloudflare/infra/alchemy.run.ts` (Alchemy v2, "Infrastructure-as-Effects"). One typed program declares both Workers plus the D1 / KV / R2 / Vectorize resources they bind, replacing the old `wrangler.toml` / `wrangler.telegram.toml` pipeline (both files are deleted). `wrangler` stays a devDependency of the workspace root only for the vitest-pool-workers test suite and the out-of-band release R2 writes; the Alchemy CLI ships in the `infra/` workspace package as the exact-pinned dependency `alchemy@2.0.0-beta.70` (with the Effect-4 runtime its peers require — see the workspace note above).
 
 `cloudflare/infra/alchemy.run.ts` is the source of truth when this document and the code disagree. The docs it is grounded on:
 
@@ -137,7 +137,7 @@ Telegram webhook registration is NOT managed by Alchemy. It is the same manual s
 ```bash
 # Replace YOUR_BOT_TOKEN with the @BotFather token.
 # secret_token MUST match TELEGRAM_WEBHOOK_SECRET; the worker fails closed without it.
-curl "https://api.telegram.org/botYOUR_BOT_TOKEN/setWebhook?url=https://beam-telegram-bot.irfndi.workers.dev/webhook&secret_token=YOUR_WEBHOOK_SECRET"
+curl "https://api.telegram.org/botYOUR_BOT_TOKEN/setWebhook?url=https://beam.pryx.dev/webhook&secret_token=YOUR_WEBHOOK_SECRET"
 
 # Verify
 curl "https://api.telegram.org/botYOUR_BOT_TOKEN/getWebhookInfo"
@@ -367,8 +367,8 @@ Declared as literal strings in each worker's `env: {}` block in `alchemy.run.ts`
 | Variable               | Default                                                 | Description                    |
 | ---------------------- | ------------------------------------------------------- | ------------------------------ |
 | `ENVIRONMENT`          | `production`                                            | Environment name               |
-| `TELEGRAM_WEBHOOK_URL` | `https://beam-telegram-bot.irfndi.workers.dev/webhook` | Webhook URL                    |
-| `TELEGRAM_BOT_URL`     | `https://beam-telegram-bot.irfndi.workers.dev`         | Bot worker base URL (alert push) |
+| `TELEGRAM_WEBHOOK_URL` | `https://beam.pryx.dev/webhook` | Webhook URL                    |
+| `TELEGRAM_BOT_URL`     | `https://beam.pryx.dev`         | Bot worker base URL (alert push) |
 | `API_BASE_URL`         | `https://beam-api.irfndi.workers.dev`                  | API URL (used by Telegram bot) |
 
 ## Related Documentation
