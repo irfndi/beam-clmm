@@ -327,7 +327,7 @@ describe("snapshot statsSource trust model on replay", () => {
   const outlierFees = {
     tvlUsd: 100_000,
     volume24hUsd: 600_000,
-    fees24hUsd: 600_000 * 0.025,
+    fees24hUsd: 600_000 * 0.25, // 25% fee/volume — far above the 10% band
   };
 
   it("a datapi snapshot restores gate-on: the outlier measured fee rate is FLAGGED (no vol/tvl stacking)", () => {
@@ -346,7 +346,7 @@ describe("snapshot statsSource trust model on replay", () => {
         const pool = replayPool({ ...outlierFees, statsSource: restored!.statsSource });
         // Measured fees (datapi/krystal) prove the volume real, so the vol/tvl
         // suspicion penalty is skipped — the OUTLIER MEASURED FEE RATE still
-        // flags (2.5% > 2% band) but no longer stacks a vol/tvl penalty.
+        // flags (25% > 10% band) but no longer stacks a vol/tvl penalty.
         const auth = DLMMStrategy.checkVolumeAuthenticity(pool, pool.statsSource === "datapi");
         expect(auth.flags.some((f: string) => f.includes("outlier"))).toBe(true);
         expect(auth.flags.some((f: string) => f.includes("elevated"))).toBe(false);

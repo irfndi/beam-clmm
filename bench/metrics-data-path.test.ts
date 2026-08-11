@@ -97,6 +97,27 @@ describe("computeFeeIlRatio with real drift data", () => {
     const wideRatio = DLMMStrategy.computeFeeIlRatio(pool, wideStep);
     expect(narrowRatio).not.toBe(wideRatio);
   });
+
+  it("(iii) fast-sampled (43s) pool's fee/IL is NOT pathologically low — cyclesPerDay is capped", () => {
+    // A healthy high-fee pool sampled every 43s (challenge cadence). The old
+    // code extrapolated the per-cycle drift by ~2009 cycles/day, collapsing
+    // fee/IL to ~0.01-0.70 (below the 1.2 gate) and blocking every ENTER. The
+    // cap at MAX_CYCLES_PER_DAY=24 keeps the estimate realistic so the pool
+    // passes the fee/IL gate.
+    const pool = makePool({
+      tvlUsd: 20_000,
+      fees24hUsd: 3_000, // ~15% daily fee yield — genuinely profitable
+      currentPrice: 154.5,
+      timestamp: 1_800_000_000_000,
+    });
+    const binArray = makeConcentratedBinArray();
+    const ratio = DLMMStrategy.computeFeeIlRatio(pool, binArray, {
+      previousPrice: 154.0, // tiny 0.3% drift over the 43s window
+      previousTimestamp: 1_800_000_000_000 - 43_000,
+    });
+    // With the cap the ratio reflects realistic daily IL and clears the gate.
+    expect(ratio).toBeGreaterThan(1.2);
+  });
 });
 
 // ─── (iv) bin utilization must not be fabricated to 1.0 ──────────────────────

@@ -32,6 +32,28 @@ const MAX_CONCENTRATION_MULTIPLIER = 10;
 /** Assumed daily drift per unit of bin step when no price history exists yet. */
 const BIN_STEP_DRIFT_PROXY_PER_DAY = 10;
 
+/**
+ * Upper bound on how many drift cycles per day the live-drift IL extrapolation
+ * may assume. A fast snapshot cadence (43s in challenge mode) would otherwise
+ * yield cyclesPerDay ~2009, linearly scaling a single short-window move into a
+ * pathological daily IL (fee/IL ~0.01-0.70) that rejected nearly every ENTER.
+ * Capping at 24 (hourly) stops the blow-up while still letting genuine
+ * volatility register (a low-fee high-drift pool stays below the gate).
+ */
+const MAX_CYCLES_PER_DAY = 24;
+
+/**
+ * Fee-rate (fees24h / volume24h) band below/above which a pool's volume
+ * authenticity is docked as an "outlier". The upper cap is 10% rather than
+ * mainnet's ~2% because Robinhood Chain is a low-liquidity chain where
+ * legitimate krystal-measured pools carry 0.5-6% fee rates (high per-swap fees
+ * on comparatively small volume). The 2% cap falsely docked real pools to
+ * exactly volumeAuth=0.8, failing the strict `> 0.8` candidate gate. 10% still
+ * flags egregious wash-style ratios while admitting genuine pools.
+ */
+const MIN_FEE_RATE = 0.0002;
+const MAX_FEE_RATE = 0.1;
+
 /** IL fraction of a full-range LP position after price moves by ratio r. */
 function impermanentLossFraction(priceRatio: number): number {
   return Math.abs((2 * Math.sqrt(priceRatio)) / (1 + priceRatio) - 1);
@@ -96,7 +118,16 @@ export function estimateDailyIlUsd(
   if (hasDrift) {
     const ratio = Math.min(Math.max(pool.currentPrice / previousPrice, 0.5), 2);
     const elapsedMs = pool.timestamp - previousTimestamp;
-    const cyclesPerDay = MS_PER_DAY / elapsedMs;
+    // The per-cycle drift is extrapolated to a day by MS_PER_DAY / elapsedMs.
+    // With a fast snapshot cadence (e.g. 43s in challenge mode) that factor is
+    // ~2009. Linearly scaling a single short-window move by ~2009 assumes every
+    // cycle drifts like the last one with no mean reversion, grossly overstating
+    // daily IL (fee/IL collapsed to 0.01-0.70 and the fee/IL gate rejected nearly
+    // every ENTER). Cap the extrapolation at MAX_CYCLES_PER_DAY (hourly): a
+    // short-window move is assumed to persist for at most ~24 cycles/day. This
+    // keeps genuine volatility (a low-fee high-drift pool still scores < the
+    // gate) while stopping the pathological blow-up on fast-sampled pools.
+    const cyclesPerDay = Math.min(MS_PER_DAY / elapsedMs, MAX_CYCLES_PER_DAY);
     const ilDailyFraction = impermanentLossFraction(ratio) * cyclesPerDay * concentration;
     return pool.tvlUsd * ilDailyFraction;
   }
@@ -219,7 +250,7 @@ export const DLMMStrategy: StrategyApi = {
     // (real volume + real reserve TVL).
     if (feesMeasured && pool.volume24hUsd > 0) {
       const feeRate = pool.fees24hUsd / pool.volume24hUsd;
-      if (feeRate < 0.0002 || feeRate > 0.02) {
+      if (feeRate < MIN_FEE_RATE || feeRate > MAX_FEE_RATE) {
         score -= 0.2;
         flags.push(`fee-rate=${(feeRate * 100).toFixed(4)}% (outlier)`);
       }

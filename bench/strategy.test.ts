@@ -78,7 +78,8 @@ describe("DLMMStrategy", () => {
     });
 
     it("flags outlier fee rate (too high)", () => {
-      const pool = makePool({ volume24hUsd: 100_000, fees24hUsd: 5_000 });
+      // 90% fee/volume is well above the 10% band → still flagged as outlier.
+      const pool = makePool({ volume24hUsd: 100_000, fees24hUsd: 90_000 });
       const result = DLMMStrategy.checkVolumeAuthenticity(pool, true);
       expect(result.flags.some((f: string) => f.includes("outlier"))).toBe(true);
     });
@@ -118,10 +119,25 @@ describe("DLMMStrategy", () => {
       expect(result.score).toBeGreaterThan(0.8);
     });
 
-    it("(b) keeps the fee-rate penalty active for measured (datapi) fees at the same rate", () => {
-      const result = DLMMStrategy.checkVolumeAuthenticity(geckoHighBinStep, true);
+    it("(b) keeps the fee-rate penalty ACTIVE for a genuinely-outlier measured rate above the 10% band", () => {
+      // A 2.25% rate is now within the 10% band (Robinhood low-liquidity
+      // pools legitimately carry 0.5-6% fee rates); a 90% rate is a true
+      // wash/data anomaly and must still be docked.
+      const outlierPool = makePool({
+        tvlUsd: 5_000_000,
+        volume24hUsd: 1_000_000,
+        fees24hUsd: 1_000_000 * 0.9,
+        binStep: 200,
+      });
+      const result = DLMMStrategy.checkVolumeAuthenticity(outlierPool, true);
       expect(result.score).toBe(0.8);
       expect(result.flags.some((f: string) => f.includes("outlier"))).toBe(true);
+    });
+
+    it("(c) does NOT penalize a measured 2.25% rate (within the 10% Robinhood band)", () => {
+      const result = DLMMStrategy.checkVolumeAuthenticity(geckoHighBinStep, true);
+      expect(result.score).toBe(1);
+      expect(result.flags.some((f: string) => f.includes("outlier"))).toBe(false);
     });
 
     it("(d) gecko computeMetrics reports penalty-free, known authenticity → no volume-auth EXIT artifact", () => {
@@ -143,7 +159,7 @@ describe("DLMMStrategy", () => {
       expect(metrics.volumeAuthenticity).toBeGreaterThan(0.8);
     });
 
-    it("(d) datapi computeMetrics with the same measured rate still penalizes to 0.8", () => {
+    it("(d) datapi computeMetrics with a 2.25% rate (within the 10% band) is NOT penalized", () => {
       const datapiPool = makePool({
         tvlUsd: 5_000_000,
         volume24hUsd: 1_000_000,
@@ -153,7 +169,9 @@ describe("DLMMStrategy", () => {
       });
       const binArray = makeBinArray();
       const metrics = DLMMStrategy.computeMetrics(datapiPool, binArray, 0);
-      expect(metrics.volumeAuthenticity).toBe(0.8);
+      // 2.25% measured rate falls inside the 10% Robinhood band → no fee-rate
+      // penalty, so authenticity stays 1 (passes the strict > 0.8 ENTER gate).
+      expect(metrics.volumeAuthenticity).toBe(1);
       expect(metrics.volumeAuthenticityKnown).toBe(true);
     });
   });
