@@ -120,13 +120,15 @@ const observability = {
   },
 };
 
-/** API worker — `beam-api.irfndi.workers.dev`. */
+/** API worker — `beam-api.pryx.dev` (custom domain, consistent with the bot's
+ * `beam.pryx.dev`; workers.dev hostname remains reachable as a fallback). */
 export const api = Cloudflare.Worker("api", {
   name: "beam-api",
   main: "../dist/api/index.mjs",
   bundle: false,
   compatibility,
   observability,
+  domain: { name: "beam-api.pryx.dev" },
   env: {
     // Native Cloudflare bindings (same binding names as wrangler.toml).
     DB: database,
@@ -163,8 +165,8 @@ export const telegramBot = Cloudflare.Worker("telegramBot", {
     // Shares the SAME database and KV namespace as the API worker.
     DB: database,
     CACHE: cache,
-    // Plain var: the workers.dev HTTPS URL the bot calls (NOT a service binding).
-    API_BASE_URL: "https://beam-api.irfndi.workers.dev",
+    // Plain var: the custom-domain HTTPS URL the bot calls (NOT a service binding).
+    API_BASE_URL: "https://beam-api.pryx.dev",
     // Service binding to the API worker. Cloudflare rejects worker->worker
     // fetches over the same-zone workers.dev hostname (error 1042); the
     // binding is the sanctioned transport. `api` is declared above, so no TDZ.

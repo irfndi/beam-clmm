@@ -2,7 +2,7 @@
 
 Cloudflare Workers subproject for the Beam Liquidity Agent platform. Hosts the API backend and Telegram bot for multi-tenant registration, authentication, wallet management, and notifications.
 
-> **For agent harnesses (OpenClaw, Hermes, acpx):** These workers are **already deployed** in production. You do NOT need to set up or deploy them. Just use the live API at `https://beam-api.irfndi.workers.dev`. This README is for human operators and developers who need to redeploy.
+> **For agent harnesses (OpenClaw, Hermes, acpx):** These workers are **already deployed** in production. You do NOT need to set up or deploy them. Just use the live API at `https://beam-api.pryx.dev`. This README is for human operators and developers who need to redeploy.
 
 ## Architecture
 
@@ -40,7 +40,7 @@ cloudflare/
 
 | Resource              | Value                                         | Status    |
 | --------------------- | --------------------------------------------- | --------- |
-| API Worker            | https://beam-api.irfndi.workers.dev          | ✅ Live   |
+| API Worker            | https://beam-api.pryx.dev                    | ✅ Live   |
 | Telegram Bot          | https://beam.pryx.dev (custom domain)        | ✅ Live   |
 | Telegram Bot Username | @beam_agent_bot                              | ✅ Active |
 | Cloudflare Account ID | `a37da71c38a2f7ab732057d87d5d0f6e`            | Active    |
@@ -369,7 +369,7 @@ Declared as literal strings in each worker's `env: {}` block in `alchemy.run.ts`
 | `ENVIRONMENT`          | `production`                                            | Environment name               |
 | `TELEGRAM_WEBHOOK_URL` | `https://beam.pryx.dev/webhook` | Webhook URL                    |
 | `TELEGRAM_BOT_URL`     | `https://beam.pryx.dev`         | Bot worker base URL (alert push) |
-| `API_BASE_URL`         | `https://beam-api.irfndi.workers.dev`                  | API URL (used by Telegram bot) |
+| `API_BASE_URL`         | `https://beam-api.pryx.dev`                            | API URL (used by Telegram bot) |
 
 ## Related Documentation
 
