@@ -87,7 +87,22 @@ describe("ConfigService STABLECOIN_MINTS", () => {
 
   it("defaults to the verified USDG stablecoin mint when unset", async () => {
     const cfg = await loadConfig();
-    expect(cfg.stablecoinMints).toEqual(new Set(["0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168"]));
+    // Lowercase-normalized: matches the EVM adapter's lowercase token mints.
+    expect(cfg.stablecoinMints).toEqual(new Set(["0x5fc5360d0400a0fd4f2af552add042d716f1d168"]));
+  });
+
+  it("normalizes config entries to lowercase for case-insensitive matching", async () => {
+    // The EVM adapter returns token mints lowercase; a checksummed or
+    // mixed-case STABLECOIN_MINTS entry must still match. Regression for the
+    // allowlist comparison that would otherwise fail for the default USDG mint.
+    vi.stubEnv("STABLECOIN_MINTS", "0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168,0x0Bd7D308f8E1639FAb988df18A8011f41EAcAD73");
+    const cfg = await loadConfig();
+    expect(cfg.stablecoinMints).toEqual(
+      new Set([
+        "0x5fc5360d0400a0fd4f2af552add042d716f1d168",
+        "0x0bd7d308f8e1639fab988df18a8011f41eacad73",
+      ]),
+    );
   });
 
   it("yields an empty set when explicitly disabled with an empty string", async () => {
@@ -97,7 +112,7 @@ describe("ConfigService STABLECOIN_MINTS", () => {
   });
 
   it("rejects invalid stablecoin mints with an actionable config error", async () => {
-    vi.stubEnv("STABLECOIN_MINTS", "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v,not-a-public-key");
+    vi.stubEnv("STABLECOIN_MINTS", "0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168,not-a-public-key");
     await expect(loadConfig()).rejects.toThrow("STABLECOIN_MINTS");
   });
 });

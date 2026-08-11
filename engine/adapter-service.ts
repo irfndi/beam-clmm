@@ -1051,13 +1051,22 @@ export const AdapterLive = Layer.effect(AdapterService,
 
     async function getDecimals(mint: string): Promise<number> {
       if (isNative(mint)) return 18;
-      const cached = decimalsCache.get(mint.toLowerCase());
+      const mintKey = mint.toLowerCase();
+      const cached = decimalsCache.get(mintKey);
       if (cached !== undefined) return cached;
-      const decimals = await erc20(getAddress(mint))
-        .read.decimals()
-        .catch(() => 18);
-      decimalsCache.set(mint.toLowerCase(), Number(decimals));
-      return Number(decimals);
+      let decimals: number;
+      try {
+        decimals = Number(await erc20(getAddress(mint)).read.decimals());
+      } catch {
+        // Fail closed on a malformed/non-standard ERC-20: guessing 18 here
+        // silently mis-prices a 6-decimal token by 12 orders of magnitude.
+        // The settlement stablecoin (USDG) and native ETH are the only tokens
+        // the engine needs to price without a live decimals() call.
+        if (mintKey === STABLECOIN_MINT.toLowerCase()) decimals = 6;
+        else throw new Error(`decimals() read failed for ${mint}; cannot determine token precision`);
+      }
+      decimalsCache.set(mintKey, decimals);
+      return decimals;
     }
 
     async function getBalance(mint: string, owner: Address): Promise<bigint> {

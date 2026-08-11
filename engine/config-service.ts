@@ -1581,7 +1581,11 @@ const loadConfig = Effect.gen(function* () {
       }),
     );
   }
-  const stablecoinMints = new Set(stablecoinMintsList);
+  // Normalized to lowercase: pool token mints arrive lowercase from the EVM
+  // adapter (token0.toLowerCase()), so an unnormalized checksummed/mixed-case
+  // config entry (e.g. USDG 0x5fc5360D...) would never match. Lowercasing the
+  // whole set keeps the allowlist comparison case-insensitive.
+  const stablecoinMints = new Set(stablecoinMintsList.map((mint) => mint.toLowerCase()));
 
   const cfg: AppConfig = {
     walletPrivateKey,

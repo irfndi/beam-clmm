@@ -1588,8 +1588,8 @@ export function executeLive(
           tokenXSymbol: pool.tokenXSymbol,
           tokenYSymbol: pool.tokenYSymbol,
           activeBinId: pool.activeBinId,
-          lowerBinId: recommended.lowerBinId,
-          upperBinId: recommended.upperBinId,
+          lowerBinId: floored.lowerBinId,
+          upperBinId: floored.upperBinId,
           timestamp: Date.now(),
           outOfRangeSince: null,
           oorCycleCount: 0,
@@ -2686,10 +2686,14 @@ export const program = Effect.gen(function* () {
       harvestBookPools.clear();
       harvestBookStats.clear();
       for (const entry of ranked) {
-        harvestBookPools.add(entry.address);
+        // Normalize to lowercase: Krystal may return checksummed/mixed-case
+        // addresses, but the eval loop compares pool addresses lowercase
+        // (getAddress().toLowerCase()). Without normalization every book pool
+        // would be "unmanaged" and no live ENTER would fire.
+        harvestBookPools.add(entry.address.toLowerCase());
         const stats = universe.get(entry.address);
         if (stats) {
-          harvestBookStats.set(entry.address, {
+          harvestBookStats.set(entry.address.toLowerCase(), {
             tvlUsd: stats.tvlUsd,
             fees24hUsd: stats.feeUsd24h,
             apr: stats.apr,
@@ -6681,7 +6685,7 @@ export const program = Effect.gen(function* () {
           // snapshot query; a load failure fails CLOSED (rule 11: downgrade
           // to HOLD rather than guess from stale data).
           const persistenceDecision =
-            config.challengeMode === true && harvestBookPools.has(poolAddress)
+            config.challengeMode === true && harvestBookPools.has(poolAddress.toLowerCase())
               ? yield* db
                   .getSnapshots(
                     poolAddress,
@@ -6711,7 +6715,7 @@ export const program = Effect.gen(function* () {
           const exitRouteProof =
             config.challengeMode === true &&
             config.exitRouteProofRequired !== false &&
-            harvestBookPools.has(poolAddress)
+            harvestBookPools.has(poolAddress.toLowerCase())
               ? adapter.verifyExitRoute
                 ? yield* adapter
                     .verifyExitRoute(poolAddress, Math.min(config.maxEntrySizeUsd, 5_000))

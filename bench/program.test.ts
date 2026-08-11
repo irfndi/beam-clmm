@@ -334,6 +334,71 @@ describe("executeLive", () => {
     expect(enterEvent?.metadata?.["depositMode"]).toBe("single-sided-x");
     expect(enterEvent?.metadata?.["strategyShape"]).toBe("spot");
   });
+
+  it("persists the floored (min-range) ticks, not the raw recommendation, for ENTER", () => {
+    // Regression: the on-chain position is entered at floorRangeToMinPct's
+    // widened range, but the recorded position must reflect the SAME widened
+    // ticks — otherwise the book disagrees with the chain and rebalance/exit
+    // decisions (and reconciliation) use a too-narrow range.
+    const poolAddress = "TestPool111111111111111111111111111111111111";
+    const positionSizeUsd = 1234;
+
+    const savePositionEventSpy = vi.fn().mockReturnValue(Effect.void);
+    const db: DbApi = { ...makeDb(), savePositionEvent: savePositionEventSpy };
+    const trackedPositions = new Map();
+
+    // Strategy recommends a tight 40-tick band (4980-5020) around activeBinId
+    // 5000 (= ~2% half-width at binStep 10). With entryMinRangePct 1.0 (100%
+    // full width) the floor forces a 50% half-width, so the persisted ticks
+    // must be far wider than the 4980-5020 recommendation.
+    const result = Effect.runSync(
+      executeLive(
+        {
+          adapter: {
+            ...makeAdapter(),
+            enterPosition: (_pool, _lowerBinId, _upperBinId) =>
+              Effect.succeed({
+                positionPubKey: "mock-pos",
+                txSignature: "mock-tx",
+                depositMode: "two-sided" as const,
+                amountXUsd: positionSizeUsd / 2,
+                amountYUsd: positionSizeUsd / 2,
+              }),
+          },
+          strategy: makeStrategy(),
+          db,
+          revenueConfigSvc: makeRevenueConfigSvc(),
+          trackedPositions,
+          nativePriceUsd: 150,
+          entryStrategyShape: "spot",
+          entryMinRangePct: 1.0,
+        },
+        {
+          action: "ENTER",
+          poolAddress,
+          confidence: 0.8,
+          reasoning: "test",
+          positionSizeUsd,
+        } as AgentDecision,
+        {
+          activeBinId: 5000,
+          binStep: 10,
+          tokenXSymbol: "SOL",
+          tokenYSymbol: "USDC",
+          currentPrice: 150,
+        },
+      ),
+    );
+
+    expect(result.executed).toBe(true);
+    const pos = [...trackedPositions.values()][0] as
+      | { lowerBinId: number; upperBinId: number }
+      | undefined;
+    // The recorded range must be the widened (floored) band, strictly wider
+    // than the 40-tick recommendation, and centered on the active bin.
+    expect(pos?.lowerBinId).toBeLessThan(4980);
+    expect(pos?.upperBinId).toBeGreaterThan(5020);
+  });
 });
 
 describe("executePaper paper/live parity", () => {
