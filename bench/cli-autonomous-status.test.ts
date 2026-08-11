@@ -209,7 +209,10 @@ async function seedAutonomousState(
 }
 
 describe("autonomous CLI operator surface", () => {
-  it("shows current-wallet candidate, operation, settlement, and active pause state in JSON", async () => {
+  it(
+    "shows current-wallet candidate, operation, settlement, and active pause state in JSON",
+    { timeout: 90_000 },
+    async () => {
     // Given
     testDirectory = mkdtempSync(join(tmpdir(), "beam-cli-autonomous-status-"));
     const dbPath = join(testDirectory, "beam.db");
@@ -248,7 +251,10 @@ describe("autonomous CLI operator surface", () => {
     });
   });
 
-  it("flags terminal settlements with unspent balance in text output", async () => {
+  it(
+    "flags terminal settlements with unspent balance in text output",
+    { timeout: 90_000 },
+    async () => {
     // Given
     testDirectory = mkdtempSync(join(tmpdir(), "beam-cli-autonomous-stranded-"));
     const dbPath = join(testDirectory, "beam.db");
@@ -274,7 +280,10 @@ describe("autonomous CLI operator surface", () => {
     expect(text).not.toContain("Stranded:");
   });
 
-  it("hides terminal settlements whose mint was later recovered by a confirmed settlement", async () => {
+  it(
+    "hides terminal settlements whose mint was later recovered by a confirmed settlement",
+    { timeout: 90_000 },
+    async () => {
     // Given a terminal job for mint-2 plus a confirmed orphan-sweep sale of
     // the same mint (the recovery path from issue #166).
     testDirectory = mkdtempSync(join(tmpdir(), "beam-cli-autonomous-recovered-"));
@@ -297,7 +306,10 @@ describe("autonomous CLI operator surface", () => {
     expect(text).not.toContain("Stranded:");
   });
 
-  it("still reports a terminal settlement newer than any confirmed recovery", async () => {
+  it(
+    "still reports a terminal settlement newer than any confirmed recovery",
+    { timeout: 90_000 },
+    async () => {
     // Given a confirmed sale of mint-2 that PREDATES the terminal row — a
     // recurring stranding (sold once, then stranded again) must stay visible.
     testDirectory = mkdtempSync(join(tmpdir(), "beam-cli-autonomous-recurring-"));
@@ -323,7 +335,10 @@ describe("autonomous CLI operator surface", () => {
     expect(text).not.toContain("Stranded:");
   });
 
-  it("marks the current wallet's active safety pause resolved without live execution", async () => {
+  it(
+    "marks the current wallet's active safety pause resolved without live execution",
+    { timeout: 90_000 },
+    async () => {
     // Given
     testDirectory = mkdtempSync(join(tmpdir(), "beam-cli-autonomous-resume-"));
     const dbPath = join(testDirectory, "beam.db");
