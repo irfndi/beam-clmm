@@ -673,7 +673,14 @@ function skippedChecks(reason: string): TokenRiskReport["checks"] {
 
 export function createTokenRiskProber(client: PublicClient, config: TokenRiskConfig): TokenRiskProber {
   const maxTax = config.maxTransferTaxPct ?? DEFAULT_MAX_TRANSFER_TAX_PCT;
-  const allowlist = config.allowlistedMints ?? new Set<string>();
+  // Normalize the allowlist to lowercase once: assess() compares
+  // token.toLowerCase() against it, and callers pass checksummed addresses —
+  // a checksummed set entry would silently miss every lowercased token and
+  // let a trusted stablecoin through the probes (caught live: USDG was
+  // rejected as a honeypot because its checksummed allowlist entry missed).
+  const allowlist = new Set<string>(
+    [...(config.allowlistedMints ?? [])].map((m) => m.toLowerCase()),
+  );
 
   return {
     async assess(token, options) {
