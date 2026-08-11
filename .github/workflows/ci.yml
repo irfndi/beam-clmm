@@ -23,7 +23,11 @@ jobs:
       ANTHROPIC_API_KEY: test-anthropic-key
       ROBINHOOD_RPC_URL: https://example.com
       
-      WALLET_PRIVATE_KEY: test-private-key
+      # A syntactically VALID EVM key so the full-stack smoke test
+      # (program.test.ts "buildLayer provides all services") boots the adapter.
+      # The adapter fail-closes on an unparseable key, so an invalid string
+      # here fails the whole suite. This is a throwaway test key, not a secret.
+      WALLET_PRIVATE_KEY: 0xabababababababababababababababababababababababababababababababab
       LOG_LEVEL: error
     steps:
       - name: Checkout

@@ -36,10 +36,16 @@ exit 0
 `,
     { mode: 0o755 },
   );
-  // dirname/readlink shims so a PATH without /usr/bin (where awk lives on
-  // macOS) still satisfies the wrapper's root resolution.
+  // dirname/readlink shims so a PATH without /usr/bin still satisfies the
+  // wrapper's root resolution (awk is absent from stubDir on both macOS and
+  // Ubuntu, where /bin is a symlink to /usr/bin — so the awk test below can
+  // use a PATH with no awk while still resolving these tools).
   writeFileSync(path.join(stubDir, "dirname"), '#!/bin/bash\nexec /usr/bin/dirname "$@"\n', { mode: 0o755 });
   writeFileSync(path.join(stubDir, "readlink"), '#!/bin/bash\nexec /usr/bin/readlink "$@"\n', { mode: 0o755 });
+  // bash shim so a PATH of just stubDir (no /bin) can still launch the
+  // wrapper: execFileSync("bash", ...) resolves bash via PATH, and stubDir
+  // alone excludes awk on both platforms.
+  writeFileSync(path.join(stubDir, "bash"), '#!/bin/bash\nexec /bin/bash "$@"\n', { mode: 0o755 });
 });
 
 afterAll(() => {
@@ -81,9 +87,11 @@ function runBeam(
 
 describe("scripts/beam.sh edge cases", () => {
   it("reports a missing awk as a missing-tool error, not 'bun too old'", () => {
-    // PATH without /usr/bin: awk lives only there on macOS. bun/dirname/
-    // readlink are shimmed in stubDir; /bin hosts the bash builtins.
-    const res = runBeam(["--help"], { path: `${stubDir}:/bin` });
+    // PATH without awk: bun/dirname/readlink shimmed in stubDir, and the
+    // wrapper's cd/pwd/echo/exec are bash builtins. Use stubDir alone (not
+    // `:stubDir:/bin`) so awk stays absent on Ubuntu too, where /bin is a
+    // symlink to /usr/bin and would otherwise make awk findable.
+    const res = runBeam(["--help"], { path: `${stubDir}` });
     expect(res.status).toBe(1);
     expect(res.stderr).toContain("awk is required");
     expect(res.stderr).not.toContain("too old");
