@@ -27,7 +27,8 @@ jobs:
       # (program.test.ts "buildLayer provides all services") boots the adapter.
       # The adapter fail-closes on an unparseable key, so an invalid string
       # here fails the whole suite. This is a throwaway test key, not a secret.
-      WALLET_PRIVATE_KEY: 0xabababababababababababababababababababababababababababababababab
+      # Quoted so YAML doesn't parse the 0x… prefix as a hex integer.
+      WALLET_PRIVATE_KEY: '0xabababababababababababababababababababababababababababababababab'
       LOG_LEVEL: error
     steps:
       - name: Checkout
