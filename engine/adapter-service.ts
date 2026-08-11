@@ -2,6 +2,7 @@ import { Effect, Layer } from "effect";
 import {
   createPublicClient,
   createWalletClient,
+  decodeAbiParameters,
   decodeFunctionData,
   encodeAbiParameters,
   encodeFunctionData,
@@ -201,9 +202,19 @@ const swapRouter02Abi = parseAbi([
   "function unwrapWETH9(uint256,address) payable",
   "function multicall(bytes[]) payable returns (bytes[])",
 ]);
+/** Live 4663 SwapRouter02 encoding (probe-verified 2026-08-10): the 7-field
+ *  exactInputSingle struct WITHOUT the deadline param. */
+const swapRouter02V2Abi = parseAbi([
+  "function exactInputSingle((address,address,uint24,address,uint256,uint256,uint160)) payable returns (uint256)",
+  "function unwrapWETH9(uint256,address) payable",
+  "function multicall(bytes[]) payable returns (bytes[])",
+]);
 const universalRouterAbi = parseAbi(["function execute(bytes,bytes[],uint256) payable"]);
 
-const weth9Abi = parseAbi(["function deposit() payable"]);
+const weth9Abi = parseAbi([
+  "function deposit() payable",
+  "function withdraw(uint256)",
+]);
 
 /** Permit2 (canonical 0x000…22D4 deployment, used by the v4 PositionManager
  *  and UniversalRouter as a forwarder). */
@@ -565,6 +576,49 @@ export function buildV3ExactInputSingleCalldata(args: V3ExactInputSingleCalldata
   });
 }
 
+/**
+ * SwapRouter02 v2 exactInputSingle — the 7-field struct WITHOUT the deadline
+ * param (deadline removed in @uniswap/swap-router-contracts 2.0). Probe
+ * 2026-08-10 (chain 4663): the deployed SwapRouter02 0xCaf681… carries
+ * selector 0x04e45aaf (7-field) and NOT 0x414bf389 (8-field) — the legacy
+ * builder's calldata reverts on this chain. New swap paths (swap-to-fund,
+ * verifyExitRoute, convertClaimedFees) must use this encoding.
+ */
+export function buildV3ExactInputSingleCalldataV2(args: {
+  readonly tokenIn: Address;
+  readonly tokenOut: Address;
+  readonly fee: number;
+  readonly recipient: Address;
+  readonly amountIn: bigint;
+  readonly amountOutMinimum: bigint;
+  readonly sqrtPriceLimitX96?: bigint;
+}): Hex {
+  const {
+    tokenIn,
+    tokenOut,
+    fee,
+    recipient,
+    amountIn,
+    amountOutMinimum,
+    sqrtPriceLimitX96 = 0n,
+  } = args;
+  return encodeFunctionData({
+    abi: swapRouter02V2Abi,
+    functionName: "exactInputSingle",
+    args: [
+      [
+        getAddress(tokenIn),
+        getAddress(tokenOut),
+        fee,
+        getAddress(recipient),
+        amountIn,
+        amountOutMinimum,
+        sqrtPriceLimitX96,
+      ],
+    ],
+  });
+}
+
 export function buildUnwrapWETH9Calldata(amountMinimum: bigint, recipient: Address): Hex {
   return encodeFunctionData({
     abi: swapRouter02Abi,
@@ -911,7 +965,11 @@ export function tokenIdFromMintReceipt(
   for (const log of receipt.logs) {
     const topic0 = log.topics[0]?.toLowerCase();
     const from = log.topics[1]?.toLowerCase();
-    if (topic0 === erc721TransferTopic && from === "0x0000000000000000000000000000000000000000") {
+    // `from` is a 32-byte topic WORD (0x + 64 hex), not the 20-byte address
+    // form — comparing against the 42-char address NEVER matches and every
+    // mint would fail 'could not decode minted tokenId' (caught by
+    // adapter-gaps.test.ts; live mints never reached the receipt before).
+    if (topic0 === erc721TransferTopic && from === `0x${"0".repeat(64)}`) {
       return BigInt(log.topics[3] ?? "0x0");
     }
   }
@@ -934,6 +992,20 @@ export const AdapterLive = Layer.effect(AdapterService,
     const config = yield* ConfigService;
     const rpcUrl = config.rpcUrl || DEFAULT_RPC;
     const publicClient = createPublicClient({ transport: http(rpcUrl) });
+
+    // Fee-truth two-seat knobs: read the nested SwapMintConfig/ExitProofConfig
+    // shapes defensively (the main agent wires them into config-service as
+    // optional AppConfig keys); defaults per spec when absent.
+    function swapMintSlippageBps(): number {
+      const nested = (config as { swapMintConfig?: { maxSwapSlippageBps?: number } })
+        .swapMintConfig;
+      return nested?.maxSwapSlippageBps ?? 100;
+    }
+    function simulateBeforeExitEnabled(): boolean {
+      const nested = (config as { exitProofConfig?: { simulateBeforeExit?: boolean } })
+        .exitProofConfig;
+      return nested?.simulateBeforeExit ?? true;
+    }
 
     const account = config.walletPrivateKey
       ? (() => {
@@ -1025,6 +1097,30 @@ export const AdapterLive = Layer.effect(AdapterService,
     function revertMessage(e: unknown): string {
       const msg = e instanceof Error ? e.message : String(e);
       return msg.slice(0, 400);
+    }
+
+    /** Decode a revert reason (Error(string)) from a viem/RPC error; falls back
+     *  to the message text. Used by the pre-broadcast withdraw gate. */
+    function decodeRevertReason(e: unknown): string | null {
+      const err = e as { data?: unknown; shortMessage?: string; message?: string } | undefined;
+      const data = typeof err?.data === "string" ? err.data : null;
+      if (data && data.length >= 10 && data.slice(0, 10).toLowerCase() === "0x08c379a0") {
+        try {
+          const [reason] = decodeAbiParameters(
+            [{ type: "string" }],
+            `0x${data.slice(10)}` as `0x${string}`,
+          );
+          return String(reason).slice(0, 300);
+        } catch {
+          // fall through to message parsing
+        }
+      }
+      const msg = err?.shortMessage || err?.message || String(e);
+      const m =
+        /reverted with reason string '([^']+)'/i.exec(msg) ??
+        /execution reverted with reason: (.+)/i.exec(msg) ??
+        /execution reverted: (.+)/i.exec(msg);
+      return (m ? m[1]! : msg).replace(/[.]+$/, "").slice(0, 300);
     }
 
     /**
@@ -1360,20 +1456,27 @@ export const AdapterLive = Layer.effect(AdapterService,
      * burn+TAKE_PAIR) returning the exact reclaimed amounts via balance
      * deltas. Shared by exitPosition and rebalancePosition.
      */
-    async function reclaimPosition(
+    /**
+     * Build the exact burn+collect calldata the engine broadcasts for a
+     * position exit (v3: decreaseLiquidity+collect+burn multicall; v4:
+     * burn+TAKE_PAIR). Shared by reclaimPosition (broadcast) and
+     * simulateWithdraw (eth_call dry-run only — the pre-broadcast fail-closed
+     * gate). Never broadcasts.
+     */
+    async function buildPositionExitCalldata(
       poolAddress: string,
       positionPubKey: string,
     ): Promise<{
-      txSignature: string;
+      tokenId: bigint;
+      isV4: boolean;
       token0: Address;
       token1: Address;
       decimals0: number;
       decimals1: number;
-      reclaimed0: bigint;
-      reclaimed1: bigint;
+      calldata: Hex;
+      value: bigint;
       pendingFeeXAtomic: bigint;
       pendingFeeYAtomic: bigint;
-      isV4: boolean;
     }> {
       const owner = requireWallet();
       const tokenId = BigInt(positionPubKey);
@@ -1453,14 +1556,46 @@ export const AdapterLive = Layer.effect(AdapterService,
         decimals0 = state.token0Decimals;
         decimals1 = state.token1Decimals;
       }
+      return {
+        tokenId,
+        isV4,
+        token0,
+        token1,
+        decimals0,
+        decimals1,
+        calldata,
+        value,
+        pendingFeeXAtomic,
+        pendingFeeYAtomic,
+      };
+    }
+
+    async function reclaimPosition(
+      poolAddress: string,
+      positionPubKey: string,
+    ): Promise<{
+      txSignature: string;
+      token0: Address;
+      token1: Address;
+      decimals0: number;
+      decimals1: number;
+      reclaimed0: bigint;
+      reclaimed1: bigint;
+      pendingFeeXAtomic: bigint;
+      pendingFeeYAtomic: bigint;
+      isV4: boolean;
+    }> {
+      const owner = requireWallet();
+      const exit = await buildPositionExitCalldata(poolAddress, positionPubKey);
+      const { token0, token1, decimals0, decimals1, isV4 } = exit;
       const [pre0, pre1] = await Promise.all([
         getBalance(token0, owner),
         getBalance(token1, owner),
       ]);
       const { txSignature } = await sendTx({
         to: isV4 ? V4_POSITION_MANAGER : V3_NPM,
-        data: calldata,
-        value,
+        data: exit.calldata,
+        value: exit.value,
       });
       const [post0, post1] = await Promise.all([
         getBalance(token0, owner),
@@ -1474,10 +1609,32 @@ export const AdapterLive = Layer.effect(AdapterService,
         decimals1,
         reclaimed0: post0 - pre0,
         reclaimed1: post1 - pre1,
-        pendingFeeXAtomic,
-        pendingFeeYAtomic,
+        pendingFeeXAtomic: exit.pendingFeeXAtomic,
+        pendingFeeYAtomic: exit.pendingFeeYAtomic,
         isV4,
       };
+    }
+
+    /** eth_call dry-run of the EXACT exit calldata (never broadcasts). The
+     *  pre-broadcast fail-closed gate for exitPosition/rebalancePosition —
+     *  gated by ExitProofConfig.simulateBeforeExit (default true). */
+    async function simulateWithdrawInternal(
+      poolAddress: string,
+      positionPubKey: string,
+    ): Promise<{ ok: boolean; reason: string | null }> {
+      try {
+        const owner = requireWallet();
+        const exit = await buildPositionExitCalldata(poolAddress, positionPubKey);
+        await publicClient.call({
+          account: owner,
+          to: exit.isV4 ? V4_POSITION_MANAGER : V3_NPM,
+          data: exit.calldata,
+          value: exit.value,
+        });
+        return { ok: true, reason: null };
+      } catch (e) {
+        return { ok: false, reason: decodeRevertReason(e) };
+      }
     }
 
     // ─── Swap routing (v3 SwapRouter02 / v4 UniversalRouter) ───────────────────
@@ -1605,6 +1762,176 @@ export const AdapterLive = Layer.effect(AdapterService,
         await ensurePermit2Allowance(addr, route.target, amount);
       } else {
         await ensureErc20Allowance(addr, route.target, amount);
+      }
+    }
+
+    /**
+     * Calldata for a single-hop swap through `route`. v3 routes use the v2
+     * SwapRouter02 encoding (7-field exactInputSingle, NO deadline — the
+     * probe-verified live 4663 deployment carries selector 0x04e45aaf, not
+     * the 8-field legacy one); v4 routes use the UniversalRouter V4_SWAP
+     * encoding. Native input settles via msg.value on both routers.
+     */
+    function buildSwapCalldataV2(
+      route: SwapRoute,
+      tokenIn: string,
+      tokenOut: string,
+      amountIn: bigint,
+      amountOutMinimum: bigint,
+      deadline: number,
+    ): Hex {
+      if (route.router === "swaprouter02") {
+        return buildV3ExactInputSingleCalldataV2({
+          tokenIn: routerInputAddress(tokenIn, "swaprouter02"),
+          tokenOut: routerInputAddress(tokenOut, "swaprouter02"),
+          fee: route.fee,
+          recipient: requireWallet(),
+          amountIn,
+          amountOutMinimum,
+        });
+      }
+      return buildUniversalRouterV4SwapCalldata({
+        poolKey: route.poolKey,
+        zeroForOne: route.zeroForOne,
+        amountIn,
+        amountOutMinimum,
+        deadline,
+      });
+    }
+
+    /** Broadcast a quoted single-hop swap (sendTx dry-runs the eth_call first).
+     *  Native input passes msg.value and needs no approval; ERC20 input gets
+     *  the route's approval (Permit2 for v4, plain ERC-20 for v3). */
+    async function executeSwapViaRoute(
+      route: SwapRoute,
+      tokenIn: string,
+      tokenOut: string,
+      amountIn: bigint,
+      amountOutMinimum: bigint,
+    ): Promise<string> {
+      const deadline = Math.floor(Date.now() / 1000) + 300; // swaps: 5-min deadline
+      const calldata = buildSwapCalldataV2(route, tokenIn, tokenOut, amountIn, amountOutMinimum, deadline);
+      const value = isNative(tokenIn) ? amountIn : 0n;
+      if (!isNative(tokenIn)) {
+        await approveInputForRoute(tokenIn, route, amountIn);
+      }
+      const { txSignature } = await sendTx({ to: route.target, data: calldata, value });
+      return txSignature;
+    }
+
+    /**
+     * enterPosition last-resort funding branch: the wallet holds NATIVE ETH but
+     * neither pool leg is fundable. When exactly one leg is native/WETH and a
+     * verified ETH → missing-leg route exists: quote at realistic size,
+     * eth_call-probe the exact swap calldata (the wallet funds the probe, so
+     * the RPC's balance check is real), then broadcast the deficit swap and
+     * let the caller proceed with the normal two-sided mint. Returns false
+     * (never throws) on ANY failure — probe revert, missing pool, unpriceable
+     * leg, insufficient native — so the caller falls back to the existing
+     * 'wallet can fund neither leg' error. A failure is never masked.
+     */
+    async function swapToFundDeficit(params: {
+      owner: Address;
+      state: PoolQuoteState;
+      amount0: bigint;
+      amount1: bigint;
+      halfUsd: number;
+      nativeBal: bigint;
+    }): Promise<"swapped" | "no-route" | "reverted"> {
+      const { owner, state, amount0, amount1, halfUsd, nativeBal } = params;
+      // Exactly one leg must be native (ETH) or WETH9 — one swap funds the
+      // missing ERC20 leg; a two-ERC20 pool needs two swaps (not attempted).
+      const leg0Native = isNative(state.token0) || getAddress(state.token0) === WETH9;
+      const leg1Native = isNative(state.token1) || getAddress(state.token1) === WETH9;
+      if (leg0Native === leg1Native) return "no-route";
+      const missingLeg = leg0Native ? state.token1 : state.token0;
+      const missingAmount = leg0Native ? amount1 : amount0;
+      const nativeLegAmount = leg0Native ? amount0 : amount1;
+      if (missingAmount <= 0n) return "no-route";
+      const nativePrice = await priceUsd(NATIVE_MINT);
+      if (!(nativePrice > 0)) return "no-route";
+      const slippageBps = swapMintSlippageBps();
+      const outFloorFactor = 10_000n - BigInt(slippageBps);
+      try {
+        // Input converges so the slippage-floored output covers the FULL
+        // missing-leg deficit: the pool fee means the naive half-sized input
+        // quotes ~fee% short of the deficit. 4 iterations of
+        // nextIn = amountIn * needed/out converge (out ∝ amountIn).
+        let amountIn = usdToAtomic(halfUsd, nativePrice, 18);
+        let route: SwapRoute | null = null;
+        let outAmountAtomic = 0n;
+        if (amountIn <= 0n) return "no-route";
+        for (let attempt = 0; attempt < 4; attempt++) {
+          const q = await quotePair(NATIVE_MINT, missingLeg, amountIn);
+          route = q.route;
+          outAmountAtomic = q.outAmountAtomic;
+          if (outAmountAtomic <= 0n) return "no-route";
+          if ((outAmountAtomic * outFloorFactor) / 10_000n >= missingAmount) break;
+          const needed = (missingAmount * 10_000n) / outFloorFactor;
+          const nextIn = (amountIn * needed) / outAmountAtomic + 1n;
+          if (nextIn <= amountIn) return "no-route";
+          amountIn = nextIn;
+        }
+        if (!route) return "no-route";
+        const amountOutMinimum = (outAmountAtomic * outFloorFactor) / 10_000n;
+        // Integer-floor fixed point: the quote can sit exactly ONE raw unit
+        // below the deficit (out × 0.99 floors short). Over-input ~1% and
+        // re-quote once so the slippage-floored output covers the FULL
+        // deficit — the mint pulls the full missing leg, so the swap must
+        // land at or above it, never one unit under.
+        if (amountOutMinimum < missingAmount) {
+          const bumped = (amountIn * 101n) / 100n + 1n;
+          const q2 = await quotePair(NATIVE_MINT, missingLeg, bumped);
+          if (
+            q2.outAmountAtomic > outAmountAtomic &&
+            (q2.outAmountAtomic * outFloorFactor) / 10_000n >= missingAmount
+          ) {
+            route = q2.route;
+            outAmountAtomic = q2.outAmountAtomic;
+            amountIn = bumped;
+          }
+        }
+        const finalMinimum = (outAmountAtomic * outFloorFactor) / 10_000n;
+        if (finalMinimum < missingAmount) return "no-route";
+        // The swap spends native AND the mint needs the native leg from the
+        // same balance — both must fit (gas is handled by the dry-run).
+        if (nativeBal < amountIn + nativeLegAmount) return "no-route";
+        const deadline = Math.floor(Date.now() / 1000) + 300;
+        const calldata = buildSwapCalldataV2(
+          route,
+          NATIVE_MINT,
+          missingLeg,
+          amountIn,
+          amountOutMinimum,
+          deadline,
+        );
+        // (a) eth_call-probe at realistic size before anything broadcasts.
+        // DECODE the router's exactInputSingle output: a reverting OR
+        // zero-output probe means the route is not executable (rule 5: never
+        // enter with an unproven route). The on-chain simulation is the
+        // authority — the model quote above only sizes the input.
+        const probeResult = await publicClient.call({
+          account: owner,
+          to: route.target,
+          data: calldata,
+          value: amountIn,
+        });
+        const probeOut =
+          decodeAbiParameters([{ type: "uint256" }], probeResult.data as Hex)[0] ?? 0n;
+        if (probeOut <= 0n) return "no-route";
+        // (b) swap the deficit leg (sendTx re-dry-runs + broadcasts).
+        await executeSwapViaRoute(route, NATIVE_MINT, missingLeg, amountIn, amountOutMinimum);
+        logger.info("enterPosition swap-to-fund", {
+          missingLeg: missingLeg.slice(0, 6),
+          amountIn: amountIn.toString(),
+          amountOutMinimum: amountOutMinimum.toString(),
+        });
+        return "swapped";
+      } catch (e) {
+        logger.warn("enterPosition swap-to-fund probe/broadcast failed", {
+          error: underlyingErrorMessage(e),
+        });
+        return "reverted";
       }
     }
 
@@ -2215,9 +2542,54 @@ export const AdapterLive = Layer.effect(AdapterService,
             ]);
             const wrapable0 = getAddress(state.token0) === WETH9 ? bal0 + nativeBal : bal0;
             const wrapable1 = getAddress(state.token1) === WETH9 ? bal1 + nativeBal : bal1;
+            const oneLegNative =
+              isNative(state.token0) ||
+              getAddress(state.token0) === WETH9 ||
+              isNative(state.token1) ||
+              getAddress(state.token1) === WETH9;
             let mode: EntryDepositMode = "two-sided";
             if (bal0 >= amount0 && bal1 >= amount1) {
               // both legs fundable — two-sided
+            } else if (nativeBal > 0n && oneLegNative) {
+              // Native-only funding → swap_and_mint (the spec's mechanism):
+              // swap the missing leg and mint two-sided WHEN the route is
+              // proven liquid; a REVERTING route refuses the entry (a broken
+              // buy leg usually means a broken sell leg — rule 5); a dead
+              // route on a LIVE pool falls back to a single-sided native
+              // entry (v3 WETH wrap); a dead pool refuses outright.
+              if (state.liquidity <= 0n) {
+                throw new Error(
+                  `enterPosition: wallet can fund neither leg (pool has no liquidity: ${poolAddress})`,
+                );
+              }
+              const fundedBySwap = await swapToFundDeficit({
+                owner,
+                state,
+                amount0,
+                amount1,
+                halfUsd,
+                nativeBal,
+              });
+              if (fundedBySwap === "reverted") {
+                throw new Error(
+                  `enterPosition: wallet can fund neither leg (swap route reverts: ${poolAddress})`,
+                );
+              }
+              if (fundedBySwap !== "swapped") {
+                if (wrapable0 >= amount0) {
+                  mode = "single-sided-x";
+                  amount1 = 0n;
+                  amount0 = usdToAtomic(positionSizeUsd, price0, state.token0Decimals);
+                } else if (wrapable1 >= amount1) {
+                  mode = "single-sided-y";
+                  amount0 = 0n;
+                  amount1 = usdToAtomic(positionSizeUsd, price1, state.token1Decimals);
+                } else {
+                  throw new Error(
+                    `enterPosition: wallet can fund neither leg (need ${amount0} ${state.token0} / ${amount1} ${state.token1})`,
+                  );
+                }
+              }
             } else if (wrapable0 >= amount0) {
               mode = "single-sided-x";
               amount1 = 0n;
@@ -2334,6 +2706,17 @@ export const AdapterLive = Layer.effect(AdapterService,
       exitPosition: (poolAddress, positionPubKey) =>
         Effect.tryPromise({
           try: async () => {
+            // Fail-closed pre-broadcast gate (ExitProofConfig.simulateBeforeExit,
+            // default true): dry-run the exact burn+collect calldata — a
+            // reverting exit must never broadcast (burned gas + stuck liquidity).
+            if (simulateBeforeExitEnabled()) {
+              const sim = await simulateWithdrawInternal(poolAddress, positionPubKey);
+              if (!sim.ok) {
+                throw new Error(
+                  `exitPosition: withdraw dry-run failed — NOT broadcasting (${sim.reason ?? "unknown revert"})`,
+                );
+              }
+            }
             const reclaimed = await reclaimPosition(poolAddress, positionPubKey);
             const [price0, price1] = await Promise.all([
               priceUsd(reclaimed.token0),
@@ -2364,12 +2747,103 @@ export const AdapterLive = Layer.effect(AdapterService,
           },
           catch: (e) => new Error(`exitPosition: ${underlyingErrorMessage(e)}`),
         }),
+      simulateWithdraw: (poolAddress, positionPubKey) =>
+        Effect.tryPromise({
+          try: () => simulateWithdrawInternal(poolAddress, positionPubKey),
+          catch: (e) => new Error(`simulateWithdraw: ${underlyingErrorMessage(e)}`),
+        }),
+      verifyExitRoute: (poolAddress, positionSizeUsd) =>
+        Effect.tryPromise({
+          try: async () => {
+            requireWallet();
+            const isV4 = poolAddress.length === 66;
+            const state = isV4
+              ? await v4PoolQuoteState(poolAddress)
+              : await v3PoolQuoteState(getAddress(poolAddress));
+            const [price0, price1] = await Promise.all([
+              priceUsd(state.token0),
+              priceUsd(state.token1),
+            ]);
+            const halfUsd = positionSizeUsd / 2;
+            const legs = [
+              {
+                mint: state.token0,
+                amount: usdToAtomic(halfUsd, price0, state.token0Decimals),
+                decimals: state.token0Decimals,
+              },
+              {
+                mint: state.token1,
+                amount: usdToAtomic(halfUsd, price1, state.token1Decimals),
+                decimals: state.token1Decimals,
+              },
+            ] as const;
+            const failures: string[] = [];
+            let proceedsNative = 0n;
+            for (const leg of legs) {
+              // WETH is native-equivalent: it unwraps 1:1 to ETH with a
+              // trivial tx — no swap, counted directly in proceeds.
+              if (isNative(leg.mint) || getAddress(leg.mint) === WETH9) {
+                proceedsNative += leg.amount;
+                continue;
+              }
+              if (leg.amount <= 0n) {
+                failures.push(`${leg.mint.slice(0, 8)}: leg unpriceable (size 0)`);
+                continue;
+              }
+              try {
+                // Quote legs → ETH at realistic size through the working path.
+                const { outAmountAtomic, route } = await quotePair(leg.mint, NATIVE_MINT, leg.amount);
+                if (outAmountAtomic <= 0n) {
+                  failures.push(`${leg.mint.slice(0, 8)}: zero quote to native`);
+                  continue;
+                }
+                // eth_call-simulate the swap end-to-end WHEN the wallet holds
+                // the leg; a balance-revert here is a funding limitation (the
+                // wallet WILL hold the legs at exit time), not a route failure.
+                const bal = await getBalance(leg.mint, requireWallet());
+                if (bal >= leg.amount) {
+                  const deadline = Math.floor(Date.now() / 1000) + 300;
+                  const calldata = buildSwapCalldataV2(
+                    route,
+                    leg.mint,
+                    NATIVE_MINT,
+                    leg.amount,
+                    outAmountAtomic,
+                    deadline,
+                  );
+                  await publicClient.call({ account: requireWallet(), to: route.target, data: calldata });
+                }
+                proceedsNative += outAmountAtomic;
+              } catch (e) {
+                failures.push(`${leg.mint.slice(0, 8)}: ${underlyingErrorMessage(e)}`);
+              }
+            }
+            const nativePrice = await priceUsd(NATIVE_MINT);
+            return {
+              ok: failures.length === 0,
+              reason: failures.length > 0 ? failures.join("; ") : null,
+              proceedsUsd:
+                nativePrice > 0 ? usdOf(proceedsNative, 18, nativePrice) : null,
+            };
+          },
+          catch: (e) => new Error(`verifyExitRoute: ${underlyingErrorMessage(e)}`),
+        }),
       placeLimitOrder: (_poolAddress, _request) => NOT_IMPLEMENTED("placeLimitOrder"),
       cancelLimitOrder: (_poolAddress, _orderPubKey, _binIds) => NOT_IMPLEMENTED("cancelLimitOrder"),
       rebalancePosition: (poolAddress, positionPubKey, newLowerBinId, newUpperBinId, topUp) =>
         Effect.tryPromise({
           try: async () => {
             const owner = requireWallet();
+            // Fail-closed pre-broadcast gate (see exitPosition): a reverting
+            // burn+collect must never broadcast.
+            if (simulateBeforeExitEnabled()) {
+              const sim = await simulateWithdrawInternal(poolAddress, positionPubKey);
+              if (!sim.ok) {
+                throw new Error(
+                  `rebalancePosition: withdraw dry-run failed — NOT broadcasting (${sim.reason ?? "unknown revert"})`,
+                );
+              }
+            }
             // EVM v3/v4 have no in-place range change: full exit (burn) then
             // mint in the new range. The tokenId changes — program.ts re-keys
             // defensively when the returned pubkey differs.
@@ -2533,7 +3007,29 @@ export const AdapterLive = Layer.effect(AdapterService,
                 netFeeX: 0,
                 netFeeY: 0,
                 netFeesUsd: 0,
+                estimatedGasUsd: null,
               };
+            }
+            // Gas-budget harvest gate (harvestMaxGasPct): estimated gas × 2×
+            // base fee (the sendTx gas strategy), priced in USD. null when
+            // unavailable — the caller's gate treats null conservatively.
+            let estimatedGasUsd: number | null = null;
+            try {
+              const gas = await publicClient.estimateGas({
+                account: owner,
+                to: isV4 ? V4_POSITION_MANAGER : V3_NPM,
+                data: calldata,
+                value,
+              });
+              const baseFee = (await publicClient.getBlock()).baseFeePerGas ?? 100_000_000n;
+              const maxFeePerGas = baseFee * 2n;
+              const nativePrice = await priceUsd(NATIVE_MINT);
+              estimatedGasUsd =
+                nativePrice > 0
+                  ? (Number(gas) * Number(maxFeePerGas) * nativePrice) / 1e18
+                  : null;
+            } catch {
+              estimatedGasUsd = null;
             }
             const [pre0, pre1] = await Promise.all([
               getBalance(token0, owner),
@@ -2572,18 +3068,149 @@ export const AdapterLive = Layer.effect(AdapterService,
               operatorFeeX: 0,
               operatorFeeY: 0,
               netFeesUsd,
+              estimatedGasUsd,
             };
           },
           catch: (e) => new Error(`claimFees: ${underlyingErrorMessage(e)}`),
         }),
-      convertClaimedFees: (_poolAddress, destination, _feeX, _feeY) =>
-        Effect.succeed({
-          destination,
-          // Uniswap v3/v4 have no fee-conversion module (the Meteora convert
-          // path does not exist here); report the skip shape.
-          outputAtomic: 0n,
-          outputUsd: null,
-          txSignatures: [],
+      convertClaimedFees: (poolAddress, destination, feeX, feeY) =>
+        Effect.tryPromise({
+          try: async () => {
+            const owner = requireWallet();
+            const isV4 = poolAddress.length === 66;
+            const state = isV4
+              ? await v4PoolQuoteState(poolAddress)
+              : await v3PoolQuoteState(getAddress(poolAddress));
+            const dest = destination === "accumulate-native" ? NATIVE_MINT : STABLECOIN_MINT;
+            const destDecimals = dest === NATIVE_MINT ? 18 : 6;
+            const destAddr = dest.toLowerCase();
+            // feeX ↔ token0, feeY ↔ token1 (claimFees token units).
+            const legs = [
+              {
+                mint: state.token0,
+                amount: BigInt(Math.round(feeX * 10 ** state.token0Decimals)),
+              },
+              {
+                mint: state.token1,
+                amount: BigInt(Math.round(feeY * 10 ** state.token1Decimals)),
+              },
+            ];
+            const txs: string[] = [];
+            let outputAtomic = 0n;
+            for (const leg of legs) {
+              if (leg.amount <= 0n) continue;
+              const legIsNative = isNative(leg.mint);
+              const legAddr = leg.mint.toLowerCase();
+              // Already the destination asset.
+              if (legAddr === destAddr || (legIsNative && destAddr === NATIVE_MINT.toLowerCase())) {
+                outputAtomic += leg.amount;
+                continue;
+              }
+              // WETH → native is a pure unwrap — no swap, no router.
+              if (destAddr === NATIVE_MINT.toLowerCase() && getAddress(leg.mint) === WETH9) {
+                const { txSignature } = await sendTx({
+                  to: WETH9,
+                  data: encodeFunctionData({
+                    abi: weth9Abi,
+                    functionName: "withdraw",
+                    args: [leg.amount],
+                  }),
+                });
+                txs.push(txSignature);
+                outputAtomic += leg.amount;
+                continue;
+              }
+              // Swap the leg → destination through the verified route
+              // (sendTx dry-runs the eth_call before broadcasting). A failed
+              // leg logs and continues (fail-open per leg, like
+              // swapUSDCForNative) — the caller only logs the outcome.
+              try {
+                const { outAmountAtomic, route } = await quotePair(leg.mint, dest, leg.amount);
+                const amountOutMinimum =
+                  (outAmountAtomic * BigInt(10_000 - swapMintSlippageBps())) / 10_000n;
+                const deadline = Math.floor(Date.now() / 1000) + 300;
+                let calldata: Hex;
+                let target: Address;
+                if (destAddr === NATIVE_MINT.toLowerCase() && route.router === "swaprouter02") {
+                  // v3 swap outputs WETH; unwrap to native in one multicall
+                  // (the swapUSDCForNative pattern, v2 encoding).
+                  const swapData = buildV3ExactInputSingleCalldataV2({
+                    tokenIn: routerInputAddress(leg.mint, "swaprouter02"),
+                    tokenOut: WETH9,
+                    fee: route.fee,
+                    recipient: V3_SWAP_ROUTER_02,
+                    amountIn: leg.amount,
+                    amountOutMinimum,
+                  });
+                  const unwrapData = buildUnwrapWETH9Calldata(amountOutMinimum, owner);
+                  calldata = buildSwapRouterMulticallCalldata([swapData, unwrapData]);
+                  target = V3_SWAP_ROUTER_02;
+                } else {
+                  calldata = buildSwapCalldataV2(
+                    route,
+                    leg.mint,
+                    dest,
+                    leg.amount,
+                    amountOutMinimum,
+                    deadline,
+                  );
+                  target = route.target;
+                }
+                const value = legIsNative ? leg.amount : 0n;
+                if (!legIsNative) await approveInputForRoute(leg.mint, route, leg.amount);
+                const { txSignature } = await sendTx({ to: target, data: calldata, value });
+                txs.push(txSignature);
+                outputAtomic += outAmountAtomic;
+              } catch (e) {
+                logger.warn("convertClaimedFees leg failed (fail-open)", {
+                  leg: leg.mint.slice(0, 8),
+                  error: underlyingErrorMessage(e),
+                });
+              }
+            }
+            const destPrice = await priceUsd(dest);
+            return {
+              destination,
+              outputAtomic,
+              outputUsd: destPrice > 0 ? usdOf(outputAtomic, destDecimals, destPrice) : null,
+              txSignatures: txs,
+            };
+          },
+          catch: (e) => new Error(`convertClaimedFees: ${underlyingErrorMessage(e)}`),
+        }),
+      getPendingFees: (poolAddress, positionId) =>
+        Effect.tryPromise({
+          try: async () => {
+            const tokenId = BigInt(positionId);
+            const isV4 = poolAddress.length === 66;
+            if (isV4) {
+              // Probe-verified (2026-08-10, selector scan of the live 4663
+              // StateView 0xF333…): the deployment exposes only getSlot0 +
+              // getLiquidity — no claimable-fee read — and the PositionManager
+              // info encoding carries no owed amounts. Honest null (fail-open);
+              // the v4 collect path stays interval-gated.
+              return null;
+            }
+            const npm = v3Npm();
+            const p = await npm.read.positions([tokenId]);
+            const token0 = p[2];
+            const token1 = p[3];
+            const fee = Number(p[4]);
+            const state = await v3PoolQuoteState(await v3PoolOf(token0, token1, fee));
+            const feeX = p[10];
+            const feeY = p[11];
+            const [price0, price1] = await Promise.all([priceUsd(token0), priceUsd(token1)]);
+            // Unpriceable leg → null (fail-closed gate: never harvest
+            // unpriceable fees on a symbol-based estimate).
+            if (!(price0 > 0) || !(price1 > 0)) return null;
+            return {
+              feeX,
+              feeY,
+              feeXUsd: usdOf(feeX, state.token0Decimals, price0),
+              feeYUsd: usdOf(feeY, state.token1Decimals, price1),
+            };
+          },
+          catch: (e) => new Error(`getPendingFees: ${underlyingErrorMessage(e)}`),
         }),
       claimRewards: (_poolAddress, _positionPubKey) =>
         Effect.succeed({

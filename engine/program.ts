@@ -104,12 +104,26 @@ import { evaluateFallenAngelDiscovery } from "./fallen-angel-discovery.js";
 import { identifyAssetMint } from "./fallen-angel-service.js";
 import { buildTpLadder, evaluateTpLadder, parseTpLadder, serializeTpLadder } from "./tp-ladder.js";
 import { getGeckoPoolOhlcv, type GeckoOhlcvSignals } from "./gecko-ohlcv-service.js";
-import {
-  challengePoolScore,
+import { challengePoolScore,
   challengeRangeFromVolatility,
   challengeRotationSignal,
   avgFeeYieldPct,
 } from "./challenge-strategy.js";
+import { applyMinRangePct } from "./range-floor.js";
+import { entryBudgetWei } from "./gas-reserve.js";
+import { shouldHarvest } from "./harvest-gate.js";
+import { feePersistence } from "./fee-persistence.js";
+import { createTokenRiskProber, type TokenRiskVerdict } from "./evm-token-risk.js";
+import {
+  evaluateRotation,
+  observeRotationPair,
+  rotationPairKey,
+  estimateNetFeeVelocityUsdPerDay,
+  type Seat,
+  type Challenger,
+  type RotationConfig,
+} from "./rotation-controller.js";
+import { createPublicClient, http, type Address } from "viem";
 import { getRugCheckReport, type RugCheckReport } from "./rugcheck-service.js";
 import type {
   AgentDecision,
@@ -295,6 +309,53 @@ const PREVIOUS_SNAPSHOT_WINDOW_MS = 26 * 60 * 60 * 1000;
 
 /** How often pool_snapshots pruning runs (rows older than the retention window are deleted). */
 const SNAPSHOT_PRUNE_INTERVAL_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Fee-Truth range floor: widen a (lower, upper) tick range so the FULL price
+ * range is at least `minFullRangePct` around `activeBinId`, unless the range
+ * is already wider. The floor is expressed in price-pct and converted to
+ * binStep-aligned ticks (rounded UP so the guarantee is never undershot).
+ * Pure; a malformed min pct (NaN/negative) disables the floor via the module
+ * default semantics of applyMinRangePct.
+ */
+export function floorRangeToMinPct(
+  activeBinId: number,
+  binStep: number,
+  lowerBinId: number,
+  upperBinId: number,
+  minFullRangePct: number,
+): { lowerBinId: number; upperBinId: number } {
+  if (!Number.isFinite(activeBinId) || !Number.isFinite(binStep) || binStep <= 0) {
+    return { lowerBinId, upperBinId };
+  }
+  const halfWidthPct = 1.0001 ** (((upperBinId - lowerBinId) / 2) * binStep) - 1;
+  const flooredHalfWidthPct = applyMinRangePct(halfWidthPct, minFullRangePct);
+  if (flooredHalfWidthPct <= halfWidthPct) return { lowerBinId, upperBinId };
+  const halfTicks =
+    Math.ceil(Math.log1p(flooredHalfWidthPct) / Math.log(1.0001) / binStep) * binStep;
+  return {
+    lowerBinId: Math.max(activeBinId - halfTicks, -887272),
+    upperBinId: Math.min(activeBinId + halfTicks, 887272),
+  };
+}
+
+/**
+ * Collapse a pool's snapshot series into one fees24hUsd value per UTC day
+ * (last snapshot of each day wins — snapshots arrive chronologically). The
+ * result feeds feePersistence (rule 2: fees must recur across several days).
+ */
+export function dailyFeeSeriesUsd(
+  snapshots: ReadonlyArray<{ readonly timestamp: number; readonly fees24hUsd: number }>,
+): Array<number | null> {
+  const byDay = new Map<number, number>();
+  for (const s of snapshots) {
+    const day = Math.floor(s.timestamp / 86_400_000);
+    byDay.set(day, s.fees24hUsd);
+  }
+  return [...byDay.entries()]
+    .sort((a, b) => a[0] - b[0])
+    .map(([, fees]) => fees);
+}
 
 export function isProposalStale(proposal: AgentProposal, staleMs: number, now: number): boolean {
   return now > proposal.proposedAt + staleMs || now > proposal.expiresAt;
@@ -1284,6 +1345,12 @@ export function executeLive(
     minNativeForEntryWei?: bigint | undefined;
     /** Native-ETH pure-gas floor (wei). Absent = constants.MIN_NATIVE_FOR_GAS_WEI. */
     minNativeForGasWei?: bigint | undefined;
+    /** Fraction of the native balance kept as gas/emergency reserve (rule 6:
+     *  max(10% allocation, emergency-exit minimum)). Absent = 0.10. */
+    gasReservePct?: number | undefined;
+    /** Minimum full price-range width for a minted position (fraction).
+     *  Absent = 0.20 (>= 20% around the current price). */
+    entryMinRangePct?: number | undefined;
     reconcileRequestedPools?: Set<string>;
     memory?: MemoryApi;
     unpricedExitWarnedPools?: Set<string>;
@@ -1429,19 +1496,26 @@ export function executeLive(
       const nativeBalanceWei = nativeBalance.value;
       const minNativeForEntryWei = deps.minNativeForEntryWei ?? MIN_NATIVE_FOR_ENTRY_WEI;
       const minNativeForGasWei = deps.minNativeForGasWei ?? MIN_NATIVE_FOR_GAS_WEI;
-      if (nativeBalanceWei < minNativeForEntryWei) {
+      // Fee-Truth gas reserve (rule 6): spendable = balance - max(10% of
+      // balance, emergency-exit minimum). The ENTER must fit INSIDE the
+      // spendable budget — the reserve is untouchable for LP deployment.
+      const entryBudget = entryBudgetWei(nativeBalanceWei, {
+        reservePct: Math.round((deps.gasReservePct ?? 0.1) * 100),
+        emergencyExitWei: minNativeForGasWei,
+      });
+      if (entryBudget < minNativeForEntryWei) {
         const availableWei = Number(nativeBalanceWei);
         const neededWei = Number(minNativeForEntryWei);
-        const reserve = neededWei - Number(minNativeForGasWei);
+        const reserve = nativeBalanceWei - entryBudget;
         const availableHuman = (availableWei / 1e18).toFixed(6);
         const neededHuman = (neededWei / 1e18).toFixed(6);
-        const reserveHuman = (reserve / 1e18).toFixed(6);
+        const reserveHuman = (Number(reserve) / 1e18).toFixed(6);
         console.warn(
-          `Insufficient ETH for ENTER — available ${availableHuman} ETH, need ${neededHuman} ETH ` +
-            `(gas ${(Number(minNativeForGasWei) / 1e18).toFixed(6)} + fee reserve ${reserveHuman})`,
+          `Insufficient ETH for ENTER — spendable ${availableHuman} ETH, need ${neededHuman} ETH ` +
+            `(gas ${(Number(minNativeForGasWei) / 1e18).toFixed(6)} + reserve ${reserveHuman})`,
         );
         const error =
-          `Insufficient ETH for ENTER — available: ${availableHuman} ETH, ` +
+          `Insufficient ETH for ENTER — spendable: ${availableHuman} ETH, ` +
           `needed: ${neededHuman} ETH, ` +
           `reserve: ${reserveHuman} ETH`;
         if (autonomous && entryOperation) {
@@ -1466,11 +1540,20 @@ export function executeLive(
           error: `ENTER skipped: pool at tick-domain edge — range ${recommended.lowerBinId}-${recommended.upperBinId} is degenerate`,
         };
       }
+      // Fee-Truth range floor: the minted range must span at least
+      // ENTRY_MIN_RANGE_PCT (default 20%) around the current price.
+      const floored = floorRangeToMinPct(
+        pool.activeBinId,
+        pool.binStep,
+        recommended.lowerBinId,
+        recommended.upperBinId,
+        deps.entryMinRangePct ?? 0.2,
+      );
       const enterResult = yield* adapter
         .enterPosition(
           decision.poolAddress,
-          recommended.lowerBinId,
-          recommended.upperBinId,
+          floored.lowerBinId,
+          floored.upperBinId,
           decision.positionSizeUsd,
           { strategyShape: entryStrategyShape },
         )
@@ -2534,6 +2617,18 @@ export const program = Effect.gen(function* () {
   // drawdown/yield gates run EVERY cycle (2-15s cadence), while the book
   // itself re-ranks on the slow universe cadence (5 min default).
   const harvestBookPools = new Set<string>();
+  // Per-pool Krystal stats for the harvest book (rotation challengers need
+  // fees/TVL/APR, not just book membership).
+  const harvestBookStats = new Map<
+    string,
+    { readonly tvlUsd: number; readonly fees24hUsd: number; readonly apr: number; readonly drawdown24h: number | null; readonly priceVolatility: number | null }
+  >();
+  // Fee-Truth rotation confirmations (rule 7/9): consecutive-observation
+  // counts per exit|enter pair, persisted to rotation_state so a restart
+  // cannot re-arm rotation on a single good cycle. Loaded once at boot,
+  // flushed when dirty.
+  const rotationConfirmations = new Map<string, number>();
+  let rotationConfirmationsDirty = false;
   // First-seen time per pool — powers the launch-rug age gate
   // (CHALLENGE_MIN_POOL_AGE_MS excludes pools younger than 6h even at
   // extreme yield: the BROKERS profile, 32%/day yield AND -70% drawdown).
@@ -2543,6 +2638,27 @@ export const program = Effect.gen(function* () {
   let challengePeakEquityUsd = 0;
   const challengeLossCooldownUntil = new Map<string, number>();
   let lastHarvestBookRefreshAt = 0;
+  // EVM token-risk (rule 4): honeypot/transfer-tax, owner-control and
+  // upgradability probes for non-allowlisted legs. Created LAZILY on first
+  // use (config.rpcUrl may be empty in tests/loop contexts — http("") would
+  // throw at construction). Verdicts cached per token for the refresh window
+  // (cleared when the harvest book refreshes); a "reject" verdict is a hard
+  // safety rejection at the pool screen.
+  let tokenRiskProber: ReturnType<typeof createTokenRiskProber> | null = null;
+  const getTokenRiskProber = () => {
+    if (tokenRiskProber === null && typeof config.rpcUrl === "string" && config.rpcUrl.length > 0) {
+      tokenRiskProber = createTokenRiskProber(
+        createPublicClient({ transport: http(config.rpcUrl) }),
+        {
+          enabled: true,
+          maxTransferTaxPct: config.tokenRiskMaxTransferTaxPct ?? 5,
+          allowlistedMints: config.stablecoinMints ?? new Set<string>(),
+        },
+      );
+    }
+    return tokenRiskProber;
+  };
+  const tokenRiskCache = new Map<string, TokenRiskVerdict>();
   const refreshHarvestBook = (): Effect.Effect<void, never, never> =>
     Effect.gen(function* () {
       if (config.challengeMode !== true) return;
@@ -2568,7 +2684,21 @@ export const program = Effect.gen(function* () {
         .sort((a, b) => b.score - a.score)
         .slice(0, config.challengeBookSize ?? 10);
       harvestBookPools.clear();
-      for (const entry of ranked) harvestBookPools.add(entry.address);
+      harvestBookStats.clear();
+      for (const entry of ranked) {
+        harvestBookPools.add(entry.address);
+        const stats = universe.get(entry.address);
+        if (stats) {
+          harvestBookStats.set(entry.address, {
+            tvlUsd: stats.tvlUsd,
+            fees24hUsd: stats.feeUsd24h,
+            apr: stats.apr,
+            drawdown24h: stats.drawdown24h,
+            priceVolatility: stats.priceVolatility,
+          });
+        }
+      }
+      tokenRiskCache.clear();
       logger.info("Harvest book refreshed", {
         size: harvestBookPools.size,
         top: ranked.slice(0, 3).map((r) => ({ pool: r.address.slice(0, 10), score: r.score.toFixed(1) })),
@@ -3805,6 +3935,8 @@ export const program = Effect.gen(function* () {
               nativePriceUsd: config.nativePriceUsd,
               minNativeForEntryWei: config.minNativeForEntryWei,
               minNativeForGasWei: config.minNativeForGasWei,
+              gasReservePct: config.gasReservePct,
+              entryMinRangePct: config.entryMinRangePct,
               entryStrategyShape,
               entryRangeHalfWidth,
               reconcileRequestedPools,
@@ -4247,6 +4379,20 @@ export const program = Effect.gen(function* () {
             }
           } catch {
             // Malformed blob — start with an empty first-seen map.
+          }
+        }
+      }
+
+      // Fee-Truth rotation confirmations (rules 7+9): consecutive-observation
+      // counts per exit|enter pair, loaded once so a restart cannot re-arm
+      // rotation on a single good cycle.
+      if (config.challengeMode === true && rotationConfirmations.size === 0) {
+        const persisted = yield* db.getRotationObservations().pipe(
+          Effect.catch(() => Effect.succeed([] as ReadonlyArray<{ pairKey: string; obsCount: number; updatedAt: number }>)),
+        );
+        for (const row of persisted) {
+          if (Number.isInteger(row.obsCount) && row.obsCount >= 0) {
+            rotationConfirmations.set(row.pairKey, row.obsCount);
           }
         }
       }
@@ -4909,6 +5055,42 @@ export const program = Effect.gen(function* () {
         return yield* rejectForSafety(blacklistRejection);
       }
 
+      // EVM token-risk (rule 4): honeypot / transfer-tax / owner-control /
+      // upgradability probes for non-allowlisted legs. Stablecoins and the
+      // native gas token are trusted; everything else is assessed (cached per
+      // token for the refresh window). A "reject" verdict is a hard rejection
+      // — high fees never override a failed safety gate. Probe failures fail
+      // WARN (advisory), matching the token-risk overlay's fail-open posture:
+      // the deterministic blacklist above stays the fail-closed layer.
+      for (const mint of [pool.tokenX, pool.tokenY]) {
+        if (mint === NATIVE_MINT || config.stablecoinMints?.has(mint) === true) continue;
+        const prober = getTokenRiskProber();
+        if (prober === null) continue; // no RPC configured — advisory skip
+        let verdict = tokenRiskCache.get(mint);
+        if (verdict === undefined) {
+          const report = yield* Effect.tryPromise(() => prober.assess(mint as Address)).pipe(
+            Effect.catch((err) =>
+              Effect.succeed({
+                verdict: "warn" as TokenRiskVerdict,
+                reason: `probe failed (${String(err).slice(0, 120)})`,
+              }),
+            ),
+          );
+          verdict = report.verdict;
+          tokenRiskCache.set(mint, verdict);
+          logger.info("EVM token-risk assessed", {
+            mint: mint.slice(0, 10),
+            verdict,
+            reason: "reason" in report ? report.reason : undefined,
+          });
+        }
+        if (verdict === "reject") {
+          return yield* rejectForSafety(
+            `EVM token-risk rejection: ${mint} (honeypot/tax/owner/upgradable probe)`,
+          );
+        }
+      }
+
       const freezeEnabledX =
         authX?.freezeAuthority != null;
       const freezeEnabledY =
@@ -5242,6 +5424,22 @@ export const program = Effect.gen(function* () {
       // Use the volatility-sized width for ENTER/REBALANCE when present.
       if (challengeRange !== null) {
         rangeHalfWidth = challengeRange.halfWidth;
+      }
+      // Fee-Truth range floor: the evaluated half-width must still span at
+      // least ENTRY_MIN_RANGE_PCT (default 20%) FULL price range. Convert the
+      // pct floor to binStep-aligned ticks (round up so the guarantee holds).
+      {
+        const halfWidthPct = 1.0001 ** (rangeHalfWidth * pool.binStep) - 1;
+        const flooredHalfWidthPct = applyMinRangePct(
+          halfWidthPct,
+          config.entryMinRangePct ?? 0.2,
+        );
+        if (flooredHalfWidthPct > halfWidthPct) {
+          rangeHalfWidth = Math.max(
+            rangeHalfWidth,
+            Math.ceil(Math.log1p(flooredHalfWidthPct) / Math.log(1.0001) / pool.binStep),
+          );
+        }
       }
 
       // Challenge drawdown gate: the measured 24h drawdown (Krystal) is the
@@ -5853,22 +6051,31 @@ export const program = Effect.gen(function* () {
                   config.entryRangeHalfWidthBins > 0 ? config.entryRangeHalfWidthBins : undefined,
                 )
               : strategy.recommendBinRange(pool.activeBinId, pool.binStep, rangeHalfWidth);
+          // Fee-Truth range floor: a rebalanced range must still span at least
+          // ENTRY_MIN_RANGE_PCT (default 20%) around the current price.
+          const flooredRecommended = floorRangeToMinPct(
+            pool.activeBinId,
+            pool.binStep,
+            recommended.lowerBinId,
+            recommended.upperBinId,
+            config.entryMinRangePct ?? 0.2,
+          );
           // Simulation-first: live mode runs the SDK's atomic-rebalance
           // simulation against the real position; on any simulation/transport
           // failure the gate fails closed (no rebalance this cycle).
           const sim = config.paperTrading
             ? estimatePaperRebalanceBenefit({
                 fees24hUsd: pool.fees24hUsd,
-                newLowerBinId: recommended.lowerBinId,
-                newUpperBinId: recommended.upperBinId,
+                newLowerBinId: flooredRecommended.lowerBinId,
+                newUpperBinId: flooredRecommended.upperBinId,
               })
             : pos.positionPubKey
               ? yield* adapter
                   .simulateRebalance(
                     poolAddress,
                     pos.positionPubKey,
-                    recommended.lowerBinId,
-                    recommended.upperBinId,
+                    flooredRecommended.lowerBinId,
+                    flooredRecommended.upperBinId,
                   )
                   .pipe(
                     Effect.catch((err) =>
@@ -6001,8 +6208,8 @@ export const program = Effect.gen(function* () {
                     ? `[recovery-gate] force-rebalance — probability ${recoveryProb.toFixed(2)} <= ${config.oorRecoveryForceRebalanceThreshold}. Drift ${(driftPct * 100).toFixed(0)}%`
                     : `Drift ${(driftPct * 100).toFixed(0)}%. Net benefit: $${sim.netBenefitUsd.toFixed(2)}`,
                   rebalanceParams: {
-                    newLowerBinId: recommended.lowerBinId,
-                    newUpperBinId: recommended.upperBinId,
+                    newLowerBinId: flooredRecommended.lowerBinId,
+                    newUpperBinId: flooredRecommended.upperBinId,
                     slippageBps: 50,
                   },
                 };
@@ -6021,6 +6228,121 @@ export const program = Effect.gen(function* () {
             confidence: Math.min(0.6 + feeIlRatio * 0.05, 0.9),
             reasoning: `Fee/IL ${feeIlRatio.toFixed(2)} above threshold. Holding.`,
           };
+        }
+
+        // Fee-Truth rotation (rules 7+9): an incumbent seat rotates ONLY when
+        // a fully admissible challenger is decisively superior after switching
+        // costs — net fee velocity >= incumbent x 1.25, APR lead, fee-density
+        // lead — across ROTATION_CONFIRM_OBSERVATIONS consecutive cycles.
+        // Safety exits above already fired (decision set) → rotation is
+        // skipped; the incumbent's own capital-protection gates win.
+        if (!decision && config.challengeMode === true && harvestBookStats.size > 0 && pool.tvlUsd > 0) {
+          const incumbentShare =
+            pool.tvlUsd > 0 && pos.currentValueUsd > 0
+              ? Math.min(pos.currentValueUsd / pool.tvlUsd, 1)
+              : 0;
+          const seat: Seat = {
+            pool: poolAddress,
+            apr: pool.apr,
+            feeDensity: pool.tvlUsd > 0 ? pool.fees24hUsd / pool.tvlUsd : 0,
+            fees24hUsd: pool.fees24hUsd,
+            positionShare: incumbentShare,
+            expectedInRangePct: 100,
+            costsPerDayUsd: 0,
+          };
+          const incumbentNet = estimateNetFeeVelocityUsdPerDay(
+            seat.fees24hUsd,
+            seat.positionShare,
+            seat.expectedInRangePct,
+            seat.costsPerDayUsd,
+          );
+          const challengers: Challenger[] = [];
+          for (const [cAddr, cStats] of harvestBookStats) {
+            if (cAddr.toLowerCase() === poolAddress.toLowerCase() || cStats.tvlUsd <= 0) continue;
+            const entryUsd = Math.min(
+              config.maxEntrySizeUsd,
+              (config.entrySizeTvlFraction ?? 0.005) * cStats.tvlUsd,
+            );
+            const share = Math.min(entryUsd / cStats.tvlUsd, 1);
+            challengers.push({
+              pool: cAddr,
+              apr: cStats.apr,
+              feeDensity: cStats.fees24hUsd / cStats.tvlUsd,
+              fees24hUsd: cStats.fees24hUsd,
+              positionShare: share,
+              expectedInRangePct: 100,
+              costsPerDayUsd: 0,
+              admissible: true,
+            });
+          }
+          const rotCfg: RotationConfig = {
+            minSuperiorityPct: config.rotationMinSuperiorityPct ?? 25,
+            minAprLeadPct: config.rotationMinAprLeadPct ?? 20,
+            minFeeDensityLeadPct: config.rotationMinFeeDensityLeadPct ?? 15,
+            requiredConfirmations: config.rotationRequiredConfirmations ?? 2,
+            minChallengerNetFeesUsdPerDay: 0.05,
+            switchingCostUsd: config.rotationSwitchingCostUsd ?? 0.5,
+          };
+          // Observe the strongest challenger: net velocity (entry-cost-
+          // discounted) vs the incumbent's, with the module's superiority
+          // gates — increment on superior, reset on not (2-consecutive
+          // observations semantics). Persisted at cycle end when dirty.
+          let bestChallenger: Challenger | null = null;
+          let bestMargin = Number.NEGATIVE_INFINITY;
+          for (const c of challengers) {
+            const cNet = estimateNetFeeVelocityUsdPerDay(
+              c.fees24hUsd,
+              c.positionShare,
+              c.expectedInRangePct,
+              c.costsPerDayUsd,
+            );
+            const margin = cNet - incumbentNet;
+            if (margin > bestMargin || (margin === bestMargin && c.apr > (bestChallenger?.apr ?? 0))) {
+              bestChallenger = c;
+              bestMargin = margin;
+            }
+          }
+          if (bestChallenger !== null) {
+            const bestNet = estimateNetFeeVelocityUsdPerDay(
+              bestChallenger.fees24hUsd,
+              bestChallenger.positionShare,
+              bestChallenger.expectedInRangePct,
+              bestChallenger.costsPerDayUsd,
+            );
+            const superior =
+              bestNet >= incumbentNet * (1 + (rotCfg.minSuperiorityPct ?? 25) / 100) &&
+              bestChallenger.apr >= seat.apr + (rotCfg.minAprLeadPct ?? 20) &&
+              bestChallenger.feeDensity >=
+                seat.feeDensity * (1 + (rotCfg.minFeeDensityLeadPct ?? 15) / 100) &&
+              bestNet >= rotCfg.minChallengerNetFeesUsdPerDay;
+            const key = rotationPairKey(poolAddress, bestChallenger.pool);
+            const updated = observeRotationPair(
+              poolAddress,
+              bestChallenger.pool,
+              superior,
+              rotationConfirmations,
+              rotCfg.requiredConfirmations ?? 2,
+            );
+            if (updated.get(key) !== rotationConfirmations.get(key)) {
+              rotationConfirmations.set(key, updated.get(key) ?? 0);
+              rotationConfirmationsDirty = true;
+            }
+            const rotDecision = evaluateRotation(
+              [seat],
+              challengers,
+              rotCfg,
+              rotationConfirmations,
+            );
+            if (rotDecision.action === "rotate") {
+              decision = {
+                action: "EXIT",
+                poolAddress,
+                positionId: pos.positionId,
+                confidence: 0.95,
+                reasoning: `[rotation] ${rotDecision.reason}`,
+              };
+            }
+          }
         }
 
         if (decision) {
@@ -6353,6 +6675,57 @@ export const program = Effect.gen(function* () {
           // which also skip the modeled ratio. A heuristic pool still cannot enter:
           // it fails volumeAuthenticityKnown below. In challenge mode the
           // measured-yield-vs-drawdown score must also clear the floor.
+          // Fee persistence (rule 2): a challenge ENTER requires measured fees
+          // to recur across the window — a one-off spike day must not qualify
+          // a pool. Computed only for harvest-book candidates to bound the
+          // snapshot query; a load failure fails CLOSED (rule 11: downgrade
+          // to HOLD rather than guess from stale data).
+          const persistenceDecision =
+            config.challengeMode === true && harvestBookPools.has(poolAddress)
+              ? yield* db
+                  .getSnapshots(
+                    poolAddress,
+                    Date.now() - (config.feePersistenceWindowDays ?? 7) * 86_400_000,
+                    Date.now(),
+                  )
+                  .pipe(
+                    Effect.map((snaps) =>
+                      feePersistence(dailyFeeSeriesUsd(snaps), {
+                        windowDays: config.feePersistenceWindowDays ?? 7,
+                        minPositiveDays: config.feePersistenceMinPositiveDays ?? 4,
+                        maxSpikeRatio: config.feePersistenceMaxSpikeRatio ?? 3,
+                      }),
+                    ),
+                    Effect.catch((err) =>
+                      Effect.succeed({
+                        persistent: false,
+                        reason: `snapshot load failed (${err instanceof Error ? err.message : String(err)})`,
+                      }),
+                    ),
+                  )
+              : { persistent: true, reason: "not a challenge entry candidate" };
+          // Exit-route proof (rule 5): never enter a pool whose legs→ETH exit
+          // is not executable. Quoted + eth_call-simulated at realistic size
+          // by the adapter; computed only for harvest-book candidates to
+          // bound RPC cost; a verification failure fails CLOSED (no ENTER).
+          const exitRouteProof =
+            config.challengeMode === true &&
+            config.exitRouteProofRequired !== false &&
+            harvestBookPools.has(poolAddress)
+              ? adapter.verifyExitRoute
+                ? yield* adapter
+                    .verifyExitRoute(poolAddress, Math.min(config.maxEntrySizeUsd, 5_000))
+                    .pipe(
+                      Effect.catch((err) =>
+                        Effect.succeed({
+                          ok: false,
+                          reason: `verify failed (${String(err).slice(0, 120)})`,
+                          proceedsUsd: null,
+                        }),
+                      ),
+                    )
+                : { ok: false, reason: "verifyExitRoute not implemented", proceedsUsd: null }
+              : { ok: true, reason: "not required", proceedsUsd: null };
           if (
             !enterGateRejected &&
             (metrics.feeIlRatioKnown ? feeIlRatio > evolvedThresholds.minFeeIlRatio * 1.5 : true) &&
@@ -6363,6 +6736,14 @@ export const program = Effect.gen(function* () {
             pool.tvlUsd > config.minPoolTvlUsd * 2 &&
             (config.challengeMode !== true ||
               challengePoolScore(pool).score >= (config.challengeMinScore ?? 4)) &&
+            // Fee persistence (rule 2): measured fees must recur across the
+            // window — one-off spike days must not qualify a pool.
+            (config.challengeMode !== true || persistenceDecision.persistent) &&
+            // Measured-TVL floor for challenge entries (MIN_ENTRY_TVL_USD).
+            (config.challengeMode !== true || pool.tvlUsd >= (config.minEntryTvlUsd ?? 1_000)) &&
+            // Exit-route proof (rule 5): the exit must be proven executable
+            // before the entry is admissible.
+            (config.challengeMode !== true || exitRouteProof.ok) &&
             // Launch-rug gate: pools younger than CHALLENGE_MIN_POOL_AGE_MS
             // (default 6h) are excluded even at extreme yield — the BROKERS
             // profile (32%/day yield AND -70% drawdown within hours).
@@ -7382,6 +7763,8 @@ export const program = Effect.gen(function* () {
               nativePriceUsd: config.nativePriceUsd,
               minNativeForEntryWei: config.minNativeForEntryWei,
               minNativeForGasWei: config.minNativeForGasWei,
+              gasReservePct: config.gasReservePct,
+              entryMinRangePct: config.entryMinRangePct,
               entryStrategyShape,
               entryRangeHalfWidth: rangeHalfWidth,
               reconcileRequestedPools,
@@ -7433,6 +7816,8 @@ export const program = Effect.gen(function* () {
               nativePriceUsd: config.nativePriceUsd,
               minNativeForEntryWei: config.minNativeForEntryWei,
               minNativeForGasWei: config.minNativeForGasWei,
+              gasReservePct: config.gasReservePct,
+              entryMinRangePct: config.entryMinRangePct,
               entryStrategyShape,
               entryRangeHalfWidth: rangeHalfWidth,
               reconcileRequestedPools,
@@ -7762,6 +8147,32 @@ export const program = Effect.gen(function* () {
             }
           }
 
+          // Fee-Truth harvest gate (rule 10): claim only when pending fees
+          // clear the economic floor ($1 net, gas <= 15% of gross fees).
+          // getPendingFees reads unclaimed amounts without broadcasting; a
+          // read failure fails CLOSED (no claim — rule 11: don't act on
+          // stale data). The gas estimate is a static L2 claim cost
+          // (~120k gas at 2x base fee ≈ 6.24e-6 ETH) priced at the config
+          // native price — dust-tiny on this chain, so the $1 floor is the
+          // real gate.
+          const pending = adapter.getPendingFees
+            ? yield* adapter
+                .getPendingFees(poolAddress, pos.positionPubKey)
+                .pipe(Effect.catch(() => Effect.succeed(null)))
+            : null;
+          if (pending) {
+            const pendingUsd = pending.feeXUsd + pending.feeYUsd;
+            const estGasUsd = (config.nativePriceUsd ?? 3000) * 6.24e-6;
+            const harvestDecision = shouldHarvest(pendingUsd, estGasUsd, {
+              minNetUsd: config.harvestMinNetUsd ?? 1,
+              maxGasPct: config.harvestMaxGasPct ?? 0.15,
+            });
+            if (!harvestDecision.harvest) {
+              console.info(`[harvest-gate] Skipping claim on ${poolAddress}: ${harvestDecision.reason}`);
+              continue;
+            }
+          }
+
           const result = yield* adapter
             .claimFees(
               poolAddress,
@@ -8046,6 +8457,17 @@ export const program = Effect.gen(function* () {
     refreshPoolsToScan(reconcileResult);
     yield* claimAllFees();
     yield* checkForAutoUpdate(config, db);
+    // Persist rotation confirmations (rules 7+9): the consecutive-observation
+    // counts must survive restarts — an in-memory-only map would re-arm
+    // rotation on a single good cycle after every reboot.
+    if (rotationConfirmationsDirty) {
+      for (const [pairKey, obsCount] of rotationConfirmations) {
+        yield* db
+          .saveRotationObservation(pairKey, obsCount)
+          .pipe(Effect.catch(() => Effect.void));
+      }
+      rotationConfirmationsDirty = false;
+    }
     yield* runScanCycle();
   }).pipe(
     Effect.catch((err) =>

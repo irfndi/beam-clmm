@@ -53,6 +53,55 @@ export interface AppConfig {
   readonly challengeUniverseRefreshMs?: number;
   readonly challengeHardFloorPct?: number;
   readonly challengeLossCooldownMs?: number;
+  // ── Fee-truth two-seat strategy knobs (all adjustable, defaults per spec) ──
+  /** Minimum full price-range width for an entry (fraction of price, both
+   *  directions). Env ENTRY_MIN_RANGE_PCT; default 0.20 (>= 20% around price). */
+  readonly entryMinRangePct?: number;
+  /** Fraction of the native balance kept as gas/emergency reserve. Env
+   *  GAS_RESERVE_PCT; default 0.10 (rule 6: max(10% allocation, emergency exit
+   *  minimum)). The ENTER budget gate spends only balance - reserve. */
+  readonly gasReservePct?: number;
+  /** Minimum net fee proceeds (USD) before a harvest is rational. Env
+   *  HARVEST_MIN_NET_USD; default 1. */
+  readonly harvestMinNetUsd?: number;
+  /** Max harvest execution cost as a fraction of gross fees. Env
+   *  HARVEST_MAX_GAS_PCT; default 0.15 (rule 10: don't spend $0.80 to realize $1). */
+  readonly harvestMaxGasPct?: number;
+  /** Rotation: challenger net-fee-velocity must exceed incumbent by this %.
+   *  Env ROTATION_MIN_SUPERIORITY_PCT; default 25 (rule 7: x1.25). */
+  readonly rotationMinSuperiorityPct?: number;
+  /** Rotation: challenger APR must exceed incumbent APR by this percentage
+   *  POINT lead. Env ROTATION_MIN_APR_LEAD_PCT; default 20. */
+  readonly rotationMinAprLeadPct?: number;
+  /** Rotation: challenger fee density must exceed incumbent's by this %.
+   *  Env ROTATION_MIN_FEE_DENSITY_LEAD_PCT; default 15. */
+  readonly rotationMinFeeDensityLeadPct?: number;
+  /** Rotation: consecutive observations of challenger superiority required
+   *  before replacing the incumbent. Env ROTATION_CONFIRM_OBSERVATIONS; default 2. */
+  readonly rotationRequiredConfirmations?: number;
+  /** Estimated full switching cost USD (withdraw + swaps + entry + slippage)
+   *  deducted from the challenger's net fee velocity comparison. Env
+   *  ROTATION_SWITCHING_COST_USD; default 0.5. */
+  readonly rotationSwitchingCostUsd?: number;
+  /** Fee-persistence window (days) for the multi-observation entry filter.
+   *  Env FEE_PERSISTENCE_WINDOW_DAYS; default 7. */
+  readonly feePersistenceWindowDays?: number;
+  /** Min non-zero fee days inside the window for a pool to be persistent.
+   *  Env FEE_PERSISTENCE_MIN_POSITIVE_DAYS; default 4. */
+  readonly feePersistenceMinPositiveDays?: number;
+  /** Max max/median daily-fee spike ratio inside the window; higher = reject
+   *  the pool as a one-off spike (rule 2). Env FEE_PERSISTENCE_MAX_SPIKE_RATIO;
+   *  default 3. */
+  readonly feePersistenceMaxSpikeRatio?: number;
+  /** Max transfer tax % a non-allowlisted token may carry before the safety
+   *  gate rejects it. Env TOKEN_RISK_MAX_TRANSFER_TAX_PCT; default 5. */
+  readonly tokenRiskMaxTransferTaxPct?: number;
+  /** Minimum pool TVL for a challenge ENTER (measured USD). Env
+   *  MIN_ENTRY_TVL_USD; default 1000 (current challenge floor). */
+  readonly minEntryTvlUsd?: number;
+  /** Require a verified, executable exit route before ENTER (rule 5). Env
+   *  EXIT_ROUTE_PROOF_REQUIRED; default true. */
+  readonly exitRouteProofRequired?: boolean;
   readonly candidateMinHealthyScans: number;
   readonly candidateMinObservationMs: number;
   readonly candidateScanLimit: number;
@@ -954,6 +1003,50 @@ const loadConfig = Effect.gen(function* () {
     challengeMode ? 5_000 : ENTRY_SIZE_CAP_USD,
   );
 
+  // ─── F8: Fee-truth two-seat strategy knobs ───────────────────────────────
+  const entryMinRangePct = yield* validatedNumber("ENTRY_MIN_RANGE_PCT", 0, 0.2, 1.0);
+  const gasReservePct = yield* validatedNumber("GAS_RESERVE_PCT", 0, 0.1, 0.5);
+  const harvestMinNetUsd = yield* validatedNumber("HARVEST_MIN_NET_USD", 0, 1);
+  const harvestMaxGasPct = yield* validatedNumber("HARVEST_MAX_GAS_PCT", 0, 0.15, 1.0);
+  const rotationMinSuperiorityPct = yield* validatedNumber(
+    "ROTATION_MIN_SUPERIORITY_PCT",
+    0,
+    25,
+  );
+  const rotationMinAprLeadPct = yield* validatedNumber("ROTATION_MIN_APR_LEAD_PCT", 0, 20);
+  const rotationMinFeeDensityLeadPct = yield* validatedNumber(
+    "ROTATION_MIN_FEE_DENSITY_LEAD_PCT",
+    0,
+    15,
+  );
+  const rotationRequiredConfirmations = yield* validatedNumber(
+    "ROTATION_CONFIRM_OBSERVATIONS",
+    1,
+    2,
+  );
+  const rotationSwitchingCostUsd = yield* validatedNumber("ROTATION_SWITCHING_COST_USD", 0, 0.5);
+  const feePersistenceWindowDays = yield* validatedNumber("FEE_PERSISTENCE_WINDOW_DAYS", 1, 7);
+  const feePersistenceMinPositiveDays = yield* validatedNumber(
+    "FEE_PERSISTENCE_MIN_POSITIVE_DAYS",
+    1,
+    4,
+  );
+  const feePersistenceMaxSpikeRatio = yield* validatedNumber(
+    "FEE_PERSISTENCE_MAX_SPIKE_RATIO",
+    1,
+    3,
+  );
+  const tokenRiskMaxTransferTaxPct = yield* validatedNumber(
+    "TOKEN_RISK_MAX_TRANSFER_TAX_PCT",
+    0,
+    5,
+    100,
+  );
+  const minEntryTvlUsd = yield* validatedNumber("MIN_ENTRY_TVL_USD", 0, 1_000);
+  const exitRouteProofRequired = yield* Config.boolean("EXIT_ROUTE_PROOF_REQUIRED").pipe(
+    Effect.orElseSucceed(() => true),
+  );
+
   // ─── Live-mode gas floors + entry TVL share ────────────────────────────────
   // Gas floors default to the constants (0.005 ETH gas / 0.05 ETH ENTER) but
   // are env-overridable so a $10-100 challenge account can trade with a
@@ -1609,6 +1702,21 @@ const loadConfig = Effect.gen(function* () {
     maxPositionsPerPool,
     maxEntrySizeUsd,
     entrySizeTvlFraction,
+    entryMinRangePct,
+    gasReservePct,
+    harvestMinNetUsd,
+    harvestMaxGasPct,
+    rotationMinSuperiorityPct,
+    rotationMinAprLeadPct,
+    rotationMinFeeDensityLeadPct,
+    rotationRequiredConfirmations,
+    rotationSwitchingCostUsd,
+    feePersistenceWindowDays,
+    feePersistenceMinPositiveDays,
+    feePersistenceMaxSpikeRatio,
+    tokenRiskMaxTransferTaxPct,
+    minEntryTvlUsd,
+    exitRouteProofRequired,
     paperValidationMinDays,
     paperValidationEnforce,
     oorCooldownMs,

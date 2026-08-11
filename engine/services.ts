@@ -343,9 +343,65 @@ export interface AdapterApi {
        * `netFeesUsd ?? 0`.
        */
       netFeesUsd?: number | null;
+      /**
+       * Estimated gas cost of the claim transaction in USD (eth_call-estimated
+       * gas × current base fee × 2, priced at the native token's USD value).
+       * `null` when the estimate is unavailable (fail-open — callers use it
+       * only for the gas-budget harvest gate). Explicitly null, never omitted.
+       */
+      estimatedGasUsd?: number | null;
     },
     Error
   >;
+  /**
+   * Read a position's unclaimed swap fees WITHOUT broadcasting (harvest
+   * gating: min-net-USD + gas ≤ 15% checks run before any collect tx). v3:
+   * `positions()` tokensOwed0/tokensOwed1. v4: the 4663 StateView deployment
+   * exposes no claimable-fee read (verified by selector scan), so v4 returns
+   * null — the collect path remains interval-gated. Returns null when the
+   * position/fee read fails or the chain exposes no fee read (fail-open).
+   */
+  readonly getPendingFees?: (
+    poolAddress: string,
+    positionId: string,
+  ) => Effect.Effect<
+    {
+      feeX: bigint;
+      feeY: bigint;
+      feeXUsd: number;
+      feeYUsd: number;
+    } | null,
+    Error
+  >;
+  /**
+   * Exit-route proof (rule 5, runs before ENTER): quote + eth_call-simulate
+   * the pool's legs → native ETH through the adapter's working swap path at
+   * realistic size, WITHOUT broadcasting. `ok` requires every non-native leg
+   * to have a live quote; legs the wallet currently holds are additionally
+   * eth_call-simulated end-to-end (balance-revert simulations fall back to
+   * the quote — the wallet WILL hold the legs at exit time). `proceedsUsd`
+   * is the sum of quoted native proceeds priced in USD; null when any leg is
+   * unpriceable. Optional so loop mocks compile unchanged.
+   */
+  readonly verifyExitRoute?: (
+    poolAddress: string,
+    positionSizeUsd: number,
+  ) => Effect.Effect<
+    { ok: boolean; reason: string | null; proceedsUsd: number | null },
+    Error
+  >;
+  /**
+   * eth_call dry-run of the EXACT burn+collect calldata the engine would
+   * broadcast for this position (exitPosition/rebalancePosition), returning
+   * the decoded revert reason instead of broadcasting a reverting tx. gated
+   * behind ExitProofConfig.simulateBeforeExit (default true) — when on, the
+   * exit paths fail closed on ok:false. Optional so loop mocks compile
+   * unchanged.
+   */
+  readonly simulateWithdraw?: (
+    poolAddress: string,
+    positionPubKey: string,
+  ) => Effect.Effect<{ ok: boolean; reason: string | null }, Error>;
   readonly convertClaimedFees?: (
     poolAddress: string,
     destination: "accumulate-quote" | "accumulate-native",
@@ -440,6 +496,27 @@ export interface AdapterApi {
   readonly getConfirmedSwapOutput?: (
     signature: string,
   ) => Effect.Effect<{ outputAtomic: bigint; feeAtomic: bigint } | null, Error>;
+}
+
+/**
+ * Knobs for the swap-to-fund entry path (enterPosition): when the wallet
+ * holds NATIVE ETH but neither pool leg is fundable, the adapter probes a
+ * verified ETH → missing-leg swap route and funds the deficit by swapping.
+ * Slippage cap applied to the deficit swap's amountOutMinimum.
+ */
+export interface SwapMintConfig {
+  /** Max slippage (basis points) for the swap-to-fund deficit swap. Default 100 (1%). */
+  readonly maxSwapSlippageBps?: number;
+}
+
+/**
+ * Knobs for the pre-broadcast withdraw gate (exitPosition/rebalancePosition):
+ * eth_call dry-run of the exact burn+collect calldata BEFORE broadcasting, so
+ * a reverting exit never burns gas.
+ */
+export interface ExitProofConfig {
+  /** Dry-run the exit calldata via eth_call before broadcasting. Default true. */
+  readonly simulateBeforeExit?: boolean;
 }
 
 export class AdapterService extends Context.Service<AdapterService, AdapterApi>()(
@@ -1001,6 +1078,11 @@ export interface DbApi {
   readonly getSnapshotPools: () => Effect.Effect<ReadonlyArray<string>, Error>;
   readonly getSnapshotCount: (poolAddress: string) => Effect.Effect<number, Error>;
   readonly pruneSnapshots: (olderThanMs: number) => Effect.Effect<number, Error>;
+  readonly getRotationObservations: () => Effect.Effect<
+    ReadonlyArray<{ readonly pairKey: string; readonly obsCount: number; readonly updatedAt: number }>,
+    Error
+  >;
+  readonly saveRotationObservation: (pairKey: string, obsCount: number) => Effect.Effect<void, Error>;
   readonly saveFeedback: (entry: {
     id: string;
     agentId: string;

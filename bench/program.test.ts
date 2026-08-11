@@ -253,6 +253,8 @@ describe("executeLive", () => {
       listSettlementJobs: () => Effect.succeed([]),
       saveSafetyPause: () => Effect.void,
       getSafetyPause: () => Effect.succeed(null),
+      getRotationObservations: () => Effect.succeed([]),
+      saveRotationObservation: () => Effect.void,
     };
   }
 

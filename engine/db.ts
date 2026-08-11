@@ -989,6 +989,25 @@ const MIGRATIONS: ReadonlyArray<Migration> = [
       }
     },
   },
+  {
+    version: 24,
+    name: "rotation_state_confirmations",
+    up(db) {
+      // Fee-Truth two-seat rotation (rules 7+9): consecutive-observation
+      // confirmations per challenger->incumbent pair. A rotation fires only
+      // after the challenger is observed superior for
+      // ROTATION_CONFIRM_OBSERVATIONS consecutive cycles; the count survives
+      // restarts (a fresh Map reset every boot would re-arm rotation on a
+      // single good cycle). Pair key = `${exitPool}|${enterPool}`.
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS rotation_state (
+          pair_key TEXT PRIMARY KEY,
+          obs_count INTEGER NOT NULL CHECK (obs_count >= 0),
+          updated_at INTEGER NOT NULL
+        );
+      `);
+    },
+  },
 ];
 
 function runMigrations(db: Database) {

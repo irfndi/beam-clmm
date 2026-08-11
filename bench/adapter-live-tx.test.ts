@@ -599,10 +599,13 @@ describe("pure helpers", () => {
 
   it("tokenIdFromMintReceipt reads the tokenId from the zero-address Transfer", () => {
     const transferTopic = keccak256(toHex("Transfer(address,address,uint256)")).toLowerCase();
+    // Real ERC-721 Transfer topics are 32-byte WORDS (0x + 64 hex), not the
+    // 20-byte address form — the `from` topic of a mint is the zero WORD.
+    const zeroWord = `0x${"0".repeat(64)}`;
     const receipt = {
       logs: [
-        { topics: [transferTopic as `0x${string}`, ZERO, WALLET.toLowerCase() as `0x${string}`, "0x2a" as `0x${string}`] },
-        { topics: [transferTopic as `0x${string}`, WALLET.toLowerCase() as `0x${string}`, ZERO, "0x2b" as `0x${string}`] },
+        { topics: [transferTopic as `0x${string}`, zeroWord, `0x${WALLET.slice(2).padStart(64, "0")}`, "0x2a" as `0x${string}`] },
+        { topics: [transferTopic as `0x${string}`, `0x${WALLET.slice(2).padStart(64, "0")}`, zeroWord, "0x2b" as `0x${string}`] },
       ],
     } as unknown as Parameters<typeof tokenIdFromMintReceipt>[0];
     expect(tokenIdFromMintReceipt(receipt)).toBe(42n);

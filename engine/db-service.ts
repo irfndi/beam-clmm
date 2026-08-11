@@ -688,6 +688,31 @@ export const DbLive = (dbPath?: string) =>
             return row?.n ?? 0;
           }),
 
+        getRotationObservations: () =>
+          Effect.sync(() => {
+            const rows = db
+              .query(
+                "SELECT pair_key as pairKey, obs_count as obsCount, updated_at as updatedAt FROM rotation_state",
+              )
+              .all() as ReadonlyArray<{
+              pairKey: string;
+              obsCount: number;
+              updatedAt: number;
+            }>;
+            return rows;
+          }),
+
+        saveRotationObservation: (pairKey, obsCount) =>
+          Effect.sync(() => {
+            runOne(
+              db,
+              `INSERT OR REPLACE INTO rotation_state (pair_key, obs_count, updated_at) VALUES (?, ?, ?)`,
+              pairKey,
+              obsCount,
+              Date.now(),
+            );
+          }),
+
         saveFeedback: (entry) =>
           Effect.sync(() => {
             runOne(

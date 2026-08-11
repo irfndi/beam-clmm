@@ -174,20 +174,23 @@ describe("resolveRangeHalfWidth (Wave 9)", () => {
 
 describe("recommendBinRange half-width override (Wave 9)", () => {
   it("keeps the tiered default when no override is passed", () => {
+    // Ranges are tick-spacing-aligned (usable ticks — the SDK Position ctor
+    // rejects unaligned bounds) and min-one-spacing wide; the expectations
+    // below are the aligned forms of the ±halfWidth baseline.
     expect(DLMMStrategy.recommendBinRange(5000, 10)).toEqual({
-      lowerBinId: 4975,
-      upperBinId: 5025,
+      lowerBinId: 4980,
+      upperBinId: 5030,
     });
     expect(DLMMStrategy.recommendBinRange(5000, 50)).toEqual({
-      lowerBinId: 4985,
-      upperBinId: 5015,
+      lowerBinId: 5000,
+      upperBinId: 5050,
     });
   });
 
   it("centers the range at ±override when one is passed", () => {
     expect(DLMMStrategy.recommendBinRange(5000, 10, 33)).toEqual({
-      lowerBinId: 4967,
-      upperBinId: 5033,
+      lowerBinId: 4970,
+      upperBinId: 5030,
     });
   });
 });
