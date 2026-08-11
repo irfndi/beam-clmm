@@ -1740,12 +1740,11 @@ export const AdapterLive = Layer.effect(AdapterService,
           deadline,
         });
       }
-      return buildV3ExactInputSingleCalldata({
+      return buildV3ExactInputSingleCalldataV2({
         tokenIn: isNative(tokenIn) ? WETH9 : getAddress(tokenIn),
         tokenOut: isNative(tokenOut) ? WETH9 : getAddress(tokenOut),
         fee: route.fee,
         recipient: requireWallet(),
-        deadline,
         amountIn,
         amountOutMinimum,
       });
@@ -3282,13 +3281,11 @@ export const AdapterLive = Layer.effect(AdapterService,
               return;
             }
             const amountOutMinimum = (outAmountAtomic * 9900n) / 10000n; // 1% slippage
-            const deadline = Math.floor(Date.now() / 1000) + 300;
-            const swapData = buildV3ExactInputSingleCalldata({
+            const swapData = buildV3ExactInputSingleCalldataV2({
               tokenIn: STABLECOIN_MINT,
               tokenOut: WETH9,
               fee: route.fee,
               recipient: V3_SWAP_ROUTER_02,
-              deadline,
               amountIn,
               amountOutMinimum,
             });
@@ -3383,24 +3380,44 @@ export const AdapterLive = Layer.effect(AdapterService,
             const owner = requireWallet();
             const raw = quote.rawQuote;
             const deadline = Math.floor(Date.now() / 1000) + 300;
-            const calldata =
-              raw.router === "universalrouter"
-                ? buildUniversalRouterV4SwapCalldata({
-                    poolKey: raw.poolKey as V4PoolKey,
-                    zeroForOne: raw.zeroForOne as boolean,
-                    amountIn: quote.request.amountAtomic,
-                    amountOutMinimum: quote.minimumOutAmountAtomic,
-                    deadline,
-                  })
-                : buildV3ExactInputSingleCalldata({
-                    tokenIn: routerInputAddress(quote.request.inputMint, "swaprouter02"),
-                    tokenOut: routerInputAddress(quote.request.outputMint, "swaprouter02"),
-                    fee: raw.fee as number,
-                    recipient: owner,
-                    deadline,
-                    amountIn: quote.request.amountAtomic,
-                    amountOutMinimum: quote.minimumOutAmountAtomic,
-                  });
+            let calldata: Hex;
+            if (raw.router === "universalrouter") {
+              calldata = buildUniversalRouterV4SwapCalldata({
+                poolKey: raw.poolKey as V4PoolKey,
+                zeroForOne: raw.zeroForOne as boolean,
+                amountIn: quote.request.amountAtomic,
+                amountOutMinimum: quote.minimumOutAmountAtomic,
+                deadline,
+              });
+            } else if (
+              isNative(quote.request.outputMint)
+            ) {
+              // v3 swap outputs WETH; unwrap to native so the settlement
+              // actually lands ETH (gas-usable), one multicall — the
+              // convertClaimedFees / swapUSDCForNative pattern.
+              const swapData = buildV3ExactInputSingleCalldataV2({
+                tokenIn: routerInputAddress(quote.request.inputMint, "swaprouter02"),
+                tokenOut: WETH9,
+                fee: raw.fee as number,
+                recipient: V3_SWAP_ROUTER_02,
+                amountIn: quote.request.amountAtomic,
+                amountOutMinimum: quote.minimumOutAmountAtomic,
+              });
+              const unwrapData = buildUnwrapWETH9Calldata(
+                quote.minimumOutAmountAtomic,
+                owner,
+              );
+              calldata = buildSwapRouterMulticallCalldata([swapData, unwrapData]);
+            } else {
+              calldata = buildV3ExactInputSingleCalldataV2({
+                tokenIn: routerInputAddress(quote.request.inputMint, "swaprouter02"),
+                tokenOut: routerInputAddress(quote.request.outputMint, "swaprouter02"),
+                fee: raw.fee as number,
+                recipient: owner,
+                amountIn: quote.request.amountAtomic,
+                amountOutMinimum: quote.minimumOutAmountAtomic,
+              });
+            }
             return {
               quote,
               transactionBase64: Buffer.from(calldata.slice(2), "hex").toString("base64"),

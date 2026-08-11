@@ -5,8 +5,11 @@ import {
   buildUniversalRouterV4SwapCalldata,
   buildV3CollectCalldata,
   buildV3ExactInputSingleCalldata,
+  buildV3ExactInputSingleCalldataV2,
   buildV3ExitCalldata,
   buildV3MintCalldata,
+  buildUnwrapWETH9Calldata,
+  buildSwapRouterMulticallCalldata,
   buildV4CollectCalldata,
   buildV4ExitCalldata,
   buildV4MintCalldata,
@@ -487,6 +490,54 @@ describe("swap calldata builders", () => {
     expect(amountIn).toBe(500_000_000n);
     expect(amountOutMinimum).toBe(199_000_000_000_000_000n);
     expect(sqrtLimit).toBe(0n); // no price limit
+  });
+
+  it("buildV3ExactInputSingleCalldataV2 encodes the 7-field params tuple (no deadline)", () => {
+    // The live 4663 SwapRouter02 carries selector 0x04e45aaf (7-field), NOT
+    // the legacy 8-field 0x414bf389. Regression: the v3 swap paths must use
+    // the V2 encoding or the calldata reverts on-chain.
+    const calldata = buildV3ExactInputSingleCalldataV2({
+      tokenIn: USDG,
+      tokenOut: WETH,
+      fee: FEE,
+      recipient: WALLET,
+      amountIn: 500_000_000n,
+      amountOutMinimum: 199_000_000_000_000_000n,
+    });
+    expect(calldata.slice(2, 10)).toBe("04e45aaf");
+    const { args } = decodeFunctionData({
+      abi: parseAbi([
+        "function exactInputSingle((address,address,uint24,address,uint256,uint256,uint160))",
+      ]),
+      data: calldata,
+    });
+    const [tokenIn, tokenOut, fee, recipient, amountIn, amountOutMinimum, sqrtLimit] =
+      args[0] as [string, string, number, string, bigint, bigint, bigint];
+    expect(tokenIn.toLowerCase()).toBe(USDG.toLowerCase());
+    expect(tokenOut.toLowerCase()).toBe(WETH.toLowerCase());
+    expect(fee).toBe(FEE);
+    expect(recipient.toLowerCase()).toBe(WALLET.toLowerCase());
+    expect(amountIn).toBe(500_000_000n);
+    expect(amountOutMinimum).toBe(199_000_000_000_000_000n);
+    expect(sqrtLimit).toBe(0n);
+  });
+
+  it("swap-to-native v3 path wraps in multicall(swapV2 + unwrapWETH9)", () => {
+    // Settlement converts a token leg → native ETH. The v3 route outputs
+    // WETH; the calldata must unwrap it so the wallet lands gas-usable ETH.
+    const swapData = buildV3ExactInputSingleCalldataV2({
+      tokenIn: USDG,
+      tokenOut: WETH,
+      fee: FEE,
+      recipient: WALLET,
+      amountIn: 500_000_000n,
+      amountOutMinimum: 199_000_000_000_000_000n,
+    });
+    const unwrapData = buildUnwrapWETH9Calldata(199_000_000_000_000_000n, WALLET);
+    const calldata = buildSwapRouterMulticallCalldata([swapData, unwrapData]);
+    const { args } = decodeFunctionData({ abi: multicallAbi, data: calldata });
+    const inner = (args[0] as readonly `0x${string}`[])[0]!;
+    expect(inner.slice(2, 10)).toBe("04e45aaf"); // 7-field v2 selector inside
   });
 
   it("buildUniversalRouterV4SwapCalldata encodes the V4_SWAP (0x10) command", () => {
