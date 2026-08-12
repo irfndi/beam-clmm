@@ -79,6 +79,60 @@ export function computeHodlValueUsd(
   return entryAmountXUsd * (currentPriceUsd / entryPriceUsd) + entryAmountYUsd;
 }
 
+/**
+ * CLMM LP value at a target price, per the exact Uniswap v3/v4 amount math
+ * (square-root price bounds). This is the value the LP would mark at `price`
+ * given a liquidity `L` and a range [Pa, Pb]. It is NOT the full-range
+ * `2√r/(1+r)` closed form — that only holds for a full-range position. For a
+ * bounded CLMM range the LP is fully one-sided outside the range (x=0 above
+ * Pb, y=0 below Pa), so IL keeps growing after the price exits the range
+ * while the HODL benchmark keeps appreciating. `L` is anchored so the LP value
+ * at the entry price equals the deposited cost basis (continuity at entry).
+ * All values are in token1 (the numeraire) units; price is token1/token0.
+ * Returns null when inputs are unusable.
+ */
+export function computeClmmValueUsd(input: {
+  readonly depositedUsd: number;
+  readonly entryPriceUsd: number;
+  readonly lowerBinId: number;
+  readonly upperBinId: number;
+  readonly currentPriceUsd: number;
+}): number | null {
+  const { depositedUsd, entryPriceUsd, lowerBinId, upperBinId, currentPriceUsd } = input;
+  if (!(depositedUsd > 0) || !(entryPriceUsd > 0) || !(currentPriceUsd > 0)) return null;
+  if (!(lowerBinId < upperBinId)) return null;
+  // Range boundary prices from ticks (price of token1 in token0 = 1.0001^tick).
+  const Pa = Math.pow(1.0001, lowerBinId);
+  const Pb = Math.pow(1.0001, upperBinId);
+  if (!(Pa > 0 && Pb > Pa)) return null;
+  const sPa = Math.sqrt(Pa);
+  const sPb = Math.sqrt(Pb);
+  const sP0 = Math.sqrt(entryPriceUsd);
+  const sP1 = Math.sqrt(currentPriceUsd);
+
+  // LP value per unit L at price P (token1 units). Below range the position is
+  // all token0: x = L(1/sPa − 1/sPb), value = x·P. Above range all token1:
+  // y = L(sPb − sPa), value = y (constant — HODL keeps growing past Pb).
+  const belowValuePerL = (1 / sPa - 1 / sPb) * currentPriceUsd;
+  const inRangeValuePerL = (1 / sP1 - 1 / sPb) * currentPriceUsd + (sP1 - sPa);
+  const aboveValuePerL = sPb - sPa;
+
+  // Anchor L so the LP value at the entry price equals the deposited cost basis.
+  const valuePerLAtEntry =
+    entryPriceUsd <= Pa
+      ? (1 / sPa - 1 / sPb) * entryPriceUsd
+      : entryPriceUsd >= Pb
+        ? sPb - sPa
+        : (1 / sP0 - 1 / sPb) * entryPriceUsd + (sP0 - sPa);
+  if (!(valuePerLAtEntry > 0)) return null;
+  const L = depositedUsd / valuePerLAtEntry;
+
+  const valuePerL =
+    currentPriceUsd <= Pa ? belowValuePerL : currentPriceUsd >= Pb ? aboveValuePerL : inRangeValuePerL;
+  const value = L * valuePerL;
+  return Number.isFinite(value) && value >= 0 ? value : null;
+}
+
 /** Fees earned annualized against cost basis. Null when age or basis is 0. */
 export function computeFeeAprPct(
   feesClaimedUsd: number,

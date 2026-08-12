@@ -476,9 +476,13 @@ describe("estimatePositionValue", () => {
       currentValueUsd: overrides.depositedUsd ?? 1000,
       tokenXSymbol: "SOL",
       tokenYSymbol: "USDC",
-      activeBinId: 5000,
-      lowerBinId: 4980,
-      upperBinId: 5020,
+      activeBinId: 50109,
+      // Realistic Uniswap tick range for ~±2% around entry price 150
+      // (tick 49907 → 147, tick 50307 → 153). The old synthetic DLMM bins
+      // (4980-5020) mapped to prices ~1.6, which made the position appear
+      // fully out-of-range under the CLMM mark.
+      lowerBinId: 49907,
+      upperBinId: 50307,
       timestamp: Date.now(),
       outOfRangeSince: null,
       oorCycleCount: 0,
@@ -517,13 +521,16 @@ describe("estimatePositionValue", () => {
     };
   }
 
-  it("revalues the entry legs at the current price (HODL mark)", () => {
-    // 500 X-leg at entry price 150; price unchanged → 500 + 500 = 1000.
-    expect(estimatePositionValue(makePos(), makePool(150))).toBe(1000);
-    // Price +10% → X leg 550 + Y leg 500 = 1050.
-    expect(estimatePositionValue(makePos(), makePool(165))).toBe(1050);
-    // Price −10% → X leg 450 + Y leg 500 = 950.
-    expect(estimatePositionValue(makePos(), makePool(135))).toBe(950);
+  it("marks the position at the exact CLMM LP value (range-aware IL)", () => {
+    // Unchanged price → the CLMM mark equals the deposited cost basis.
+    expect(estimatePositionValue(makePos(), makePool(150))).toBeCloseTo(1000, 2);
+    // Price +10% (165) is ABOVE the range (Pb=153): the LP is 100% token1,
+    // so its value plateaus at L·(√Pb−√Pa)=1004.93 while HODL keeps climbing
+    // to 1050 — the IL-dominance gap the strategy must capture.
+    expect(estimatePositionValue(makePos(), makePool(165))).toBeCloseTo(1004.93, 2);
+    // Price −10% (135) is BELOW the range (Pa=147): the LP is 100% token0,
+    // value = L·(1/√Pa−1/√Pb)·P = 904.61 vs HODL 950.
+    expect(estimatePositionValue(makePos(), makePool(135))).toBeCloseTo(904.61, 2);
   });
 
   it("falls back to the cost basis when entry legs are unknown", () => {
@@ -539,12 +546,13 @@ describe("estimatePositionValue", () => {
 
   it("never drops below the cost basis via bin drift (no phantom drawdown)", () => {
     // The old drift heuristic returned 500 here ("value halved") even though
-    // the pool price barely moved; the HODL mark only moves with price.
+    // the pool price barely moved; the CLMM mark moves only with the range
+    // and price, staying near the cost basis for small moves.
     const pos = makePos({ depositedUsd: 41.63, entryAmountXUsd: 20.82, entryAmountYUsd: 20.82 });
-    expect(estimatePositionValue(pos, makePool(149.5))).toBeCloseTo(41.57, 2);
-    // Unchanged price → the HODL mark equals the entry legs (20.82 + 20.82).
-    expect(estimatePositionValue(pos, makePool(150))).toBeCloseTo(41.64, 2);
-    expect(estimatePositionValue(pos, makePool(150.5))).toBeCloseTo(41.71, 2);
+    expect(estimatePositionValue(pos, makePool(149.5))).toBeCloseTo(41.5554, 2);
+    // Unchanged price → the CLMM mark equals the cost basis (41.63).
+    expect(estimatePositionValue(pos, makePool(150))).toBeCloseTo(41.63, 2);
+    expect(estimatePositionValue(pos, makePool(150.5))).toBeCloseTo(41.6929, 2);
   });
 });
 

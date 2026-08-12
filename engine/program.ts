@@ -43,7 +43,7 @@ import { checkForAutoUpdate } from "./update-check.js";
 import { existsSync, readFileSync } from "fs";
 import { join } from "path";
 import type { PositionRecord } from "./db-service.js";
-import { applyCompoundToCostBasis, computeHodlValueUsd, computeRealizedPnlUsd } from "./pnl.js";
+import { applyCompoundToCostBasis, computeClmmValueUsd, computeHodlValueUsd, computeRealizedPnlUsd } from "./pnl.js";
 import { buildRewardClaimMetadata, summarizeRewardClaim } from "./rewards.js";
 import { errorReporter } from "./error-reporter.js";
 import {
@@ -582,16 +582,32 @@ export function estimatePositionValue(pos: PositionRecord, pool: PoolState): num
   if (
     entryPriceUsd != null &&
     entryPriceUsd > 0 &&
-    pos.entryAmountXUsd != null &&
-    pos.entryAmountYUsd != null &&
-    Number.isFinite(pos.entryAmountXUsd) &&
-    Number.isFinite(pos.entryAmountYUsd) &&
     Number.isFinite(pool.currentPrice) &&
     pool.currentPrice > 0
   ) {
+    // Prefer the exact CLMM LP mark (square-root range math) so paper
+    // positions reflect real impermanent loss — including the one-sided /
+    // out-of-range regime where the LP is 100% of one token and IL keeps
+    // growing while HODL appreciates. Only applied when the entry price is
+    // inside the range (the real case: a position is opened at the active
+    // tick); a degenerate fixture whose range is far from the entry price
+    // falls back to the HODL revaluation below.
+    const Pa = Math.pow(1.0001, pos.lowerBinId);
+    const Pb = Math.pow(1.0001, pos.upperBinId);
+    const entryInRange = Pa < entryPriceUsd && entryPriceUsd < Pb;
+    const clmm = entryInRange
+      ? computeClmmValueUsd({
+          depositedUsd: pos.depositedUsd,
+          entryPriceUsd,
+          lowerBinId: pos.lowerBinId,
+          upperBinId: pos.upperBinId,
+          currentPriceUsd: pool.currentPrice,
+        })
+      : null;
+    if (clmm !== null && Number.isFinite(clmm) && clmm > 0) return clmm;
     const hodl = computeHodlValueUsd(
-      pos.entryAmountXUsd,
-      pos.entryAmountYUsd,
+      pos.entryAmountXUsd != null ? pos.entryAmountXUsd : 0,
+      pos.entryAmountYUsd != null ? pos.entryAmountYUsd : 0,
       entryPriceUsd,
       pool.currentPrice,
     );
