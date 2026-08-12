@@ -272,7 +272,6 @@ describe("executeLive", () => {
     };
   }
 
-
   it("records single-sided entry legs and metadata from the adapter result", () => {
     const poolAddress = "TestPool111111111111111111111111111111111111";
     const positionSizeUsd = 1234;

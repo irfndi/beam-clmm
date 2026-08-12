@@ -43,14 +43,15 @@ import { checkForAutoUpdate } from "./update-check.js";
 import { existsSync, readFileSync } from "fs";
 import { join } from "path";
 import type { PositionRecord } from "./db-service.js";
-import { applyCompoundToCostBasis, computeClmmValueUsd, computeHodlValueUsd, computeRealizedPnlUsd } from "./pnl.js";
+import {
+  applyCompoundToCostBasis,
+  computeClmmValueUsd,
+  computeHodlValueUsd,
+  computeRealizedPnlUsd,
+} from "./pnl.js";
 import { buildRewardClaimMetadata, summarizeRewardClaim } from "./rewards.js";
 import { errorReporter } from "./error-reporter.js";
-import {
-  BlacklistError,
-  DiscoverPoolsError,
-  underlyingErrorMessage,
-} from "./errors.js";
+import { BlacklistError, DiscoverPoolsError, underlyingErrorMessage } from "./errors.js";
 import {
   GAS_TOP_UP_STABLECOIN,
   NATIVE_GAS_TOP_UP_THRESHOLD_WEI,
@@ -104,7 +105,8 @@ import { evaluateFallenAngelDiscovery } from "./fallen-angel-discovery.js";
 import { identifyAssetMint } from "./fallen-angel-service.js";
 import { buildTpLadder, evaluateTpLadder, parseTpLadder, serializeTpLadder } from "./tp-ladder.js";
 import { getGeckoPoolOhlcv, type GeckoOhlcvSignals } from "./gecko-ohlcv-service.js";
-import { challengePoolScore,
+import {
+  challengePoolScore,
   challengeRangeFromVolatility,
   challengeRotationSignal,
   avgFeeYieldPct,
@@ -352,9 +354,7 @@ export function dailyFeeSeriesUsd(
     const day = Math.floor(s.timestamp / 86_400_000);
     byDay.set(day, s.fees24hUsd);
   }
-  return [...byDay.entries()]
-    .sort((a, b) => a[0] - b[0])
-    .map(([, fees]) => fees);
+  return [...byDay.entries()].sort((a, b) => a[0] - b[0]).map(([, fees]) => fees);
 }
 
 export function isProposalStale(proposal: AgentProposal, staleMs: number, now: number): boolean {
@@ -849,11 +849,19 @@ export function reconcilePositions(
 ): Effect.Effect<PositionReconcileResult> {
   return Effect.gen(function* () {
     if (!adapter.hasWallet()) {
-      return { succeeded: true, unresolvedPoolAddresses: new Set<string>(), adoptedPoolAddresses: [] };
+      return {
+        succeeded: true,
+        unresolvedPoolAddresses: new Set<string>(),
+        adoptedPoolAddresses: [],
+      };
     }
     const walletAddress = adapter.getWalletAddress();
     if (!walletAddress) {
-      return { succeeded: true, unresolvedPoolAddresses: new Set<string>(), adoptedPoolAddresses: [] };
+      return {
+        succeeded: true,
+        unresolvedPoolAddresses: new Set<string>(),
+        adoptedPoolAddresses: [],
+      };
     }
 
     const onChainPositions = yield* adapter.getAllWalletPositions(walletAddress).pipe(
@@ -953,11 +961,17 @@ export function reconcilePositions(
       // outside the scan set (safety audit: an unwatched orphan position has
       // no exit gates, no fee claims, no stop-loss = unmanaged capital at
       // full market risk). Add the pool to the scan set so it gets managed.
-      if (!watchedPoolSet.has(onChainPos.poolAddress) && !adoptedPoolAddresses.has(onChainPos.poolAddress)) {
+      if (
+        !watchedPoolSet.has(onChainPos.poolAddress) &&
+        !adoptedPoolAddresses.has(onChainPos.poolAddress)
+      ) {
         adoptedPoolAddresses.add(onChainPos.poolAddress);
-        logger.warn("Reconcile: adopting orphan position on unwatched pool — adding pool to scan set", {
-          pool: onChainPos.poolAddress,
-        });
+        logger.warn(
+          "Reconcile: adopting orphan position on unwatched pool — adding pool to scan set",
+          {
+            pool: onChainPos.poolAddress,
+          },
+        );
       }
       {
         console.warn(
@@ -1016,7 +1030,11 @@ export function reconcilePositions(
       }
     }
 
-    return { succeeded: true, unresolvedPoolAddresses, adoptedPoolAddresses: [...adoptedPoolAddresses] };
+    return {
+      succeeded: true,
+      unresolvedPoolAddresses,
+      adoptedPoolAddresses: [...adoptedPoolAddresses],
+    };
   });
 }
 
@@ -1079,7 +1097,6 @@ export function buildLayer(cfg?: AppConfig): Layer.Layer<AllServices, never, nev
 
   const revenueConfigDeps = Layer.merge(dbLayer, configLayer);
   const revenueConfig = Layer.provide(RevenueConfigServiceLive, revenueConfigDeps);
-
 
   const merged = Layer.merge(adapter, StrategyLive);
   const merged2 = Layer.merge(merged, dbLayer);
@@ -1322,8 +1339,14 @@ const paperSwapDryRun = (
     }
     // Pick a non-native leg to swap → native ETH (exercises the unwrap multicall).
     const isNativeLike = (m: string) =>
-      m === NATIVE_MINT || m.toLowerCase() === WETH9.toLowerCase() || m.toLowerCase() === STABLECOIN_MINT.toLowerCase();
-    const leg = !isNativeLike(pool.tokenX) ? pool.tokenX : !isNativeLike(pool.tokenY) ? pool.tokenY : pool.tokenX;
+      m === NATIVE_MINT ||
+      m.toLowerCase() === WETH9.toLowerCase() ||
+      m.toLowerCase() === STABLECOIN_MINT.toLowerCase();
+    const leg = !isNativeLike(pool.tokenX)
+      ? pool.tokenX
+      : !isNativeLike(pool.tokenY)
+        ? pool.tokenY
+        : pool.tokenX;
     const amountAtomic = usdToAtomic(Math.max(decision.positionSizeUsd, 1), 1, 6);
     if (amountAtomic <= 0n) {
       console.info("[PAPER][swap-dry-run] leg unpriceable at dry-run size — skipping");
@@ -1355,7 +1378,9 @@ const paperSwapDryRun = (
       ),
     );
     if (result._tag !== "Success") {
-      console.info(`[PAPER][swap-dry-run] ${leg.slice(0, 8)} → ETH dry-run failed: ${String(result.failure)}`);
+      console.info(
+        `[PAPER][swap-dry-run] ${leg.slice(0, 8)} → ETH dry-run failed: ${String(result.failure)}`,
+      );
       return;
     }
     const d = result.success;
@@ -1831,9 +1856,7 @@ export function executeLive(
             const livePositions = yield* adapter
               .getAllWalletPositions(walletAddress)
               .pipe(Effect.catch(() => Effect.succeed([])));
-            const stillOpen = livePositions.some(
-              (p) => p.positionPubKey === pos.positionPubKey,
-            );
+            const stillOpen = livePositions.some((p) => p.positionPubKey === pos.positionPubKey);
             if (!stillOpen) {
               exited = true;
               exitResultData = {
@@ -2705,7 +2728,13 @@ export const program = Effect.gen(function* () {
   // fees/TVL/APR, not just book membership).
   const harvestBookStats = new Map<
     string,
-    { readonly tvlUsd: number; readonly fees24hUsd: number; readonly apr: number; readonly drawdown24h: number | null; readonly priceVolatility: number | null }
+    {
+      readonly tvlUsd: number;
+      readonly fees24hUsd: number;
+      readonly apr: number;
+      readonly drawdown24h: number | null;
+      readonly priceVolatility: number | null;
+    }
   >();
   // Fee-Truth rotation confirmations (rule 7/9): consecutive-observation
   // counts per exit|enter pair, persisted to rotation_state so a restart
@@ -2754,13 +2783,21 @@ export const program = Effect.gen(function* () {
         .map(([address, stats]) => {
           const score = challengePoolScore({
             address,
-            tokenX: "", tokenY: "",
-            tokenXSymbol: stats.token0Symbol, tokenYSymbol: stats.token1Symbol,
-            tvlUsd: stats.tvlUsd, volume24hUsd: stats.volume24hUsd,
-            fees24hUsd: stats.feeUsd24h, apr: stats.apr,
-            activeBinId: 0, binStep: 0, currentPrice: 0, timestamp: Date.now(),
+            tokenX: "",
+            tokenY: "",
+            tokenXSymbol: stats.token0Symbol,
+            tokenYSymbol: stats.token1Symbol,
+            tvlUsd: stats.tvlUsd,
+            volume24hUsd: stats.volume24hUsd,
+            fees24hUsd: stats.feeUsd24h,
+            apr: stats.apr,
+            activeBinId: 0,
+            binStep: 0,
+            currentPrice: 0,
+            timestamp: Date.now(),
             statsSource: "krystal",
-            drawdown24h: stats.drawdown24h, priceVolatility: stats.priceVolatility,
+            drawdown24h: stats.drawdown24h,
+            priceVolatility: stats.priceVolatility,
           });
           return { address, score: score.score, tier: score.tier };
         })
@@ -2789,7 +2826,9 @@ export const program = Effect.gen(function* () {
       tokenRiskCache.clear();
       logger.info("Harvest book refreshed", {
         size: harvestBookPools.size,
-        top: ranked.slice(0, 3).map((r) => ({ pool: r.address.slice(0, 10), score: r.score.toFixed(1) })),
+        top: ranked
+          .slice(0, 3)
+          .map((r) => ({ pool: r.address.slice(0, 10), score: r.score.toFixed(1) })),
       });
     });
 
@@ -3411,7 +3450,11 @@ export const program = Effect.gen(function* () {
         // The pass never pushes past the hard open-position cap; the same count
         // is re-checked against fresh state by allocation below and by risk
         // gate 6 at execution.
-        const ownBook = ownBookPositionCounts(trackedPositions, candidate.poolAddress, config.paperTrading);
+        const ownBook = ownBookPositionCounts(
+          trackedPositions,
+          candidate.poolAddress,
+          config.paperTrading,
+        );
         if (ownBook.open >= config.maxOpenPositions) {
           yield* recordRedeploySkip(
             `[idle-redeploy] skipped — max open positions reached (${ownBook.open}/${config.maxOpenPositions})`,
@@ -4383,9 +4426,9 @@ export const program = Effect.gen(function* () {
       // persist it — a rug sequence must not re-deploy the wallet into more
       // losses below the floor. Loaded at boot from the DB; updated here.
       if (config.challengeMode === true && challengePeakEquityUsd <= 0) {
-        const persistedPeak = yield* db.getMetadata("challenge_peak_equity_usd").pipe(
-          Effect.catch(() => Effect.succeed(null)),
-        );
+        const persistedPeak = yield* db
+          .getMetadata("challenge_peak_equity_usd")
+          .pipe(Effect.catch(() => Effect.succeed(null)));
         const parsed = persistedPeak !== null ? Number(persistedPeak) : 0;
         challengePeakEquityUsd = Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
         // Paper-era pollution guard: the peak tracker also ran during PAPER
@@ -4401,10 +4444,13 @@ export const program = Effect.gen(function* () {
           lastWalletBalanceUsd > 0 &&
           challengePeakEquityUsd > lastWalletBalanceUsd * 5
         ) {
-          logger.warn("Resetting challenge peak equity — paper-era peak is inconsistent with the live wallet", {
-            storedPeak: challengePeakEquityUsd,
-            walletEquity: lastWalletBalanceUsd,
-          });
+          logger.warn(
+            "Resetting challenge peak equity — paper-era peak is inconsistent with the live wallet",
+            {
+              storedPeak: challengePeakEquityUsd,
+              walletEquity: lastWalletBalanceUsd,
+            },
+          );
           challengePeakEquityUsd = lastWalletBalanceUsd;
           yield* db
             .setMetadata("challenge_peak_equity_usd", String(Math.round(lastWalletBalanceUsd)))
@@ -4431,9 +4477,9 @@ export const program = Effect.gen(function* () {
       // Persist the map (JSON blob, same metadata store as peak equity) and
       // hydrate at boot.
       if (config.challengeMode === true && challengeLossCooldownUntil.size === 0) {
-        const persistedCooldowns = yield* db.getMetadata("challenge_loss_cooldowns").pipe(
-          Effect.catch(() => Effect.succeed(null)),
-        );
+        const persistedCooldowns = yield* db
+          .getMetadata("challenge_loss_cooldowns")
+          .pipe(Effect.catch(() => Effect.succeed(null)));
         if (persistedCooldowns !== null) {
           try {
             const parsed = JSON.parse(persistedCooldowns) as Record<string, unknown>;
@@ -4453,9 +4499,9 @@ export const program = Effect.gen(function* () {
       // gate reads this map — persisted so restarts don't reset every pool's
       // clock to "now" and silently block all ENTERs for 6h post-reboot.
       if (config.challengeMode === true && poolFirstSeenAt.size === 0) {
-        const persistedFirstSeen = yield* db.getMetadata("challenge_pool_first_seen").pipe(
-          Effect.catch(() => Effect.succeed(null)),
-        );
+        const persistedFirstSeen = yield* db
+          .getMetadata("challenge_pool_first_seen")
+          .pipe(Effect.catch(() => Effect.succeed(null)));
         if (persistedFirstSeen !== null) {
           try {
             const parsed = JSON.parse(persistedFirstSeen) as Record<string, unknown>;
@@ -4475,9 +4521,15 @@ export const program = Effect.gen(function* () {
       // counts per exit|enter pair, loaded once so a restart cannot re-arm
       // rotation on a single good cycle.
       if (config.challengeMode === true && rotationConfirmations.size === 0) {
-        const persisted = yield* db.getRotationObservations().pipe(
-          Effect.catch(() => Effect.succeed([] as ReadonlyArray<{ pairKey: string; obsCount: number; updatedAt: number }>)),
-        );
+        const persisted = yield* db
+          .getRotationObservations()
+          .pipe(
+            Effect.catch(() =>
+              Effect.succeed(
+                [] as ReadonlyArray<{ pairKey: string; obsCount: number; updatedAt: number }>,
+              ),
+            ),
+          );
         for (const row of persisted) {
           if (Number.isInteger(row.obsCount) && row.obsCount >= 0) {
             rotationConfirmations.set(row.pairKey, row.obsCount);
@@ -4763,16 +4815,11 @@ export const program = Effect.gen(function* () {
             })),
             // Wallet equity = cash + position marks (the compounding baseline).
             lastWalletBalanceUsd +
-              Array.from(trackedPositions.values()).reduce(
-                (sum, p) => sum + p.currentValueUsd,
-                0,
-              ),
+              Array.from(trackedPositions.values()).reduce((sum, p) => sum + p.currentValueUsd, 0),
             // Hard-floor peak — the operator surface shows equity vs peak.
             challengePeakEquityUsd > 0 ? challengePeakEquityUsd : undefined,
           ),
-        ).pipe(
-          Effect.asVoid,
-        );
+        ).pipe(Effect.asVoid);
       }
 
       scanCount += 1;
@@ -4960,7 +5007,10 @@ export const program = Effect.gen(function* () {
         // pool-age gate rejects with no audit record, so it looked like
         // "no signal"). Same metadata-store pattern as the loss cooldowns.
         yield* db
-          .setMetadata("challenge_pool_first_seen", JSON.stringify(Object.fromEntries(poolFirstSeenAt)))
+          .setMetadata(
+            "challenge_pool_first_seen",
+            JSON.stringify(Object.fromEntries(poolFirstSeenAt)),
+          )
           .pipe(Effect.catch(() => Effect.void));
       }
       const rawPool = yield* adapter.getPoolState(poolAddress);
@@ -4981,9 +5031,7 @@ export const program = Effect.gen(function* () {
       // signals are never sourced from gecko/krystal: they stay null and the
       // screener fails open on null.
       const krystalStats =
-        config.krystalEnabled !== false
-          ? yield* krystal.getPoolStats(poolAddress)
-          : null;
+        config.krystalEnabled !== false ? yield* krystal.getPoolStats(poolAddress) : null;
       const geckoStats =
         krystalStats === null && config.geckoTerminalEnabled !== false
           ? yield* gecko.getPoolStats(poolAddress, 0.0025 + rawPool.binStep / 10_000)
@@ -5098,7 +5146,6 @@ export const program = Effect.gen(function* () {
           return [];
         });
 
-
       const fetchAuthorities = (mint: string) =>
         adapter.getMintAuthorities(mint).pipe(
           Effect.catch((err) => {
@@ -5179,10 +5226,8 @@ export const program = Effect.gen(function* () {
         }
       }
 
-      const freezeEnabledX =
-        authX?.freezeAuthority != null;
-      const freezeEnabledY =
-        authY?.freezeAuthority != null;
+      const freezeEnabledX = authX?.freezeAuthority != null;
+      const freezeEnabledY = authY?.freezeAuthority != null;
 
       // Per-leg trust exemption: a freeze-enabled leg is exempt when its mint is
       // on the trusted stablecoin allowlist (STABLECOIN_MINTS). The pool is
@@ -5243,19 +5288,11 @@ export const program = Effect.gen(function* () {
           };
 
           const flaggedLegs: Array<{ symbol: string; mint: string; status: LegStatus }> = [];
-          const legXStatus = classifyLeg(
-            untrustedFreezeX,
-            false,
-            pool.tokenX,
-          );
+          const legXStatus = classifyLeg(untrustedFreezeX, false, pool.tokenX);
           if (legXStatus !== null) {
             flaggedLegs.push({ symbol: pool.tokenXSymbol, mint: pool.tokenX, status: legXStatus });
           }
-          const legYStatus = classifyLeg(
-            untrustedFreezeY,
-            false,
-            pool.tokenY,
-          );
+          const legYStatus = classifyLeg(untrustedFreezeY, false, pool.tokenY);
           if (legYStatus !== null) {
             flaggedLegs.push({ symbol: pool.tokenYSymbol, mint: pool.tokenY, status: legYStatus });
           }
@@ -5518,10 +5555,7 @@ export const program = Effect.gen(function* () {
       // pct floor to binStep-aligned ticks (round up so the guarantee holds).
       {
         const halfWidthPct = 1.0001 ** (rangeHalfWidth * pool.binStep) - 1;
-        const flooredHalfWidthPct = applyMinRangePct(
-          halfWidthPct,
-          config.entryMinRangePct ?? 0.2,
-        );
+        const flooredHalfWidthPct = applyMinRangePct(halfWidthPct, config.entryMinRangePct ?? 0.2);
         if (flooredHalfWidthPct > halfWidthPct) {
           rangeHalfWidth = Math.max(
             rangeHalfWidth,
@@ -5535,7 +5569,11 @@ export const program = Effect.gen(function* () {
       // crashing pool must exit in THIS cycle, not wait for the trailing stop.
       const challengeRotation =
         config.challengeMode === true && pool.statsSource === "krystal"
-          ? challengeRotationSignal(pool, avgFeeYieldPct(previousSnapshots), config.challengeDrawdownExitPct ?? 5)
+          ? challengeRotationSignal(
+              pool,
+              avgFeeYieldPct(previousSnapshots),
+              config.challengeDrawdownExitPct ?? 5,
+            )
           : null;
 
       // Value estimation per position (feeds the trailing stop and the
@@ -6195,8 +6233,7 @@ export const program = Effect.gen(function* () {
             // user's own capital into new ranges (churn — the operator
             // reported ~1,600 gas-burning txs with zero deployed book).
             // Safety EXITs still fire; only REBALANCE is blocked.
-            const isAdoptedExternal =
-              pos.positionPubKey != null && pos.depositedUsd <= 0;
+            const isAdoptedExternal = pos.positionPubKey != null && pos.depositedUsd <= 0;
             console.info(
               `[rebalance-sim] ${poolAddress} source=${sim.source} fees=$${sim.estimatedFeesUsd.toFixed(2)} cost=$${sim.estimatedCostUsd.toFixed(2)} net=$${sim.netBenefitUsd.toFixed(2)}`,
             );
@@ -6324,7 +6361,12 @@ export const program = Effect.gen(function* () {
         // lead — across ROTATION_CONFIRM_OBSERVATIONS consecutive cycles.
         // Safety exits above already fired (decision set) → rotation is
         // skipped; the incumbent's own capital-protection gates win.
-        if (!decision && config.challengeMode === true && harvestBookStats.size > 0 && pool.tvlUsd > 0) {
+        if (
+          !decision &&
+          config.challengeMode === true &&
+          harvestBookStats.size > 0 &&
+          pool.tvlUsd > 0
+        ) {
           const incumbentShare =
             pool.tvlUsd > 0 && pos.currentValueUsd > 0
               ? Math.min(pos.currentValueUsd / pool.tvlUsd, 1)
@@ -6385,7 +6427,10 @@ export const program = Effect.gen(function* () {
               c.costsPerDayUsd,
             );
             const margin = cNet - incumbentNet;
-            if (margin > bestMargin || (margin === bestMargin && c.apr > (bestChallenger?.apr ?? 0))) {
+            if (
+              margin > bestMargin ||
+              (margin === bestMargin && c.apr > (bestChallenger?.apr ?? 0))
+            ) {
               bestChallenger = c;
               bestMargin = margin;
             }
@@ -6666,8 +6711,16 @@ export const program = Effect.gen(function* () {
               poolAddress,
               maxPositionsPerPool: config.maxPositionsPerPool,
               poolTvlUsd: pool.tvlUsd,
-              countedOpenPositions: ownBookPositionCounts(trackedPositions, poolAddress, config.paperTrading).open,
-              countedPoolPositions: ownBookPositionCounts(trackedPositions, poolAddress, config.paperTrading).pool,
+              countedOpenPositions: ownBookPositionCounts(
+                trackedPositions,
+                poolAddress,
+                config.paperTrading,
+              ).open,
+              countedPoolPositions: ownBookPositionCounts(
+                trackedPositions,
+                poolAddress,
+                config.paperTrading,
+              ).pool,
               ...(config.challengePoolShareCapPct !== undefined
                 ? { challengePoolShareCapPct: config.challengePoolShareCapPct }
                 : {}),
@@ -6892,8 +6945,16 @@ export const program = Effect.gen(function* () {
                 poolAddress,
                 maxPositionsPerPool: config.maxPositionsPerPool,
                 poolTvlUsd: pool.tvlUsd,
-                countedOpenPositions: ownBookPositionCounts(trackedPositions, poolAddress, config.paperTrading).open,
-                countedPoolPositions: ownBookPositionCounts(trackedPositions, poolAddress, config.paperTrading).pool,
+                countedOpenPositions: ownBookPositionCounts(
+                  trackedPositions,
+                  poolAddress,
+                  config.paperTrading,
+                ).open,
+                countedPoolPositions: ownBookPositionCounts(
+                  trackedPositions,
+                  poolAddress,
+                  config.paperTrading,
+                ).pool,
                 ...(config.challengePoolShareCapPct !== undefined
                   ? { challengePoolShareCapPct: config.challengePoolShareCapPct }
                   : {}),
@@ -8080,10 +8141,7 @@ export const program = Effect.gen(function* () {
               ([, until]) => until > now,
             );
             yield* db
-              .setMetadata(
-                "challenge_loss_cooldowns",
-                JSON.stringify(Object.fromEntries(pruned)),
-              )
+              .setMetadata("challenge_loss_cooldowns", JSON.stringify(Object.fromEntries(pruned)))
               .pipe(Effect.catch(() => Effect.void));
           }
           yield* alertSvc.sendAlert({
@@ -8264,7 +8322,9 @@ export const program = Effect.gen(function* () {
               maxGasPct: config.harvestMaxGasPct ?? 0.15,
             });
             if (!harvestDecision.harvest) {
-              console.info(`[harvest-gate] Skipping claim on ${poolAddress}: ${harvestDecision.reason}`);
+              console.info(
+                `[harvest-gate] Skipping claim on ${poolAddress}: ${harvestDecision.reason}`,
+              );
               continue;
             }
           }
@@ -8558,9 +8618,7 @@ export const program = Effect.gen(function* () {
     // rotation on a single good cycle after every reboot.
     if (rotationConfirmationsDirty) {
       for (const [pairKey, obsCount] of rotationConfirmations) {
-        yield* db
-          .saveRotationObservation(pairKey, obsCount)
-          .pipe(Effect.catch(() => Effect.void));
+        yield* db.saveRotationObservation(pairKey, obsCount).pipe(Effect.catch(() => Effect.void));
       }
       rotationConfirmationsDirty = false;
     }
