@@ -272,8 +272,10 @@ export async function runAsync<T, E>(effect: Effect.Effect<T, E, never>): Promis
 
 // ─── Fetch mock ──────────────────────────────────────────────────────────────
 
+// oxlint-disable-next-line anti-slop/no-unknown-parameters -- shared test harness accepts arbitrary fetch-shaped impls
 export function mockFetch(impl: unknown): () => void {
   const original = globalThis.fetch;
+  // oxlint-disable-next-line anti-slop/no-chained-type-assertions -- casts the caller-supplied impl into fetch shape
   globalThis.fetch = vi.fn(impl as typeof fetch) as unknown as typeof globalThis.fetch;
   return () => {
     globalThis.fetch = original;

@@ -290,6 +290,7 @@ describe("RiskEngine", () => {
         proposal,
         makeContext({
           openPositions: [
+            // oxlint-disable-next-line anti-slop/no-chained-type-assertions -- test-only hard cast of a partial stub/generic expression to a full interface/Effect type; single `as` is impossible without fabricating the full type
             {
               poolAddress: "TestPool111111111111111111111111111111111111",
               depositedUsd: 1_000,

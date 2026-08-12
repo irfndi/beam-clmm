@@ -89,7 +89,7 @@ export function challengeRangeFromVolatility(
   tickSpacing: number,
   priceVolatilityPct: number,
   k = 1.5,
-): { lowerBinId: number; upperBinId: number; halfWidth: number } {
+): ChallengeRange {
   const sigma = Math.max(0, priceVolatilityPct) / 100;
   const priceRange = Math.log(1 + k * sigma) / Math.log(1.0001);
   const half = Math.max(2, Math.round(priceRange));
@@ -116,6 +116,19 @@ export function challengeRangeFromVolatility(
 
 export type ChallengeRotationAction = "hold" | "exit";
 
+/** Computed tick range for a challenge-mode position sized from volatility. */
+interface ChallengeRange {
+  readonly lowerBinId: number;
+  readonly upperBinId: number;
+  readonly halfWidth: number;
+}
+
+/** Rotation decision: gate action plus the reason shown to the operator. */
+interface ChallengeRotationDecision {
+  readonly action: ChallengeRotationAction;
+  readonly reason: string;
+}
+
 /**
  * Rotation signal: drawdown gating (the dominant risk term) + yield decay.
  * - drawdown24h < -exitPct → exit (capital protection; the old 'halve'
@@ -130,7 +143,7 @@ export function challengeRotationSignal(
   pool: PoolState,
   avgYieldPerDayPct: number | null,
   exitPct = 5,
-): { action: ChallengeRotationAction; reason: string } {
+): ChallengeRotationDecision {
   const dd = pool.drawdown24h ?? 0;
   if (dd < -exitPct) return { action: "exit", reason: `drawdown ${dd.toFixed(1)}% < -${exitPct}%` };
   if (avgYieldPerDayPct !== null && avgYieldPerDayPct > 0) {

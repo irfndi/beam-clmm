@@ -311,7 +311,10 @@ function makeProgramLayer(opts: {
     Layer.succeed(McpServerService, { start: () => Effect.void, stop: () => Effect.void }),
     Layer.succeed(HttpStatusServerService, { start: () => Effect.void, stop: () => Effect.void }),
     Layer.succeed(EntryPrepService, { prepareEntryTokens: () => Effect.succeed(undefined) }),
-    Layer.succeed(KrystalService, { getPoolStats: () => Effect.succeed(null), getUniverse: () => Effect.succeed(new Map()) }),
+    Layer.succeed(KrystalService, {
+      getPoolStats: () => Effect.succeed(null),
+      getUniverse: () => Effect.succeed(new Map()),
+    }),
     Layer.succeed(GeckoTerminalService, opts.gecko ?? { getPoolStats: () => Effect.succeed(null) }),
     Layer.succeed(AlertService, {
       sendAlert: () => Effect.void,
@@ -379,6 +382,7 @@ function runOneCycle<E>(
     return { positions, decisions };
   });
   return Effect.runPromise(
+    // oxlint-disable-next-line anti-slop/no-chained-type-assertions -- test-only hard cast of a partial stub/generic expression to a full interface/Effect type; single `as` is impossible without fabricating the full type
     Effect.provide(test, layer) as unknown as Effect.Effect<CycleResult, Error, never>,
   );
 }

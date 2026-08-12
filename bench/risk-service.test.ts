@@ -173,6 +173,7 @@ describe("evaluateAgentProposal", () => {
   });
 
   it("rejects an unknown action", () => {
+    // oxlint-disable-next-line anti-slop/no-chained-type-assertions -- test-only hard cast of a partial stub/generic expression to a full interface/Effect type; single `as` is impossible without fabricating the full type
     const proposal = {
       ...makeProposal({ action: "HOLD", poolAddress: "pool1" }),
       action: "BUY" as const,
@@ -737,6 +738,7 @@ describe("evaluateAgentProposal", () => {
 
 describe("proposal template echo end-to-end", () => {
   const makePromptCtx = (decision: AgentDecision): AgentRuntimeContext =>
+    // oxlint-disable-next-line anti-slop/no-chained-type-assertions -- test-only hard cast of a partial stub/generic expression to a full interface/Effect type; single `as` is impossible without fabricating the full type
     ({
       decision,
       pool: {

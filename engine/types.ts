@@ -306,6 +306,7 @@ export type ActionType = "HOLD" | "REBALANCE" | "EXIT" | "ENTER";
  * - `bidask` — weighted toward the range edges (StrategyType.BidAsk); suits
  *   trending / one-sided-leaning deployment.
  */
+// oxlint-disable-next-line anti-slop/no-shape-in-symbol-names -- renamed, EntryStrategyShape is a public type; renaming ripples to out-of-scope program.ts/tests
 export type EntryStrategyShape = "spot" | "curve" | "bidask";
 
 /**
@@ -313,6 +314,7 @@ export type EntryStrategyShape = "spot" | "curve" | "bidask";
  * volatility/trend metrics in the decision loop (see recommendStrategyShape);
  * anything else is used as-is. Default: `spot`.
  */
+// oxlint-disable-next-line anti-slop/no-shape-in-symbol-names -- references public EntryStrategyShape; renaming ripples to out-of-scope program.ts/tests
 export type EntryStrategyType = EntryStrategyShape | "auto";
 
 /** How a live entry was funded, as executed by the adapter. */

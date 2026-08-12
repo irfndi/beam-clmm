@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { Effect, Layer } from "effect";
 import { DbLive } from "../engine/db-service.js";
+import type { PositionRecord } from "../engine/db-service.js";
 import { DbService } from "../engine/services.js";
 import type { SettlementJobRecord } from "../engine/types.js";
 
@@ -11,35 +12,7 @@ function run<T, R>(effect: Effect.Effect<T, Error, R>, layer: Layer.Layer<R, nev
 function makePosition(
   poolAddress: string,
   paperExitedAt: number | null = null,
-): {
-  positionId: string;
-  poolAddress: string;
-  positionPubKey: string | null;
-  depositedUsd: number;
-  currentValueUsd: number;
-  tokenXSymbol: string;
-  tokenYSymbol: string;
-  activeBinId: number;
-  lowerBinId: number;
-  upperBinId: number;
-  timestamp: number;
-  outOfRangeSince: number | null;
-  oorCycleCount: number;
-  lastFeeClaimAt: number;
-  trailingStopThreshold: number | null;
-  highestValueUsd: number | null;
-  lastRebalanceAt: number;
-  paperExitedAt: number | null;
-  entrySignalTimestamp: number | null;
-  entrySignalSnapshotId: number | null;
-  entryPriceUsd: number | null;
-  entryAmountXUsd: number | null;
-  entryAmountYUsd: number | null;
-  cumulativeFeesClaimedUsd: number;
-  cumulativeRewardsClaimedUsd: number;
-  closedAt: number | null;
-  realizedPnlUsd: number | null;
-} {
+): PositionRecord {
   return {
     positionId: `paper-${poolAddress}`,
     poolAddress,
@@ -319,6 +292,7 @@ describe("DbService — setMetadataBatch (Gemini review)", () => {
         const result = yield* db
           .setMetadataBatch([
             { key: "first", value: "would_persist_if_no_rollback" },
+            // oxlint-disable-next-line anti-slop/no-chained-type-assertions -- deliberately inject a non-string key to trigger the atomicity failure
             { key: Symbol("bad") as unknown as string, value: "triggers_failure" },
             { key: "third", value: "never_reached" },
           ])

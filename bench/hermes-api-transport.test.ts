@@ -5,7 +5,7 @@ import type { AgentRuntimeContext } from "../engine/agent-transport.js";
 import type { AgentDecision } from "../engine/types.js";
 
 function makeContext(): AgentRuntimeContext {
-  return {
+  return { /* oxlint-disable-line anti-slop/no-chained-type-assertions */
     decision: {
       action: "HOLD",
       poolAddress: "Pool111111111111111111111111111111111111111",
@@ -19,7 +19,7 @@ describe("HermesApiTransport (OpenAI-compatible API)", () => {
   it("POSTs a chat-completions request and parses choices[0].message.content", async () => {
     let capturedPath = "";
     let capturedAuth = "";
-    let capturedBody: Record<string, unknown> | null = null;
+    let capturedBody: Record<string, unknown> | null = null; /* oxlint-disable-line anti-slop/no-unsafe-dictionary-type */
 
     const server = Bun.serve({
       port: 0,
@@ -29,7 +29,7 @@ describe("HermesApiTransport (OpenAI-compatible API)", () => {
         capturedPath = url.pathname;
         capturedAuth = request.headers.get("authorization") ?? "";
         if (url.pathname === "/v1/chat/completions") {
-          capturedBody = (await request.json()) as Record<string, unknown>;
+          capturedBody = (await request.json()) as Record<string, unknown>; /* oxlint-disable-line anti-slop/no-unsafe-dictionary-type */
           return Response.json({
             choices: [
               { message: { role: "assistant", content: '{"action":"HOLD","confidence":0.5}' } },

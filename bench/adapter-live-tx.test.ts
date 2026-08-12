@@ -78,11 +78,7 @@ const poolKeyParams = [
   { type: "address" },
 ] as const;
 
-function decodeUnlockData(calldata: `0x${string}`): {
-  actions: `0x${string}`;
-  params: readonly `0x${string}`[];
-  deadline: bigint;
-} {
+function decodeUnlockData(calldata: `0x${string}`) {
   const { args } = decodeFunctionData({ abi: modifyLiquiditiesAbi, data: calldata });
   // args[0] is the bytes VALUE = abi.encode(bytes actions, bytes[] params)
   const [actions, params] = decodeAbiParameters(
@@ -308,7 +304,7 @@ describe("v4 modifyLiquidities builders (WETH/USDG poolKey)", () => {
     expect(actionBytes(actions)).toBe(0x020d); // MINT_POSITION(0x02), SETTLE_PAIR(0x0d)
     expect(deadline).toBe(BigInt(DEADLINE));
 
-    const mint = decodeAbiParameters(
+    const mint = decodeAbiParameters( /* oxlint-disable-line anti-slop/no-chained-type-assertions -- viem ABI decode / partial receipt stub */
       [
         { type: "tuple", components: poolKeyParams },
         { type: "int24" },
@@ -344,7 +340,7 @@ describe("v4 modifyLiquidities builders (WETH/USDG poolKey)", () => {
     expect(built.amount0).toBeGreaterThan(0n);
     expect(built.amount1).toBeGreaterThan(0n);
 
-    const settle = decodeAbiParameters(
+    const settle = decodeAbiParameters( /* oxlint-disable-line anti-slop/no-chained-type-assertions -- viem ABI decode / partial receipt stub */
       [{ type: "address" }, { type: "address" }],
       params[1]!,
     ) as unknown as [string, string];
@@ -370,7 +366,7 @@ describe("v4 modifyLiquidities builders (WETH/USDG poolKey)", () => {
     expect(built.value).toBeGreaterThan(0n);
     const { actions, params } = decodeUnlockData(built.calldata);
     expect(actionBytes(actions)).toBe(0x020d14); // MINT + SETTLE_PAIR + SWEEP
-    const mint = decodeAbiParameters(
+    const mint = decodeAbiParameters( /* oxlint-disable-line anti-slop/no-chained-type-assertions -- viem ABI decode / partial receipt stub */
       [
         { type: "tuple", components: poolKeyParams },
         { type: "int24" },
@@ -392,9 +388,9 @@ describe("v4 modifyLiquidities builders (WETH/USDG poolKey)", () => {
       string,
       string,
     ];
-    const amount0Max = BigInt((mint[4] as unknown as { toString(): string }).toString());
+    const amount0Max = BigInt((mint[4] as unknown as { toString(): string }).toString()); /* oxlint-disable-line anti-slop/no-chained-type-assertions -- viem ABI decode / partial receipt stub */
     expect(built.value).toBe(amount0Max);
-    const sweep = decodeAbiParameters(
+    const sweep = decodeAbiParameters( /* oxlint-disable-line anti-slop/no-chained-type-assertions -- viem ABI decode / partial receipt stub */
       [{ type: "address" }, { type: "address" }],
       params[2]!,
     ) as unknown as [string, string];
@@ -412,7 +408,7 @@ describe("v4 modifyLiquidities builders (WETH/USDG poolKey)", () => {
     const { actions, params, deadline } = decodeUnlockData(calldata);
     expect(actionBytes(actions)).toBe(0x0111); // DECREASE_LIQUIDITY(0x01), TAKE_PAIR(0x11)
     expect(deadline).toBe(BigInt(DEADLINE));
-    const decrease = decodeAbiParameters(
+    const decrease = decodeAbiParameters( /* oxlint-disable-line anti-slop/no-chained-type-assertions -- viem ABI decode / partial receipt stub */
       [
         { type: "uint256" },
         { type: "uint256" },
@@ -424,7 +420,7 @@ describe("v4 modifyLiquidities builders (WETH/USDG poolKey)", () => {
     ) as unknown as [bigint, bigint, bigint, bigint, string];
     expect(decrease[0]).toBe(7n); // tokenId
     expect(decrease[1]).toBe(0n); // liquidity 0 (collect-only)
-    const take = decodeAbiParameters(
+    const take = decodeAbiParameters( /* oxlint-disable-line anti-slop/no-chained-type-assertions -- viem ABI decode / partial receipt stub */
       [{ type: "address" }, { type: "address" }, { type: "address" }],
       params[1]!,
     ) as unknown as [string, string, string];
@@ -446,7 +442,7 @@ describe("v4 modifyLiquidities builders (WETH/USDG poolKey)", () => {
     const { actions, params, deadline } = decodeUnlockData(calldata);
     expect(actionBytes(actions)).toBe(0x0311); // BURN_POSITION(0x03), TAKE_PAIR(0x11)
     expect(deadline).toBe(BigInt(DEADLINE));
-    const burn = decodeAbiParameters(
+    const burn = decodeAbiParameters( /* oxlint-disable-line anti-slop/no-chained-type-assertions -- viem ABI decode / partial receipt stub */
       [
         { type: "uint256" },
         { type: "uint128" },
@@ -557,13 +553,13 @@ describe("swap calldata builders", () => {
     expect(actionBytes(commands)).toBe(0x10); // V4_SWAP
     expect(deadline).toBe(BigInt(DEADLINE));
     // inputs[0] = abi.encode(bytes actions, bytes[] params)
-    const [actions, params] = decodeAbiParameters(
+    const [actions, params] = decodeAbiParameters( /* oxlint-disable-line anti-slop/no-chained-type-assertions -- viem ABI decode / partial receipt stub */
       [{ type: "bytes" }, { type: "bytes[]" }],
       inputs[0]!,
     ) as unknown as [`0x${string}`, readonly `0x${string}`[]];
     expect(actionBytes(actions)).toBe(0x06); // SWAP_EXACT_IN_SINGLE
     // params[0] is abi.encode(ExactInputSingleParams) — ONE struct tuple.
-    const swap = decodeAbiParameters(
+    const swap = decodeAbiParameters( /* oxlint-disable-line anti-slop/no-chained-type-assertions -- viem ABI decode / partial receipt stub */
       [
         {
           type: "tuple",
@@ -653,7 +649,7 @@ describe("pure helpers", () => {
     // Real ERC-721 Transfer topics are 32-byte WORDS (0x + 64 hex), not the
     // 20-byte address form — the `from` topic of a mint is the zero WORD.
     const zeroWord = `0x${"0".repeat(64)}`;
-    const receipt = {
+    const receipt = { /* oxlint-disable-line anti-slop/no-chained-type-assertions -- viem ABI decode / partial receipt stub */
       logs: [
         { topics: [transferTopic as `0x${string}`, zeroWord, `0x${WALLET.slice(2).padStart(64, "0")}`, "0x2a" as `0x${string}`] },
         { topics: [transferTopic as `0x${string}`, `0x${WALLET.slice(2).padStart(64, "0")}`, zeroWord, "0x2b" as `0x${string}`] },
@@ -664,7 +660,7 @@ describe("pure helpers", () => {
 
   it("tokenIdFromMintReceipt returns null when nothing was minted", () => {
     const transferTopic = keccak256(toHex("Transfer(address,address,uint256)")).toLowerCase();
-    const receipt = {
+    const receipt = { /* oxlint-disable-line anti-slop/no-chained-type-assertions -- viem ABI decode / partial receipt stub */
       logs: [
         { topics: [transferTopic as `0x${string}`, WALLET.toLowerCase() as `0x${string}`, ZERO, "0x2b" as `0x${string}`] },
       ],

@@ -354,6 +354,7 @@ export function applyDbConfigOverrides(
   base: AppConfig,
   overrides: ReadonlyMap<string, string>,
 ): AppConfig {
+  // oxlint-disable-next-line anti-slop/no-unsafe-dictionary-type -- dynamic config field writes need an index signature over the typed AppConfig; keys are gated by isKnownConfigField
   let next = base as AppConfig & Record<string, unknown>;
 
   for (const spec of DB_CONFIG_KEYS) {
@@ -383,6 +384,7 @@ export function applyDbConfigOverrides(
     // Narrowed writes: booleans and numbers spread cleanly onto both optional
     // (absent = safe off) and required AppConfig fields. A malformed row is
     // silently dropped above, never clamped into a fake value.
+    // oxlint-disable-next-line anti-slop/no-runtime-typeof -- runtime type narrow on a DB-loaded config value at the config boundary
     if (typeof value === "boolean" || typeof value === "number") {
       next = { ...next, [spec.field]: value };
     }
@@ -404,6 +406,7 @@ export function applyDbConfigOverrides(
       binMinRaw === undefined ? binMinSpec.default : parseDbConfigValue(binMinSpec, binMinRaw);
     const binMax =
       binMaxRaw === undefined ? binMaxSpec.default : parseDbConfigValue(binMaxSpec, binMaxRaw);
+    // oxlint-disable-next-line anti-slop/no-runtime-typeof -- runtime type narrow on a DB-loaded config value at the config boundary
     if (typeof binMin === "number" && typeof binMax === "number" && binMin > binMax) {
       logger.warn("Inverted market-scan bin-step range; raising max to min", {
         marketScanMinBinStep: binMin,

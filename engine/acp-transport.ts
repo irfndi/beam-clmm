@@ -21,6 +21,7 @@ interface AcpRequest {
   readonly jsonrpc: "2.0";
   readonly id: number;
   readonly method: string;
+  // oxlint-disable-next-line anti-slop/no-unsafe-dictionary-type -- ACP is JSON-RPC over stdio; params are arbitrary wire data at the process boundary
   readonly params: Record<string, unknown>;
 }
 
@@ -34,6 +35,7 @@ interface AcpResponse {
 interface AcpNotification {
   readonly jsonrpc?: "2.0";
   readonly method?: string;
+  // oxlint-disable-next-line anti-slop/no-unsafe-dictionary-type -- ACP is JSON-RPC over stdio; params are arbitrary wire data at the process boundary
   readonly params?: Record<string, unknown>;
 }
 
@@ -51,6 +53,7 @@ export class AcpTransport implements AgentRuntimeTransport {
   private pending = new Map<
     number,
     {
+      // oxlint-disable-next-line anti-slop/no-unknown-parameters -- resolve carries arbitrary ACP result payload; consumed via this.pending dispatch
       readonly resolve: (value: unknown) => void;
       readonly reject: (reason: Error) => void;
       readonly timer: ReturnType<typeof setTimeout>;
@@ -282,6 +285,7 @@ export class AcpTransport implements AgentRuntimeTransport {
 
     if (
       "id" in msg &&
+      // oxlint-disable-next-line anti-slop/no-runtime-typeof -- runtime guard on unparsed ACP frame id at the JSON-RPC boundary
       typeof msg.id === "number" &&
       !("method" in msg) &&
       this.pending.has(msg.id)
@@ -333,6 +337,7 @@ export class AcpTransport implements AgentRuntimeTransport {
     });
   }
 
+  // oxlint-disable-next-line anti-slop/no-unknown-parameters -- message is serialized to JSON-RPC over the ACP process stdin
   private write(message: unknown): void {
     try {
       this.process?.stdin?.write(JSON.stringify(message) + "\n");
@@ -343,7 +348,8 @@ export class AcpTransport implements AgentRuntimeTransport {
 
   private request(
     method: string,
-    params: Record<string, unknown>,
+  // oxlint-disable-next-line anti-slop/no-unsafe-dictionary-type -- outbound ACP method params JSON-RPC-encoded over the wire
+  params: Record<string, unknown>,
     timeoutMs?: number,
   ): Effect.Effect<unknown, Error> {
     return Effect.callback((resume) => {

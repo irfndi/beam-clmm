@@ -42,6 +42,24 @@ import { DiscoverPoolsError, underlyingErrorMessage } from "./errors.js";
 
 const logger = createLogger("EVMAdapter");
 
+/** Spacing-aligned tick range (v3/v4 nearestUsableTick bounds). */
+interface TickRange {
+  tickLower: number;
+  tickUpper: number;
+}
+
+/** Calldata + native-currency `value` pair produced by an SDK call builder. */
+interface CalldataResult {
+  calldata: Hex;
+  value: bigint;
+}
+
+/** token0/token1 amounts for a position at a given sqrt price. */
+interface AmountsInRange {
+  amount0: bigint;
+  amount1: bigint;
+}
+
 // ─── Robinhood Chain verified addresses (2026-07; Uniswap deployment docs +
 //     Blockscout cross-check). Do NOT assume other-chain addresses — the
 //     Uniswap docs explicitly warn deployments differ per chain.
@@ -275,7 +293,7 @@ export function tickRangeAround(
   tick: number,
   tickSpacing: number,
   rangeBps = 500,
-): { tickLower: number; tickUpper: number } {
+): TickRange {
   const half = Math.round(Math.log(1 + rangeBps / 10_000) / Math.log(1.0001));
   return {
     tickLower: nearestUsableTick(tick - half, tickSpacing),
@@ -463,10 +481,7 @@ export interface V3CollectCalldataArgs {
 
 /** v3 NPM collect — caps are type(uint128).max, so the full owed balance
  *  (fees + principal after a decrease) is collected to `recipient`. */
-export function buildV3CollectCalldata(args: V3CollectCalldataArgs): {
-  calldata: Hex;
-  value: bigint;
-} {
+export function buildV3CollectCalldata(args: V3CollectCalldataArgs): CalldataResult {
   const { tokenId, token0, token1, token0Decimals, token1Decimals, recipient } = args;
   const { calldata, value } = V3NonfungiblePositionManager.collectCallParameters({
     tokenId: tokenId.toString(),
@@ -497,7 +512,7 @@ export interface V3ExitCalldataArgs {
 }
 
 /** v3 full exit: decreaseLiquidity(100%) + collect + burn in one multicall. */
-export function buildV3ExitCalldata(args: V3ExitCalldataArgs): { calldata: Hex; value: bigint } {
+export function buildV3ExitCalldata(args: V3ExitCalldataArgs): CalldataResult {
   const {
     tokenId,
     token0,
@@ -804,6 +819,7 @@ export function buildV4MintCalldata(args: V4MintCalldataArgs): V4MintCalldataRes
     // NATIVE_NOT_SET invariant, clean + gas-free) — a c1.isNative branch
     // would build a leg-swapped mint with msg.value from the token leg and
     // burn gas on-chain. Reverted from an earlier || fix on that evidence.
+    // oxlint-disable-next-line anti-slop/no-conditional-empty-object-spread -- `useNative` must be absent unless the native token is the base leg (SDK rejects a present-but-undefined native leg); the conditional spread is the minimal way to omit it.
     ...(c0.isNative ? { useNative: Ether.onChain(CHAIN_ID) } : {}),
   });
   return {
@@ -825,10 +841,7 @@ export interface V4CollectCalldataArgs {
 }
 
 /** v4 fee collection — decrease(liquidity=0) + TAKE_PAIR in one unlockData. */
-export function buildV4CollectCalldata(args: V4CollectCalldataArgs): {
-  calldata: Hex;
-  value: bigint;
-} {
+export function buildV4CollectCalldata(args: V4CollectCalldataArgs): CalldataResult {
   const { poolKey, tokenId, recipient, deadline, slippageToleranceBps } = args;
   const c0 = v4Currency(poolKey, 18, true);
   const c1 = v4Currency(poolKey, 18, false);
@@ -873,7 +886,7 @@ export interface V4ExitCalldataArgs {
 }
 
 /** v4 full exit — BURN_POSITION + TAKE_PAIR in one unlockData. */
-export function buildV4ExitCalldata(args: V4ExitCalldataArgs): { calldata: Hex; value: bigint } {
+export function buildV4ExitCalldata(args: V4ExitCalldataArgs): CalldataResult {
   const {
     poolKey,
     tokenId,
@@ -918,7 +931,7 @@ export function buildV4ExitCalldata(args: V4ExitCalldataArgs): { calldata: Hex; 
  * Decode the new-interface PM's packed positionInfo (200b poolId | 24b
  * tickUpper | 24b tickLower | 8b hasSubscriber; ticks are int24 sign-extended).
  */
-export function decodeV4PositionInfo(info: bigint): { tickLower: number; tickUpper: number } {
+export function decodeV4PositionInfo(info: bigint): TickRange {
   return {
     tickLower: Number(BigInt.asIntN(24, (info >> 8n) & ((1n << 24n) - 1n))),
     tickUpper: Number(BigInt.asIntN(24, (info >> 32n) & ((1n << 24n) - 1n))),
@@ -937,7 +950,7 @@ export function positionAmountsAtSqrtPrice(
   tickLower: number,
   tickUpper: number,
   sqrtPriceX96: bigint,
-): { amount0: bigint; amount1: bigint } {
+): AmountsInRange {
   const Q96 = 1n << 96n;
   // v3-sdk's TickMath returns JSBI in this build — normalize to bigint.
   const pa = BigInt(TickMath.getSqrtRatioAtTick(tickLower).toString());
@@ -1103,6 +1116,7 @@ export const AdapterLive = Layer.effect(AdapterService,
       return walletAddress;
     }
 
+    // oxlint-disable-next-line anti-slop/no-unknown-parameters -- `e` arrives from a viem/RPC catch (Error is unknown at the JS boundary); narrowed via `instanceof`/String below.
     function revertMessage(e: unknown): string {
       const msg = e instanceof Error ? e.message : String(e);
       return msg.slice(0, 400);
@@ -1110,8 +1124,10 @@ export const AdapterLive = Layer.effect(AdapterService,
 
     /** Decode a revert reason (Error(string)) from a viem/RPC error; falls back
      *  to the message text. Used by the pre-broadcast withdraw gate. */
+    // oxlint-disable-next-line anti-slop/no-unknown-parameters -- `e` arrives from a viem/RPC catch (unknown at the JS boundary); decoded per-field below.
     function decodeRevertReason(e: unknown): string | null {
       const err = e as { data?: unknown; shortMessage?: string; message?: string } | undefined;
+      // oxlint-disable-next-line anti-slop/no-runtime-typeof -- `err` is an untyped RPC error object; the `data` string guard is the boundary parser for a 0x08c379a0 revert.
       const data = typeof err?.data === "string" ? err.data : null;
       if (data && data.length >= 10 && data.slice(0, 10).toLowerCase() === "0x08c379a0") {
         try {
@@ -1191,7 +1207,7 @@ export const AdapterLive = Layer.effect(AdapterService,
       // bump once before giving up.
       const receipt = await publicClient
         .waitForTransactionReceipt({ hash: txHash, timeout: 60_000 })
-        .catch(async (_err: unknown): Promise<TransactionReceipt> => {
+        .catch(async (): Promise<TransactionReceipt> => {
           const pendingCount = BigInt(
             await publicClient.getTransactionCount({ address: owner, blockTag: "pending" }),
           );
@@ -2030,6 +2046,7 @@ export const AdapterLive = Layer.effect(AdapterService,
       const word = activeTick >> 8;
       const bins: BinData[] = [];
       for (const w of [word - 1, word, word + 1]) {
+        // oxlint-disable-next-line anti-slop/no-chained-type-assertions -- a partial ABI-decode tuple can't be a single `as`; the contract return is bound at the publicClient call boundary.
         const populated = (await lens.read.getPopulatedTicksInWord([poolAddress, w])) as unknown as ReadonlyArray<
           readonly [number, bigint, bigint]
         >;

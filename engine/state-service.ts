@@ -86,7 +86,7 @@ export interface AgentStateMutableOptions {
   readonly maxPendingProposals?: number;
 }
 
-export function AgentStateMutable(options: AgentStateMutableOptions = {}): {
+export interface AgentStateMutableResult {
   readonly layer: Layer.Layer<AgentStateService, never, never>;
   readonly update: (patch: Partial<BeamStateSnapshot>) => void;
   readonly setAgentPolicy: (patch: Partial<AgentPolicySnapshot>) => void;
@@ -95,7 +95,9 @@ export function AgentStateMutable(options: AgentStateMutableOptions = {}): {
   readonly dequeueProposals: (ids: ReadonlyArray<string>) => void;
   readonly approveProposal: (id: string) => void;
   readonly rejectProposal: (id: string) => void;
-} {
+}
+
+export function AgentStateMutable(options: AgentStateMutableOptions = {}): AgentStateMutableResult {
   const maxPendingProposals = options.maxPendingProposals ?? 50;
   let snapshot: BeamStateSnapshot = initialSnapshot;
 

@@ -22,8 +22,10 @@ function readBeamApiKey(): string | null {
     const credentialsFile = join(getBeamUserConfigDir(), "credentials.json");
     if (!existsSync(credentialsFile)) return null;
     const value: unknown = JSON.parse(readFileSync(credentialsFile, "utf-8"));
+    // oxlint-disable-next-line anti-slop/no-runtime-typeof -- runtime shape guard on untrusted DEX credentials JSON at the parse boundary
     if (typeof value !== "object" || value === null || !("apiKey" in value)) return null;
     const key = (value as { apiKey: unknown }).apiKey;
+    // oxlint-disable-next-line anti-slop/no-runtime-typeof -- runtime type guard on unparsed credentials field
     return typeof key === "string" && key.length > 0 ? key : null;
   } catch {
     return null;
@@ -60,22 +62,20 @@ function postAlert(
   alert: EngineAlert,
 ): Effect.Effect<void, never> {
   const baseUrl = process.env.BEAM_API_URL ?? DEFAULT_API_BASE_URL;
+  const headers = {
+    "Content-Type": "application/json",
+    Authorization: `Bearer ${apiKey}`,
+  };
+  if (installId) Object.assign(headers, { "X-Install-Id": installId });
+  const payload = { type: alert.type, severity: alert.severity, message: alert.message };
+  if (alert.poolAddress !== undefined) Object.assign(payload, { poolAddress: alert.poolAddress });
+  if (alert.positionId !== undefined) Object.assign(payload, { positionId: alert.positionId });
+  if (alert.data !== undefined) Object.assign(payload, { data: alert.data });
   return Effect.tryPromise(() =>
     fetch(`${baseUrl}/v1/alerts`, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${apiKey}`,
-        ...(installId ? { "X-Install-Id": installId } : {}),
-      },
-      body: JSON.stringify({
-        type: alert.type,
-        severity: alert.severity,
-        message: alert.message,
-        ...(alert.poolAddress !== undefined ? { poolAddress: alert.poolAddress } : {}),
-        ...(alert.positionId !== undefined ? { positionId: alert.positionId } : {}),
-        ...(alert.data !== undefined ? { data: alert.data } : {}),
-      }),
+      headers,
+      body: JSON.stringify(payload),
       signal: AbortSignal.timeout(ALERT_POST_TIMEOUT_MS),
     }),
   ).pipe(

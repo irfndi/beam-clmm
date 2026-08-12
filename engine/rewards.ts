@@ -46,10 +46,20 @@ export function summarizeRewardClaim(rewards: ReadonlyArray<ClaimedReward>): Rew
  * txSignature), and fees_usd stays NULL on reward rows so fee queries stay
  * fee-pure. Raw atomic amounts are always recorded, USD when priced.
  */
+export interface RewardClaimMetadata {
+  readonly kind: "lm_reward";
+  readonly txSignatures: ReadonlyArray<string>;
+  readonly rewards: ReadonlyArray<{
+    readonly mint: string;
+    readonly amountAtomic: number;
+    readonly amountUsd: number | null;
+  }>;
+}
+
 export function buildRewardClaimMetadata(args: {
   readonly txSignatures: ReadonlyArray<string>;
   readonly rewards: ReadonlyArray<ClaimedReward>;
-}): Record<string, unknown> {
+}): RewardClaimMetadata {
   return {
     kind: "lm_reward",
     txSignatures: [...args.txSignatures],

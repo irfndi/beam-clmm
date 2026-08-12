@@ -22,7 +22,9 @@ const pkg = JSON.parse(readFileSync(path.join(REPO_ROOT, "package.json"), "utf8"
   scripts: Record<string, string>;
 };
 
-function runCli(args: string[]): { status: number; stdout: string; stderr: string } {
+type CliResult = { status: number; stdout: string; stderr: string };
+
+function runCli(args: string[]): CliResult {
   try {
     const stdout = execFileSync(process.execPath, ["cli/index.ts", ...args], {
       cwd: REPO_ROOT,
@@ -57,7 +59,9 @@ describe("package.json script table", () => {
     }
     expect(referenced.length).toBeGreaterThan(0);
     for (const rel of referenced) {
-      expect(existsSync(path.join(REPO_ROOT, rel)), `script table references missing ${rel}`).toBe(true);
+      expect(existsSync(path.join(REPO_ROOT, rel)), `script table references missing ${rel}`).toBe(
+        true,
+      );
     }
   });
 });

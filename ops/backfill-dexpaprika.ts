@@ -224,7 +224,7 @@ async function backfillPool(db: any, pool: string): Promise<void> {
   log.info(`  inserted ${snaps.length} snapshots for ${pool.slice(0, 18)}`);
 }
 
-function parseArgs(argv: ReadonlyArray<string>): { db: string; pools: string[] } {
+function parseArgs(argv: ReadonlyArray<string>) {
   let db = "./beam-backtest.db";
   const pools: string[] = [];
   for (let i = 0; i < argv.length; i++) {
@@ -259,6 +259,7 @@ async function main(argv: ReadonlyArray<string>): Promise<void> {
 }
 
 const isDirect =
+  // oxlint-disable-next-line anti-slop/no-runtime-typeof -- Env guard: probes the Bun global to decide whether this file is being run directly.
   typeof Bun !== "undefined" &&
   (Bun.main?.endsWith("ops/backfill-dexpaprika.ts") ||
     Bun.main?.endsWith("ops/backfill-dexpaprika.js"));

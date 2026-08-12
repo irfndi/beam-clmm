@@ -32,6 +32,7 @@ function buildProgram(): Layer.Layer<DbService | AdapterService, Error, never> {
   const dbPath = process.env.SQLITE_DB_PATH ?? getBeamDbPath();
   const dbLayer = DbLive(dbPath);
   const adapterLayer = Layer.provide(AdapterLive, ConfigLive);
+  // oxlint-disable-next-line anti-slop/no-chained-type-assertions -- Partial stub: Layer.mergeAll's Effect-free synthetic layer type cannot express the required Context.Layer<R>.Layer overlap, so the runtime-shaped result is cast to the declared service contract.
   return Layer.mergeAll(dbLayer, adapterLayer) as unknown as Layer.Layer<
     DbService | AdapterService,
     Error,
@@ -133,10 +134,15 @@ function formatPct(value: number): string {
   return `${sign}${value.toFixed(2)}%`;
 }
 
+interface Pnl {
+  pnlUsd: number;
+  pnlPct: number;
+}
+
 export function computePnl(
   depositedUsd: number,
   currentValueUsd: number,
-): { pnlUsd: number; pnlPct: number } {
+): Pnl {
   const pnlUsd = currentValueUsd - depositedUsd;
   const pnlPct = depositedUsd > 0 ? (pnlUsd / depositedUsd) * 100 : 0;
   return { pnlUsd, pnlPct };
@@ -260,7 +266,7 @@ function formatPositionsList(
   return lines.join("\n");
 }
 
-function realizedPnlFor(pos: PositionRecord): { pnlUsd: number; pnlPct: number } {
+function realizedPnlFor(pos: PositionRecord): Pnl {
   const pnlUsd =
     pos.realizedPnlUsd ??
     pos.currentValueUsd +

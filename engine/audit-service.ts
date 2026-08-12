@@ -19,10 +19,13 @@ function parseRiskResult(json: string | null): RiskResult {
     // asserting, so a null/array/odd-typed value cannot masquerade as a
     // valid risk result (which would fail the caller's fallback logic).
     if (
+      // oxlint-disable-next-line anti-slop/no-runtime-typeof -- runtime shape guard on untrusted DB-sourced JSON at the parse boundary
       typeof parsed === "object" &&
       parsed !== null &&
+      // oxlint-disable-next-line anti-slop/no-runtime-typeof -- runtime shape guard on untrusted DB-sourced JSON at the parse boundary
       typeof (parsed as { approved?: unknown }).approved === "boolean" &&
       ((parsed as { reason?: unknown }).reason === undefined ||
+        // oxlint-disable-next-line anti-slop/no-runtime-typeof -- runtime shape guard on untrusted DB-sourced JSON at the parse boundary
         typeof (parsed as { reason?: unknown }).reason === "string")
     ) {
       return parsed as RiskResult;

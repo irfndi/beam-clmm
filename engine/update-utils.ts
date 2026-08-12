@@ -75,12 +75,12 @@ export interface GitHubRelease {
 }
 
 export const R2_PUBLIC_URL = "https://pub-2f55c98709e74d1d900b89ec20f8f1fc.r2.dev";
-export const R2_MANIFEST_PATHS: Record<"stable" | "beta" | "dev" | "canary", string> = {
+export const R2_MANIFEST_PATHS = {
   stable: "releases/latest.json",
   beta: "releases/channel/beta.json",
   dev: "releases/channel/dev.json",
   canary: "releases/channel/canary.json",
-};
+} satisfies Record<"stable" | "beta" | "dev" | "canary", string>;
 
 export function fetchR2Manifest(
   channel: "stable" | "beta" | "dev" | "canary",
@@ -129,6 +129,7 @@ export function fetchGitHubRelease(
         ? `https://api.github.com/repos/${repo}/releases/latest`
         : `https://api.github.com/repos/${repo}/releases`;
 
+    // oxlint-disable-next-line anti-slop/no-known-value-widening -- mutable headers map; conditional Authorization injection requires an open string-keyed type
     const headers: Record<string, string> = {
       "User-Agent": "beam-clmm",
       Accept: "application/vnd.github.v3+json",
@@ -190,6 +191,7 @@ export function fetchGitHubRelease(
       }
 
       pageCount++;
+      // oxlint-disable-next-line anti-slop/no-known-value-widening -- mutable headers map; conditional Authorization injection requires an open string-keyed type
       const pageHeaders: Record<string, string> = {
         "User-Agent": "beam-clmm",
         Accept: "application/vnd.github.v3+json",

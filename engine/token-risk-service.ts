@@ -33,6 +33,11 @@ const DEFAULT_CACHE_TTL_MIN = 30;
  */
 export type FetchLike = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
 
+export interface TokenRiskRequest {
+  apiKey?: string;
+  fetchImpl?: FetchLike;
+}
+
 export interface TokenRiskSignal {
   readonly isVerified: boolean | null;
   readonly organicScore: number | null;
@@ -55,11 +60,15 @@ export interface TokenRiskConfigLike {
 
 // ─── Response parsing (live-verified semantics) ──────────────────────────────
 
+// oxlint-disable-next-line anti-slop/no-unknown-parameters, anti-slop/no-unsafe-dictionary-type -- value is external Jupiter tokens API JSON at I/O boundary
 function isObject(value: unknown): value is Record<string, unknown> {
+  // oxlint-disable-next-line anti-slop/no-runtime-typeof -- external data guard
   return typeof value === "object" && value !== null;
 }
 
+// oxlint-disable-next-line anti-slop/no-unknown-parameters -- value is external Jupiter tokens API JSON at I/O boundary
 function readMint(value: unknown): string | null {
+  // oxlint-disable-next-line anti-slop/no-runtime-typeof -- external data guard
   return typeof value === "string" && value.length > 0 ? value : null;
 }
 
@@ -68,6 +77,7 @@ function readMint(value: unknown): string | null {
  * carries no usable address (schema drift) so it is simply skipped — mints
  * absent from the response stay unknown to the caller (no fabricated entry).
  */
+// oxlint-disable-next-line anti-slop/no-unknown-parameters -- raw is unparsed external Jupiter tokens API entry at I/O boundary
 export function parseTokenRiskEntry(raw: unknown): {
   readonly mint: string;
   readonly signal: TokenRiskSignal;
@@ -83,7 +93,9 @@ export function parseTokenRiskEntry(raw: unknown): {
   return {
     mint,
     signal: {
+      // oxlint-disable-next-line anti-slop/no-runtime-typeof -- external data field guard
       isVerified: typeof raw["isVerified"] === "boolean" ? raw["isVerified"] : null,
+      // oxlint-disable-next-line anti-slop/no-runtime-typeof -- external data field guard
       organicScore: typeof score === "number" && Number.isFinite(score) ? score : null,
       organicScoreLabel: label === "high" || label === "medium" || label === "low" ? label : null,
       isSus: isObject(audit) && audit["isSus"] === true,
@@ -109,7 +121,7 @@ export async function fetchTokenRisks(
   // ONLY send the key when a non-empty value is configured — an empty
   // `x-api-key` header can be treated as an invalid key and 401; its absence
   // is the supported keyless path.
-  if (typeof options.apiKey === "string" && options.apiKey.length > 0) {
+  if (options.apiKey && options.apiKey.length > 0) {
     headers["x-api-key"] = options.apiKey;
   }
 
@@ -229,7 +241,7 @@ export async function consultTokenRisks(
     // Build the request options without ever assigning `undefined` to an
     // optional field (exactOptionalPropertyTypes): an empty JUPITER_API_KEY is
     // omitted, never sent as an empty header.
-    const request: { apiKey?: string; fetchImpl?: FetchLike } = {};
+    const request: TokenRiskRequest = {};
     const apiKey = process.env.JUPITER_API_KEY?.trim();
     if (apiKey) request.apiKey = apiKey;
     if (options.fetchImpl !== undefined) request.fetchImpl = options.fetchImpl;

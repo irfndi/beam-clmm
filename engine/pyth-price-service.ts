@@ -49,6 +49,7 @@ export const PYTH_FEED_IDS = {
   USDT: "0x2b89b9dc8fdf9f34709a5b106b472f0f39bb6ca9ce04b0fd7f2e971688e2e53b",
 } as const;
 
+// oxlint-disable-next-line anti-slop/no-known-value-widening -- open dict required for dynamic string-key indexing in resolveFeedId
 const SYMBOL_FEED_IDS: Readonly<Record<string, string>> = PYTH_FEED_IDS;
 
 /** Resolve a symbol (SOL, USDC, USDT — case-insensitive) to its verified
@@ -79,14 +80,19 @@ export type PythParseResult =
 
 // ─── Response parsing (docs-verified shape) ──────────────────────────────────
 
+// oxlint-disable-next-line anti-slop/no-unknown-parameters, anti-slop/no-unsafe-dictionary-type -- value is external Hermes JSON parsed at I/O boundary
 function isObject(value: unknown): value is Record<string, unknown> {
+  // oxlint-disable-next-line anti-slop/no-runtime-typeof -- external data guard
   return typeof value === "object" && value !== null;
 }
 
 /** Parse a Hermes number field (numeric in practice; a numeric string is
  *  tolerated) into a finite number, else null. */
+// oxlint-disable-next-line anti-slop/no-unknown-parameters -- value is external Hermes JSON parsed at I/O boundary
 function readFiniteNumber(value: unknown): number | null {
+  // oxlint-disable-next-line anti-slop/no-runtime-typeof -- external data guard
   if (typeof value === "number") return Number.isFinite(value) ? value : null;
+  // oxlint-disable-next-line anti-slop/no-runtime-typeof -- external data guard
   if (typeof value === "string" && value.trim().length > 0) {
     const parsed = Number(value);
     return Number.isFinite(parsed) ? parsed : null;
@@ -103,6 +109,7 @@ function readFiniteNumber(value: unknown): number | null {
  * injectable so staleness is unit-testable without fake timers.
  */
 export function parsePythPriceUpdate(
+  // oxlint-disable-next-line anti-slop/no-unknown-parameters -- raw is unparsed external Hermes response at I/O boundary
   raw: unknown,
   maxStalenessMs: number,
   nowMs: number = Date.now(),
@@ -116,11 +123,13 @@ export function parsePythPriceUpdate(
   if (!isObject(price)) return { kind: "malformed" };
 
   const rawPrice = price["price"];
+  // oxlint-disable-next-line anti-slop/no-runtime-typeof -- external data guard
   if (typeof rawPrice !== "string") return { kind: "malformed" };
 
   // expo is mathematically a base-10 exponent: USD = intPrice × 10^expo. Pyth
   // crypto feeds use -8; any non-integer or positive value is a schema break.
   const expo: unknown = price["expo"];
+  // oxlint-disable-next-line anti-slop/no-runtime-typeof -- external data guard
   if (typeof expo !== "number" || !Number.isInteger(expo) || expo > 0) {
     return { kind: "malformed" };
   }
@@ -143,6 +152,7 @@ export function parsePythPriceUpdate(
     point: {
       priceUsd: scaled,
       publishTimeMs,
+      // oxlint-disable-next-line anti-slop/no-runtime-typeof -- external data guard
       feedId: typeof id === "string" ? id : "",
     },
   };

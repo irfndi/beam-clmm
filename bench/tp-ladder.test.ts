@@ -23,28 +23,31 @@ describe("buildTpLadder", () => {
   });
 
   it("renormalizes fractions that sum above 1 down to exactly 1", () => {
-    const result = buildTpLadder(
-      100,
-      { rungs: [0.1, 0.2], fractions: [1, 1], invalidationStopPct: 0.1 },
-    )!;
+    const result = buildTpLadder(100, {
+      rungs: [0.1, 0.2],
+      fractions: [1, 1],
+      invalidationStopPct: 0.1,
+    })!;
     expect(result.ladder.totalFraction).toBeCloseTo(1, 8);
     expect(result.ladder.rungs.map((r) => r.fraction)).toEqual([0.5, 0.5]);
   });
 
   it("caps at the shorter of rungs/fractions", () => {
-    const result = buildTpLadder(
-      100,
-      { rungs: [0.1, 0.2, 0.3], fractions: [0.5], invalidationStopPct: 0.1 },
-    )!;
+    const result = buildTpLadder(100, {
+      rungs: [0.1, 0.2, 0.3],
+      fractions: [0.5],
+      invalidationStopPct: 0.1,
+    })!;
     expect(result.ladder.rungs).toHaveLength(1);
     expect(result.ladder.rungs[0]!.targetPrice).toBeCloseTo(110, 8);
   });
 
   it("sorts unsorted rung pcts while keeping fractions attached", () => {
-    const result = buildTpLadder(
-      100,
-      { rungs: [0.5, 0.15], fractions: [0.7, 0.3], invalidationStopPct: 0.1 },
-    )!;
+    const result = buildTpLadder(100, {
+      rungs: [0.5, 0.15],
+      fractions: [0.7, 0.3],
+      invalidationStopPct: 0.1,
+    })!;
     expect(result.ladder.rungs[0]!.targetPrice).toBeCloseTo(115, 8);
     expect(result.ladder.rungs[0]!.fraction).toBe(0.3);
     expect(result.ladder.rungs[1]!.targetPrice).toBe(150);
@@ -52,9 +55,7 @@ describe("buildTpLadder", () => {
   });
 
   it("returns null for empty config (no rungs)", () => {
-    expect(
-      buildTpLadder(100, { rungs: [], fractions: [], invalidationStopPct: 0.1 }),
-    ).toBeNull();
+    expect(buildTpLadder(100, { rungs: [], fractions: [], invalidationStopPct: 0.1 })).toBeNull();
   });
 
   it("returns null for non-positive or non-finite entry", () => {
@@ -82,10 +83,7 @@ describe("evaluateTpLadder", () => {
   });
 
   it("marks the last rung as ladder complete on a single-rung ladder", () => {
-    const single = buildTpLadder(
-      100,
-      { rungs: [0.5], fractions: [1], invalidationStopPct: 0.2 },
-    )!;
+    const single = buildTpLadder(100, { rungs: [0.5], fractions: [1], invalidationStopPct: 0.2 })!;
     const result = evaluateTpLadder(200, single.ladder, single.invalidationPrice);
     expect(result.status).toBe("tp");
     expect(result.rungReached!.targetPrice).toBeCloseTo(150, 8);
@@ -114,6 +112,7 @@ describe("serializeTpLadder / parseTpLadder", () => {
 
   it("round-trips a ladder through JSON", () => {
     const raw = serializeTpLadder(ladder)!;
+    // oxlint-disable-next-line anti-slop/no-runtime-typeof -- runtime typeof assertion on a genuinely-dynamic test value / real union narrowing, not a type alias
     expect(typeof raw).toBe("string");
     const parsed = parseTpLadder(raw)!;
     expect(parsed.rungs).toEqual(ladder.rungs);

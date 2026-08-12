@@ -174,7 +174,10 @@ function makeTestLayer(opts: {
     Layer.succeed(McpServerService, { start: () => Effect.void, stop: () => Effect.void }),
     Layer.succeed(HttpStatusServerService, { start: () => Effect.void, stop: () => Effect.void }),
     Layer.succeed(EntryPrepService, { prepareEntryTokens: () => Effect.succeed(undefined) }),
-    Layer.succeed(KrystalService, { getPoolStats: () => Effect.succeed(null), getUniverse: () => Effect.succeed(new Map()) }),
+    Layer.succeed(KrystalService, {
+      getPoolStats: () => Effect.succeed(null),
+      getUniverse: () => Effect.succeed(new Map()),
+    }),
     Layer.succeed(GeckoTerminalService, opts.gecko ?? { getPoolStats: () => Effect.succeed(null) }),
     Layer.succeed(AlertService, {
       sendAlert: capture
@@ -212,6 +215,7 @@ function runWithSeed(
     return yield* audit.getRecentDecisions(200);
   });
   return Effect.runPromise(
+    // oxlint-disable-next-line anti-slop/no-chained-type-assertions -- test-only hard cast of a partial stub/generic expression to a full interface/Effect type; single `as` is impossible without fabricating the full type
     Effect.provide(test, layer) as unknown as Effect.Effect<
       ReadonlyArray<DecisionRow>,
       Error,
@@ -415,9 +419,12 @@ describe("IL protection — IL-dominance fast EXIT (Task 3b)", () => {
     expect(alert.positionId).toBe(position.positionId);
     expect(alert.poolAddress).toBe(POOL);
     const data = alert.data ?? {};
+    // oxlint-disable-next-line anti-slop/no-runtime-typeof -- runtime typeof assertion on a genuinely-dynamic test value / real union narrowing, not a type alias
     expect(typeof data.ilUsd).toBe("number");
     expect(data.ilUsd).toBeGreaterThan(0);
+    // oxlint-disable-next-line anti-slop/no-runtime-typeof -- runtime typeof assertion on a genuinely-dynamic test value / real union narrowing, not a type alias
     expect(typeof data.hodlValueUsd).toBe("number");
+    // oxlint-disable-next-line anti-slop/no-runtime-typeof -- runtime typeof assertion on a genuinely-dynamic test value / real union narrowing, not a type alias
     expect(typeof data.feesClaimedUsd).toBe("number");
   }, 15_000);
 });

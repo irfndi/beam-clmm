@@ -13,6 +13,7 @@ import {
  * via the vi.mocked API.
  */
 function mockFetch(): void {
+  // oxlint-disable-next-line anti-slop/no-chained-type-assertions -- mock fetch stub cast to global fetch shape
   globalThis.fetch = vi.fn(() =>
     Promise.resolve(new Response(null, { status: 200 })),
   ) as unknown as typeof globalThis.fetch;
@@ -385,9 +386,13 @@ describe("createErrorReporter factory", () => {
   it("returns an ErrorReporter instance", () => {
     const r = createErrorReporter({ enabled: false });
     expect(r).toBeInstanceOf(Object);
+    // oxlint-disable-next-line anti-slop/no-runtime-typeof -- defensive runtime shape assert on factory-created instance
     expect(typeof r.report).toBe("function");
+    // oxlint-disable-next-line anti-slop/no-runtime-typeof -- defensive runtime shape assert on factory-created instance
     expect(typeof r.flushAsync).toBe("function");
+    // oxlint-disable-next-line anti-slop/no-runtime-typeof -- defensive runtime shape assert on factory-created instance
     expect(typeof r.getPending).toBe("function");
+    // oxlint-disable-next-line anti-slop/no-runtime-typeof -- defensive runtime shape assert on factory-created instance
     expect(typeof r.dispose).toBe("function");
     void r.dispose();
   });

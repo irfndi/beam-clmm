@@ -310,7 +310,7 @@ describe("LatencyWindow", () => {
 });
 
 const makePromptCtx = (decision: AgentDecision): AgentRuntimeContext =>
-  ({
+  ({ /* oxlint-disable-line anti-slop/no-chained-type-assertions */
     decision,
     pool: {
       address: decision.poolAddress,

@@ -7,10 +7,14 @@ import { getBeamUserConfigDir } from "../engine/paths.js";
 const CREDENTIALS_FILE = path.join(getBeamUserConfigDir(), "credentials.json");
 
 // Tier display info
-const TIER_INFO: Record<
-  string,
-  { name: string; maxProfit: string; monthlyFee: string; features: string[] }
-> = {
+interface TierInfo {
+  name: string;
+  maxProfit: string;
+  monthlyFee: string;
+  features: string[];
+}
+
+const TIER_INFO = {
   free: {
     name: "Free",
     maxProfit: "1 USD/month",
@@ -35,7 +39,7 @@ const TIER_INFO: Record<
       "Custom strategies",
     ],
   },
-};
+} satisfies Record<string, TierInfo>;
 
 function getCredentials() {
   if (!fs.existsSync(CREDENTIALS_FILE)) {
@@ -74,7 +78,7 @@ export const subscriptionCommand = new Command("subscription")
       }
 
       const { tier, walletSol, referralCount, credits, platformFeeRate } = result.data;
-      const info = (TIER_INFO[tier] ?? TIER_INFO.free)!;
+      const info = (TIER_INFO[tier as keyof typeof TIER_INFO] ?? TIER_INFO.free)!;
 
       console.log(`Tier: ${info.name}`);
       console.log(`Wallet: $${walletSol.toFixed(2)}`);
@@ -99,12 +103,12 @@ export const subscriptionCommand = new Command("subscription")
           process.exit(1);
         }
 
-        if (!TIER_INFO[tier]) {
+        if (!TIER_INFO[tier as keyof typeof TIER_INFO]) {
           console.error(`Error: Unknown tier '${tier}'. Available: pro, fund`);
           process.exit(1);
         }
 
-        const info = TIER_INFO[tier];
+        const info = TIER_INFO[tier as keyof typeof TIER_INFO];
 
         console.log(`Upgrade to ${info.name}`);
         console.log(`Monthly fee: ${info.monthlyFee}`);

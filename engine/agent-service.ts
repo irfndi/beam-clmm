@@ -24,6 +24,21 @@ const logger = createLogger("AgentService");
 
 const VALID_ACTIONS: ReadonlySet<string> = new Set(["HOLD", "REBALANCE", "EXIT", "ENTER"]);
 
+/** Decided skip decision for the budget-constrained prompt gate, with the stats the caller logs. */
+interface LatencyWindowDecision {
+  readonly skip: boolean;
+  readonly p95Ms: number | null;
+  readonly slowCount: number;
+  readonly windowSize: number;
+}
+
+/** Rendered runtime-context blocks for an advisor prompt. */
+interface RuntimeContextBlocks {
+  readonly warningsBlock: string;
+  readonly decisionsBlock: string;
+  readonly positionBlock: string;
+}
+
 /** Rolling p95 latency gate for budget-constrained advisor prompts (veto
  *  reviews and sync proposals). Samples are timestamped and age out, so a
  *  transient slow period cannot latch the skip on permanently: once the model
@@ -80,12 +95,7 @@ export class LatencyWindow {
 
   /** Whether a prompt should be skipped right now (fail-open), with the
    *  stats the caller logs when it is. */
-  shouldSkip(now: number): {
-    readonly skip: boolean;
-    readonly p95Ms: number | null;
-    readonly slowCount: number;
-    readonly windowSize: number;
-  } {
+  shouldSkip(now: number): LatencyWindowDecision {
     this.evict(now);
     const sorted = this.samples.map((s) => s.latencyMs).sort((a, b) => a - b);
     const p95 =
@@ -142,11 +152,7 @@ export const AgentNoOp: AgentApi = {
   disconnect: () => Effect.void,
 };
 
-function formatRuntimeContext(ctx: AgentRuntimeContext): {
-  warningsBlock: string;
-  decisionsBlock: string;
-  positionBlock: string;
-} {
+function formatRuntimeContext(ctx: AgentRuntimeContext): RuntimeContextBlocks {
   const { warnings, recentDecisions, position } = ctx;
   const warningsBlock =
     warnings.length > 0
@@ -443,6 +449,7 @@ function transportSupportsAlert(
 ): transport is AgentRuntimeTransport & {
   sendAlert: (alert: AgentRuntimeAlert) => Effect.Effect<void, Error>;
 } {
+  // oxlint-disable-next-line anti-slop/no-runtime-typeof -- feature-detects optional transport method presence, not unparsed data
   return typeof transport.sendAlert === "function";
 }
 
@@ -451,6 +458,7 @@ function transportSupportsCheckin(
 ): transport is AgentRuntimeTransport & {
   sendCheckin: (checkin: AgentRuntimeCheckin) => Effect.Effect<void, Error>;
 } {
+  // oxlint-disable-next-line anti-slop/no-runtime-typeof -- feature-detects optional transport method presence, not unparsed data
   return typeof transport.sendCheckin === "function";
 }
 

@@ -10,6 +10,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const FAKE_AGENT = path.join(__dirname, "fake-acp-agent.ts");
 
 function makeContext(): AgentRuntimeContext {
+  // oxlint-disable-next-line anti-slop/no-chained-type-assertions -- minimal partial stub of AgentRuntimeContext
   return {
     decision: {
       action: "ENTER",

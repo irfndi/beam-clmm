@@ -6,6 +6,7 @@ import type { BinArray, PoolSnapshot, PoolState } from "../engine/types.js";
 import { DLMMStrategy } from "../engine/strategy-service.js";
 import type { BacktestResult } from "../engine/types.js";
 
+// oxlint-disable-next-line anti-slop/no-unknown-parameters -- helper accepts a genuinely-dynamic test value (layer/body/error/fetch mock) with no static contract
 function run<T, E, R>(effect: Effect.Effect<T, E, R>, layer: unknown): T {
   return Effect.runSync((Effect.provide as any)(effect, layer));
 }

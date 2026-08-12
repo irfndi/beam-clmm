@@ -24,6 +24,24 @@ import { bigintReplacer } from "./bigint-json.js";
 import { randomUUID } from "crypto";
 import { PersistenceContractError } from "./errors.js";
 
+/**
+ * Raw SQLite row. queryOne/queryAll select arbitrary columns, so the record is
+ * the genuine untyped I/O boundary of the embedded DB; the rowTo* mappers
+ * stringify/narrow each column into the concrete owner record type. The
+ * dictionary is local to this module and never escapes it.
+ */
+// oxlint-disable-next-line anti-slop/no-unsafe-dictionary-type -- SQLite rows are genuinely untyped external data (arbitrary columns) read at the DB boundary; each column is narrowed by the rowTo* mappers below.
+type SqlRawRow = { [key: string]: unknown };
+
+/** Intermediate parse shape for a serialized BinArray bin (JSON round-trip). */
+interface RawBin {
+  binId: unknown;
+  price: unknown;
+  reserveX: unknown;
+  reserveY: unknown;
+  liquiditySupply: unknown;
+}
+
 export interface PositionRecord {
   /**
    * Position identity and primary key: the on-chain position pubkey for live
@@ -97,21 +115,26 @@ export interface AuditRecord {
 }
 
 function queryOne<T>(db: Database, sql: string, ...params: unknown[]): T | null {
+  // oxlint-disable-next-line anti-slop/no-chained-type-assertions -- Bun's SQLite `Statement` param bindings (SQLQueryBindings) can't accept a generic `unknown[]` in a single `as`; the unknown bridge is required for the generic query helper.
   return (db.query(sql) as unknown as { get(...p: unknown[]): T | null }).get(...params);
 }
 
 function queryAll<T>(db: Database, sql: string, ...params: unknown[]): T[] {
+  // oxlint-disable-next-line anti-slop/no-chained-type-assertions -- same generic-binding bridge as queryOne (Bun's SQLQueryBindings can't take `unknown[]` in a single `as`).
   return (db.query(sql) as unknown as { all(...p: unknown[]): T[] }).all(...params);
 }
 
 function runOne(db: Database, sql: string, ...params: unknown[]): void {
-  (db.run as (sql: string, ...params: unknown[]) => void)(sql, ...params);
+  // oxlint-disable-next-line anti-slop/no-chained-type-assertions -- same generic-binding bridge as queryOne (Bun's SQLQueryBindings can't take `unknown[]` in a single `as`).
+  (db.run as unknown as (sql: string, ...params: unknown[]) => void)(sql, ...params);
 }
 
+// oxlint-disable-next-line anti-slop/no-unknown-parameters -- `e` comes from a catch clause (Error is unknown at the JS boundary); negated via `instanceof` narrowing.
 function isVecMemoryMissingError(e: unknown): boolean {
   return e instanceof Error && e.message.includes("no such table: vec_memory");
 }
 
+// oxlint-disable-next-line anti-slop/no-unknown-parameters -- accepts an arbitrary value to JSON-stringify at the persistence boundary (any domain type may be stored).
 function serializeJson(value: unknown): string | null {
   try {
     return JSON.stringify(value);
@@ -127,7 +150,7 @@ function serializeBinArray(binArray: BinArray): string {
 }
 
 function deserializeBinArray(json: string): BinArray {
-  const raw = JSON.parse(json) as { bins: Array<Record<string, unknown>> };
+  const raw = JSON.parse(json) as { bins: RawBin[] };
   raw.bins = raw.bins.map((b) => ({
     binId: Number(b.binId),
     price: Number(b.price),
@@ -135,6 +158,7 @@ function deserializeBinArray(json: string): BinArray {
     reserveY: BigInt(String(b.reserveY)),
     liquiditySupply: BigInt(String(b.liquiditySupply)),
   }));
+  // oxlint-disable-next-line anti-slop/no-chained-type-assertions -- structurly different reconstructed BinArray (fields narrowed one-by-one from a JSON round-trip) can't be a single `as`; the parse is performed above per-field.
   return raw as unknown as BinArray;
 }
 
@@ -231,7 +255,7 @@ export const DbLive = (dbPath?: string) =>
 
         getPosition: (positionId) =>
           Effect.sync(() => {
-            const row = queryOne<Record<string, unknown>>(
+            const row = queryOne<SqlRawRow>(
               db,
               "SELECT * FROM positions WHERE position_id = ?",
               positionId,
@@ -241,7 +265,7 @@ export const DbLive = (dbPath?: string) =>
 
         getAllPositions: () =>
           Effect.sync(() => {
-            const rows = queryAll<Record<string, unknown>>(
+            const rows = queryAll<SqlRawRow>(
               db,
               "SELECT * FROM positions WHERE paper_exited_at IS NULL AND closed_at IS NULL",
             );
@@ -250,7 +274,7 @@ export const DbLive = (dbPath?: string) =>
 
         getPaperExitedPositions: () =>
           Effect.sync(() => {
-            const rows = queryAll<Record<string, unknown>>(
+            const rows = queryAll<SqlRawRow>(
               db,
               "SELECT * FROM positions WHERE paper_exited_at IS NOT NULL ORDER BY paper_exited_at DESC",
             );
@@ -259,7 +283,7 @@ export const DbLive = (dbPath?: string) =>
 
         getClosedPositions: () =>
           Effect.sync(() => {
-            const rows = queryAll<Record<string, unknown>>(
+            const rows = queryAll<SqlRawRow>(
               db,
               `SELECT * FROM positions
                WHERE closed_at IS NOT NULL OR paper_exited_at IS NOT NULL
@@ -354,7 +378,7 @@ export const DbLive = (dbPath?: string) =>
 
         getPositionEvents: (poolAddress, limit) =>
           Effect.sync(() => {
-            const rows = queryAll<Record<string, unknown>>(
+            const rows = queryAll<SqlRawRow>(
               db,
               `SELECT * FROM position_events
                WHERE pool_address = ?
@@ -423,7 +447,7 @@ export const DbLive = (dbPath?: string) =>
 
         getRecentAudit: (limit) =>
           Effect.sync(() => {
-            const rows = queryAll<Record<string, unknown>>(
+            const rows = queryAll<SqlRawRow>(
               db,
               "SELECT * FROM audit ORDER BY timestamp DESC LIMIT ?",
               limit,
@@ -448,7 +472,7 @@ export const DbLive = (dbPath?: string) =>
 
         isBlacklisted: (type, value) =>
           Effect.sync(() => {
-            const row = queryOne<Record<string, unknown>>(
+            const row = queryOne<SqlRawRow>(
               db,
               "SELECT 1 FROM blacklists WHERE type = ? AND value = ?",
               type,
@@ -531,11 +555,11 @@ export const DbLive = (dbPath?: string) =>
                   // distance are preserved exactly.
                   const maxK = Math.max(topK * 8, 64);
                   let k = topK * 2;
-                  let candidates: Record<string, unknown>[] = [];
+                  let candidates: SqlRawRow[] = [];
                   for (;;) {
                     const rows = yield* Effect.try({
                       try: () =>
-                        queryAll<Record<string, unknown>>(
+                        queryAll<SqlRawRow>(
                           db,
                           `SELECT
                       id, category, content, pool_address, outcome, pnlUsd, confidence, createdAt, expiresAt,
@@ -650,7 +674,7 @@ export const DbLive = (dbPath?: string) =>
 
         getSnapshots: (poolAddress, startMs, endMs) =>
           Effect.sync(() => {
-            const rows = queryAll<Record<string, unknown>>(
+            const rows = queryAll<SqlRawRow>(
               db,
               `SELECT * FROM pool_snapshots
                WHERE pool_address = ? AND timestamp >= ? AND timestamp <= ?
@@ -739,7 +763,7 @@ export const DbLive = (dbPath?: string) =>
 
         getFeedbackByHash: (hash, agentId) =>
           Effect.sync(() => {
-            const row = queryOne<Record<string, unknown>>(
+            const row = queryOne<SqlRawRow>(
               db,
               "SELECT * FROM agent_feedback WHERE hash = ? AND agent_id = ? ORDER BY reported_at DESC LIMIT 1",
               hash,
@@ -750,7 +774,7 @@ export const DbLive = (dbPath?: string) =>
 
         getRecentFeedbackForAgent: (agentId, sinceMs) =>
           Effect.sync(() => {
-            const rows = queryAll<Record<string, unknown>>(
+            const rows = queryAll<SqlRawRow>(
               db,
               "SELECT * FROM agent_feedback WHERE agent_id = ? AND reported_at >= ? ORDER BY reported_at ASC",
               agentId,
@@ -761,7 +785,7 @@ export const DbLive = (dbPath?: string) =>
 
         getLastFeedbackForAgent: (agentId) =>
           Effect.sync(() => {
-            const row = queryOne<Record<string, unknown>>(
+            const row = queryOne<SqlRawRow>(
               db,
               "SELECT * FROM agent_feedback WHERE agent_id = ? ORDER BY reported_at DESC LIMIT 1",
               agentId,
@@ -771,7 +795,7 @@ export const DbLive = (dbPath?: string) =>
 
         listFeedbackForAgent: (agentId) =>
           Effect.sync(() => {
-            const rows = queryAll<Record<string, unknown>>(
+            const rows = queryAll<SqlRawRow>(
               db,
               "SELECT * FROM agent_feedback WHERE agent_id = ? ORDER BY reported_at ASC",
               agentId,
@@ -915,7 +939,7 @@ export const DbLive = (dbPath?: string) =>
 
         getSignalSnapshots: (poolAddress, startMs, endMs) =>
           Effect.sync(() => {
-            const rows = queryAll<Record<string, unknown>>(
+            const rows = queryAll<SqlRawRow>(
               db,
               `SELECT pool_address as poolAddress, timestamp, fee_il_ratio as feeIlRatio,
                 volume_authenticity as volumeAuthenticity, bin_utilization as binUtilization,
@@ -960,7 +984,7 @@ export const DbLive = (dbPath?: string) =>
 
         getRecentOutcomes: (limit) =>
           Effect.sync(() => {
-            const rows = queryAll<Record<string, unknown>>(
+            const rows = queryAll<SqlRawRow>(
               db,
               `SELECT pool_address as poolAddress, timestamp, fee_il_ratio as feeIlRatio,
                 volume_authenticity as volumeAuthenticity, bin_utilization as binUtilization,
@@ -1042,7 +1066,7 @@ export const DbLive = (dbPath?: string) =>
 
         getClosedPositionOutcomes: (limit) =>
           Effect.sync(() => {
-            const rows = queryAll<Record<string, unknown>>(
+            const rows = queryAll<SqlRawRow>(
               db,
               `SELECT fee_il_ratio as feeIlRatio,
                 volume_authenticity as volumeAuthenticity,
@@ -1094,7 +1118,7 @@ export const DbLive = (dbPath?: string) =>
 
         getPoolCooldown: (poolAddress) =>
           Effect.sync(() => {
-            const row = queryOne<Record<string, unknown>>(
+            const row = queryOne<SqlRawRow>(
               db,
               "SELECT * FROM pool_cooldowns WHERE pool_address = ?",
               poolAddress,
@@ -1170,7 +1194,7 @@ export const DbLive = (dbPath?: string) =>
         getTokenCandidate: (id) =>
           Effect.try({
             try: () => {
-              const row = queryOne<Record<string, unknown>>(
+              const row = queryOne<SqlRawRow>(
                 db,
                 "SELECT * FROM token_candidates WHERE id = ?",
                 id,
@@ -1183,7 +1207,7 @@ export const DbLive = (dbPath?: string) =>
         listTokenCandidates: (walletAddress, agentInstanceId) =>
           Effect.try({
             try: () =>
-              queryAll<Record<string, unknown>>(
+              queryAll<SqlRawRow>(
                 db,
                 `SELECT * FROM token_candidates
                WHERE wallet_address = ? AND agent_instance_id = ?
@@ -1236,7 +1260,7 @@ export const DbLive = (dbPath?: string) =>
         getExecutionOperation: (id) =>
           Effect.try({
             try: () => {
-              const row = queryOne<Record<string, unknown>>(
+              const row = queryOne<SqlRawRow>(
                 db,
                 "SELECT * FROM execution_operations WHERE id = ?",
                 id,
@@ -1249,7 +1273,7 @@ export const DbLive = (dbPath?: string) =>
         listExecutionOperations: (walletAddress, agentInstanceId) =>
           Effect.try({
             try: () =>
-              queryAll<Record<string, unknown>>(
+              queryAll<SqlRawRow>(
                 db,
                 `SELECT * FROM execution_operations
                WHERE wallet_address = ? AND agent_instance_id = ?
@@ -1318,7 +1342,7 @@ export const DbLive = (dbPath?: string) =>
         getSettlementJob: (id) =>
           Effect.try({
             try: () => {
-              const row = queryOne<Record<string, unknown>>(
+              const row = queryOne<SqlRawRow>(
                 db,
                 "SELECT * FROM settlement_jobs WHERE id = ?",
                 id,
@@ -1331,7 +1355,7 @@ export const DbLive = (dbPath?: string) =>
         listSettlementJobs: (walletAddress, agentInstanceId) =>
           Effect.try({
             try: () =>
-              queryAll<Record<string, unknown>>(
+              queryAll<SqlRawRow>(
                 db,
                 `SELECT * FROM settlement_jobs
                WHERE wallet_address = ? AND agent_instance_id = ?
@@ -1364,7 +1388,7 @@ export const DbLive = (dbPath?: string) =>
         getSafetyPause: (walletAddress, agentInstanceId) =>
           Effect.try({
             try: () => {
-              const row = queryOne<Record<string, unknown>>(
+              const row = queryOne<SqlRawRow>(
                 db,
                 `SELECT * FROM wallet_safety_pauses
                WHERE wallet_address = ? AND agent_instance_id = ?`,
@@ -1381,6 +1405,7 @@ export const DbLive = (dbPath?: string) =>
     }),
   );
 
+// oxlint-disable-next-line anti-slop/no-unknown-parameters -- DB enum column is read untyped; the exhaustive switch/throw IS the boundary parser.
 function parseTokenCandidateState(value: unknown): TokenCandidateState {
   switch (value) {
     case "discovered":
@@ -1399,6 +1424,7 @@ function parseTokenCandidateState(value: unknown): TokenCandidateState {
   }
 }
 
+// oxlint-disable-next-line anti-slop/no-unknown-parameters -- DB enum column is read untyped; the exhaustive switch/throw IS the boundary parser.
 function parseExecutionOperationType(value: unknown): ExecutionOperationType {
   switch (value) {
     case "entry":
@@ -1415,6 +1441,7 @@ function parseExecutionOperationType(value: unknown): ExecutionOperationType {
   }
 }
 
+// oxlint-disable-next-line anti-slop/no-unknown-parameters -- DB enum column is read untyped; the exhaustive switch/throw IS the boundary parser.
 function parseExecutionOperationStatus(value: unknown): ExecutionOperationStatus {
   switch (value) {
     case "planned":
@@ -1433,6 +1460,7 @@ function parseExecutionOperationStatus(value: unknown): ExecutionOperationStatus
   }
 }
 
+// oxlint-disable-next-line anti-slop/no-unknown-parameters -- DB enum column is read untyped; the exhaustive switch/throw IS the boundary parser.
 function parseSettlementJobStatus(value: unknown): SettlementJobStatus {
   switch (value) {
     case "pending":
@@ -1451,6 +1479,7 @@ function parseSettlementJobStatus(value: unknown): SettlementJobStatus {
   }
 }
 
+// oxlint-disable-next-line anti-slop/no-unknown-parameters -- DB enum column is read untyped; the equality check/throw IS the boundary parser.
 function parseSettlementAsset(value: unknown): SettlementAsset {
   if (value === "ETH") return value;
   throw new PersistenceContractError({
@@ -1460,7 +1489,7 @@ function parseSettlementAsset(value: unknown): SettlementAsset {
   });
 }
 
-function rowToTokenCandidate(row: Record<string, unknown>): TokenCandidateRecord {
+function rowToTokenCandidate(row: SqlRawRow): TokenCandidateRecord {
   return {
     id: String(row.id),
     walletAddress: String(row.wallet_address),
@@ -1480,7 +1509,7 @@ function rowToTokenCandidate(row: Record<string, unknown>): TokenCandidateRecord
   };
 }
 
-function rowToExecutionOperation(row: Record<string, unknown>): ExecutionOperationRecord {
+function rowToExecutionOperation(row: SqlRawRow): ExecutionOperationRecord {
   return {
     id: String(row.id),
     walletAddress: String(row.wallet_address),
@@ -1499,7 +1528,7 @@ function rowToExecutionOperation(row: Record<string, unknown>): ExecutionOperati
   };
 }
 
-function rowToSettlementJob(row: Record<string, unknown>): SettlementJobRecord {
+function rowToSettlementJob(row: SqlRawRow): SettlementJobRecord {
   return {
     id: String(row.id),
     walletAddress: String(row.wallet_address),
@@ -1526,7 +1555,7 @@ function rowToSettlementJob(row: Record<string, unknown>): SettlementJobRecord {
   };
 }
 
-function rowToSafetyPause(row: Record<string, unknown>): SafetyPauseRecord {
+function rowToSafetyPause(row: SqlRawRow): SafetyPauseRecord {
   return {
     walletAddress: String(row.wallet_address),
     agentInstanceId: String(row.agent_instance_id),
@@ -1536,7 +1565,7 @@ function rowToSafetyPause(row: Record<string, unknown>): SafetyPauseRecord {
   };
 }
 
-function rowToPosition(row: Record<string, unknown>): PositionRecord {
+function rowToPosition(row: SqlRawRow): PositionRecord {
   return {
     positionId: String(row.position_id),
     poolAddress: String(row.pool_address),
@@ -1575,7 +1604,7 @@ function rowToPosition(row: Record<string, unknown>): PositionRecord {
   };
 }
 
-function rowToPositionEvent(row: Record<string, unknown>): PositionEventRecord {
+function rowToPositionEvent(row: SqlRawRow): PositionEventRecord {
   return {
     id: String(row.id),
     poolAddress: String(row.pool_address),
@@ -1594,12 +1623,13 @@ function rowToPositionEvent(row: Record<string, unknown>): PositionEventRecord {
 // known members (legacy NULL, an unexpected literal) is treated as the
 // conservative, fail-closed "heuristic" — never silently upgraded to "datapi",
 // so an unknown provenance keeps the measured-fee-rate gate disabled on replay.
+// oxlint-disable-next-line anti-slop/no-unknown-parameters -- legacy reverse-proxy column read untyped; fail-closed fallback is the boundary contract.
 function parseStatsSource(value: unknown): "datapi" | "geckoterminal" | "heuristic" {
   if (value === "datapi" || value === "geckoterminal" || value === "heuristic") return value;
   return "heuristic";
 }
 
-function rowToSnapshot(row: Record<string, unknown>): PoolSnapshot {
+function rowToSnapshot(row: SqlRawRow): PoolSnapshot {
   return {
     poolAddress: String(row.pool_address),
     timestamp: Number(row.timestamp),
@@ -1617,7 +1647,7 @@ function rowToSnapshot(row: Record<string, unknown>): PoolSnapshot {
   };
 }
 
-function rowToAudit(row: Record<string, unknown>): AuditRecord {
+function rowToAudit(row: SqlRawRow): AuditRecord {
   return {
     id: String(row.id),
     timestamp: Number(row.timestamp ?? 0),
@@ -1635,7 +1665,8 @@ function rowToAudit(row: Record<string, unknown>): AuditRecord {
   };
 }
 
-function rowToFeedback(row: Record<string, unknown>): {
+/** Feedback row shape returned by the feedback read queries. */
+interface FeedbackRow {
   id: string;
   agentId: string;
   category: string;
@@ -1648,13 +1679,16 @@ function rowToFeedback(row: Record<string, unknown>): {
   githubIssueUrl: string | null;
   reportedAt: number;
   hash: string;
-} {
+}
+
+function rowToFeedback(row: SqlRawRow): FeedbackRow {
   const relatedRaw = row.related_files ? String(row.related_files as unknown) : null;
   let relatedFiles: ReadonlyArray<string> = [];
   if (relatedRaw) {
     try {
       const parsed = JSON.parse(relatedRaw) as unknown;
       if (Array.isArray(parsed)) {
+        // oxlint-disable-next-line anti-slop/no-runtime-typeof -- JSON.parse'd stored array elements are genuinely `unknown`; the element type-guard is the boundary parser.
         relatedFiles = parsed.filter((x): x is string => typeof x === "string");
       }
     } catch {

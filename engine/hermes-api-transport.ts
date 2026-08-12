@@ -121,13 +121,10 @@ export class HermesApiTransport implements AgentRuntimeTransport {
     return `${this.options.url.replace(/\/+$/, "")}/${segment}`;
   }
 
-  private authHeaders(): Record<string, string> {
-    const headers: Record<string, string> = {
-      "Content-Type": "application/json",
-    };
-    if (this.options.token) {
-      headers.Authorization = `Bearer ${this.options.token}`;
-    }
+  private authHeaders(): Headers {
+    const headers = new Headers();
+    headers.set("Content-Type", "application/json");
+    if (this.options.token) headers.set("Authorization", `Bearer ${this.options.token}`);
     return headers;
   }
 

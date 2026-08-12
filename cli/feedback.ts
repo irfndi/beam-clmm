@@ -108,6 +108,7 @@ async function runSubmit(feedback: AgentFeedback): Promise<FeedbackResult> {
       const service = yield* FeedbackService;
       return yield* service.submit(feedback);
     }).pipe(Effect.provide(program)),
+  // oxlint-disable-next-line anti-slop/no-unknown-parameters -- catch handler receives an inherently unknown thrown value at the promise boundary; normalized via instanceof/String before use.
   ).catch((err: unknown) => {
     const message = err instanceof Error ? err.message : String(err);
     logger.error(`Feedback submission crashed: ${message}`);
@@ -232,6 +233,7 @@ feedbackCommand
 
 // Default action: if `beam feedback "summary"` is run, behave like `submit`.
 feedbackCommand.action(async (summary: string, opts: SubmitOptions) => {
+  // oxlint-disable-next-line anti-slop/no-runtime-typeof -- Defensive guard on untyped CLI-arg input arriving at the parser boundary.
   if (typeof summary !== "string") {
     feedbackCommand.help();
     return;

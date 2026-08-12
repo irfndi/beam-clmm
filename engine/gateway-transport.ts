@@ -7,6 +7,7 @@ import { underlyingErrorMessage } from "./errors.js";
 /** v4 wraps tryPromise rejections in a generic UnknownError whose message hides
  * the real failure (e.g. "Gateway 1008: ...") — unwrap the cause chain so
  * operators keep seeing the actionable reason. */
+// oxlint-disable-next-line anti-slop/no-unknown-parameters -- catch callback receives unparsed rejection; unwrapped via underlyingErrorMessage guard
 const surfaceGatewayError = (error: unknown): Error =>
   new Error(underlyingErrorMessage(error), { cause: error });
 import type {
@@ -49,7 +50,7 @@ export interface GatewayTransportOptions {
   readonly timeoutMs: number;
 }
 
-interface GatewayErrorShape {
+interface GatewayErrorData {
   readonly code?: unknown;
   readonly message?: unknown;
 }
@@ -59,7 +60,7 @@ interface GatewayResFrame {
   readonly id: string;
   readonly ok: boolean;
   readonly payload?: unknown;
-  readonly error?: GatewayErrorShape;
+  readonly error?: GatewayErrorData;
 }
 
 interface GatewayEventFrame {
@@ -75,6 +76,7 @@ interface HelloOkPayload {
 }
 
 interface PendingRequest {
+  // oxlint-disable-next-line anti-slop/no-unknown-parameters -- resolve carries arbitrary network-parse payload; consumers guard the fields
   readonly resolve: (payload: unknown) => void;
   readonly reject: (reason: Error) => void;
 }
@@ -301,14 +303,16 @@ export class GatewayTransport implements AgentRuntimeTransport {
             if (hello.type !== HELLO_OK_TYPE) {
               throw new Error("Gateway rejected connect: expected hello-ok");
             }
-            if (typeof hello.protocol === "number" && hello.protocol < GATEWAY_PROTOCOL_VERSION) {
+            // oxlint-disable-next-line anti-slop/no-runtime-typeof -- runtime guard on unparsed connect-response protocol field
+  if (typeof hello.protocol === "number" && hello.protocol < GATEWAY_PROTOCOL_VERSION) {
               throw new Error(
                 `Gateway protocol ${hello.protocol} is below required ${GATEWAY_PROTOCOL_VERSION}; update the gateway to >= 2026.7.1`,
               );
             }
             const mainSessionKey = hello.snapshot?.sessionDefaults?.mainSessionKey;
             this.sessionKey =
-              typeof mainSessionKey === "string" ? mainSessionKey : FALLBACK_SESSION_KEY;
+              // oxlint-disable-next-line anti-slop/no-runtime-typeof -- runtime guard on unparsed connect-response session key
+  typeof mainSessionKey === "string" ? mainSessionKey : FALLBACK_SESSION_KEY;
             succeed();
           })
           .catch((err) => fail(err instanceof Error ? err : new Error(String(err))));
@@ -336,7 +340,7 @@ export class GatewayTransport implements AgentRuntimeTransport {
     });
   }
 
-  private buildConnectParams(): Record<string, unknown> {
+  private buildConnectParams() {
     return {
       minProtocol: GATEWAY_PROTOCOL_VERSION,
       maxProtocol: GATEWAY_PROTOCOL_VERSION,
@@ -396,7 +400,7 @@ export class GatewayTransport implements AgentRuntimeTransport {
       // rejection is still handled. Promise.all attaches a handler to both; otherwise an
       // awaited-alone run promise could reject with no handler and Bun would treat it as
       // an unhandled rejection, terminating the whole process rather than just the call.
-      const chatParams: Record<string, unknown> = {
+      const chatParams = {
         sessionKey: this.sessionKey,
         message,
         idempotencyKey: id,
@@ -413,6 +417,7 @@ export class GatewayTransport implements AgentRuntimeTransport {
 
   private request(
     method: string,
+    // oxlint-disable-next-line anti-slop/no-unsafe-dictionary-type -- outbound wire boundary; params are JSON.stringify'd to the socket, kept as an open dict of arbitrary method params
     params: Record<string, unknown>,
     timeoutMs?: number,
     id: string = crypto.randomUUID(),
@@ -505,8 +510,10 @@ export class GatewayTransport implements AgentRuntimeTransport {
     }
 
     if (frame.type === "res") {
+      // oxlint-disable-next-line anti-slop/no-chained-type-assertions -- JSON.parse boundary; cast unparsed frame to structured type after type-discriminating on frame.type
       this.handleRes(frame as unknown as GatewayResFrame);
     } else if (frame.type === "event") {
+      // oxlint-disable-next-line anti-slop/no-chained-type-assertions -- JSON.parse boundary; cast unparsed frame to structured type after type-discriminating on frame.type
       this.handleEvent(frame as unknown as GatewayEventFrame);
     }
   }
@@ -519,15 +526,18 @@ export class GatewayTransport implements AgentRuntimeTransport {
       pendingRequest.resolve(frame.payload);
       return;
     }
+    // oxlint-disable-next-line anti-slop/no-runtime-typeof -- runtime guard on unparsed error frame field
     const code = typeof frame.error?.code === "string" ? frame.error.code : "ERROR";
     const message =
-      typeof frame.error?.message === "string" ? frame.error.message : "request failed";
+      // oxlint-disable-next-line anti-slop/no-runtime-typeof -- runtime guard on unparsed error frame field
+    typeof frame.error?.message === "string" ? frame.error.message : "request failed";
     pendingRequest.reject(new Error(`Gateway ${code}: ${message}`));
   }
 
   private handleEvent(frame: GatewayEventFrame): void {
     if (frame.event === CONNECT_CHALLENGE_EVENT) {
       const payload = (frame.payload ?? {}) as { nonce?: unknown };
+      // oxlint-disable-next-line anti-slop/no-runtime-typeof -- runtime guard on unparsed challenge-frame nonce
       this.challengeSettle?.resolve(typeof payload.nonce === "string" ? payload.nonce : "");
       return;
     }
@@ -539,6 +549,7 @@ export class GatewayTransport implements AgentRuntimeTransport {
     // so the socket stays alive without a client-side keepalive loop.
   }
 
+// oxlint-disable-next-line anti-slop/no-unknown-parameters -- chat-event payload is unparsed network data; fields guarded below
   private handleChatEvent(payload: unknown): void {
     const p = (payload ?? {}) as {
       runId?: unknown;
@@ -547,11 +558,13 @@ export class GatewayTransport implements AgentRuntimeTransport {
       message?: unknown;
       error?: unknown;
     };
+    // oxlint-disable-next-line anti-slop/no-runtime-typeof -- runtime guard on unparsed chat-event runId
     const runId = typeof p.runId === "string" ? p.runId : null;
     if (!runId || !this.chatRuns.has(runId)) return;
 
     if (p.state === "delta") {
       const run = this.chatRuns.get(runId);
+      // oxlint-disable-next-line anti-slop/no-runtime-typeof -- runtime guard on unparsed chat-event delta text
       if (run && typeof p.deltaText === "string") run.text += p.deltaText;
       return;
     }
@@ -560,6 +573,7 @@ export class GatewayTransport implements AgentRuntimeTransport {
       const content = Array.isArray(message.content) ? message.content : [];
       const first = content[0] as { text?: unknown } | undefined;
       const finalText =
+        // oxlint-disable-next-line anti-slop/no-runtime-typeof -- runtime guard on unparsed chat-event content text
         first && typeof first.text === "string"
           ? first.text
           : (this.chatRuns.get(runId)?.text ?? "");
@@ -570,6 +584,7 @@ export class GatewayTransport implements AgentRuntimeTransport {
       const err = (p.error ?? {}) as { message?: unknown };
       this.failChatRun(
         runId,
+        // oxlint-disable-next-line anti-slop/no-runtime-typeof -- runtime guard on unparsed chat-event error message
         new Error(typeof err.message === "string" ? err.message : "agent run error"),
       );
       return;

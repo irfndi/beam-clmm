@@ -321,7 +321,7 @@ export function evaluateReplayPool(input: ReplayEvaluationInput): ReplayEvaluati
         enterRejected =
           `[weighted-score] score ${entryScore.toFixed(3)} <= threshold ${input.weightedEntryScoreThreshold}`;
       } else {
-        const allocation = evaluatePerPoolAllocation({
+        const allocationArgs = {
           proposedDepositUsd: input.proposedSizeUsd,
           portfolioValueUsd: input.portfolioValueUsd,
           openPositions: input.openPositions.map(toRiskPosition),
@@ -330,10 +330,11 @@ export function evaluateReplayPool(input: ReplayEvaluationInput): ReplayEvaluati
           poolAddress,
           maxPositionsPerPool: input.risk.maxPositionsPerPool,
           poolTvlUsd: input.poolTvlUsd,
-          ...(input.challengePoolShareCapPct !== undefined
-            ? { challengePoolShareCapPct: input.challengePoolShareCapPct }
-            : {}),
-        });
+        };
+        if (input.challengePoolShareCapPct !== undefined) {
+          Object.assign(allocationArgs, { challengePoolShareCapPct: input.challengePoolShareCapPct });
+        }
+        const allocation = evaluatePerPoolAllocation(allocationArgs);
         if (!allocation.approved) {
           enterRejected = `[alloc-gate] ${allocation.reason}`;
         } else {

@@ -358,6 +358,7 @@ describe("migration v16 — pnl_accounting", () => {
 
     const row = db
       .query("SELECT * FROM positions WHERE pool_address = ?")
+      // oxlint-disable-next-line anti-slop/no-unsafe-dictionary-type -- test value is genuinely heterogeneous data (raw DB row / wire-format JSON / capture array); no concrete owner exists
       .get("LegacyPool111") as Record<string, unknown> | null;
     expect(row).not.toBeNull();
     expect(Number(row!.deposited_usd)).toBe(1000);
@@ -523,6 +524,7 @@ describe("paper lifecycle PnL accounting", () => {
       Effect.gen(function* () {
         const db = yield* DbService;
         const result = yield* executePaper(
+          // oxlint-disable-next-line anti-slop/no-shape-in-symbol-names -- `entryStrategyShape` is a real engine field name required by the engine API; cannot be renamed without breaking the contract
           { db, trackedPositions, strategy: paperStrategy, entryStrategyShape: "spot" },
           {
             action: "ENTER",
@@ -569,6 +571,7 @@ describe("paper lifecycle PnL accounting", () => {
       Effect.gen(function* () {
         const db = yield* DbService;
         yield* executePaper(
+          // oxlint-disable-next-line anti-slop/no-shape-in-symbol-names -- `entryStrategyShape` is a real engine field name required by the engine API; cannot be renamed without breaking the contract
           { db, trackedPositions, strategy: paperStrategy, entryStrategyShape: "spot" },
           {
             action: "ENTER",
@@ -601,6 +604,7 @@ describe("paper lifecycle PnL accounting", () => {
         yield* db.savePosition(pos);
 
         const exitResult = yield* executePaper(
+          // oxlint-disable-next-line anti-slop/no-shape-in-symbol-names -- `entryStrategyShape` is a real engine field name required by the engine API; cannot be renamed without breaking the contract
           { db, trackedPositions, strategy: paperStrategy, entryStrategyShape: "spot" },
           { action: "EXIT", poolAddress: "pool1", confidence: 0.9, reasoning: "test exit" },
           { ...pool, currentPrice: 110 },
@@ -805,6 +809,7 @@ describe("live lifecycle PnL accounting", () => {
           revenueConfigSvc: liveRevenueConfig,
           trackedPositions,
           nativePriceUsd: 150,
+          // oxlint-disable-next-line anti-slop/no-shape-in-symbol-names -- `entryStrategyShape` is a real engine field name required by the engine API; cannot be renamed without breaking the contract
           entryStrategyShape: "spot" as const,
         };
 
@@ -916,6 +921,7 @@ describe("live lifecycle PnL accounting", () => {
           revenueConfigSvc: liveRevenueConfig,
           trackedPositions,
           nativePriceUsd: 150,
+          // oxlint-disable-next-line anti-slop/no-shape-in-symbol-names -- `entryStrategyShape` is a real engine field name required by the engine API; cannot be renamed without breaking the contract
           entryStrategyShape: "spot" as const,
         };
         const enter = yield* executeLive(
@@ -1110,6 +1116,7 @@ describe("live lifecycle PnL accounting", () => {
     const meta = JSON.parse(exitEvent.metadata ?? "{}") as {
       pricing?: string;
       lastMarkUsd?: number;
+      // oxlint-disable-next-line anti-slop/no-unsafe-dictionary-type -- test value is genuinely heterogeneous data (raw DB row / wire-format JSON / capture array); no concrete owner exists
       raw?: Record<string, unknown>;
     };
     expect(meta.pricing).toBe("unresolved");
@@ -1153,6 +1160,7 @@ describe("live lifecycle PnL accounting", () => {
             revenueConfigSvc: liveRevenueConfig,
             trackedPositions,
             nativePriceUsd: 150,
+            // oxlint-disable-next-line anti-slop/no-shape-in-symbol-names -- `entryStrategyShape` is a real engine field name required by the engine API; cannot be renamed without breaking the contract
             entryStrategyShape: "spot" as const,
             reconcileRequestedPools,
           },
@@ -1207,7 +1215,15 @@ describe("live lifecycle PnL accounting", () => {
               // The position is STILL OPEN on-chain — the failure was real.
               getAllWalletPositions: () =>
                 Effect.succeed([
-                  { poolAddress: "pool1", positionPubKey: "pos-1", lowerBinId: 0, upperBinId: 10, liquidityShares: 1n, tokensOwedX: 0n, tokensOwedY: 0n },
+                  {
+                    poolAddress: "pool1",
+                    positionPubKey: "pos-1",
+                    lowerBinId: 0,
+                    upperBinId: 10,
+                    liquidityShares: 1n,
+                    tokensOwedX: 0n,
+                    tokensOwedY: 0n,
+                  },
                 ]),
             }),
             strategy: liveStrategy,
@@ -1215,6 +1231,7 @@ describe("live lifecycle PnL accounting", () => {
             revenueConfigSvc: liveRevenueConfig,
             trackedPositions,
             nativePriceUsd: 150,
+            // oxlint-disable-next-line anti-slop/no-shape-in-symbol-names -- `entryStrategyShape` is a real engine field name required by the engine API; cannot be renamed without breaking the contract
             entryStrategyShape: "spot" as const,
             reconcileRequestedPools,
           },

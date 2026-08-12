@@ -31,7 +31,7 @@ function pool(overrides: Partial<PoolState> = {}): PoolState {
 // ─── parseGeckoPoolStats ──────────────────────────────────────────────────────
 
 describe("parseGeckoPoolStats", () => {
-  const attrs = (a: Record<string, unknown>): unknown => ({ data: { attributes: a } });
+  const attrs = (a: Record<string, unknown>): unknown => ({ data: { attributes: a } }); /* oxlint-disable-line anti-slop/no-unsafe-dictionary-type, anti-slop/no-known-value-widening */
 
   it("parses a valid payload with string numeric fields and derives fees from baseFeeRate", () => {
     const raw = attrs({
@@ -111,7 +111,7 @@ describe("enrichPoolFromGecko", () => {
     expect(enriched.fees24hUsd).toBe(12.5);
     expect(enriched.statsSource).toBe("geckoterminal");
     // APR = (12.5 * 365 / 100000) * 100
-    expect(enriched.apr).toBeCloseTo((12.5 * 365) / 100000 * 100, 6);
+    expect(enriched.apr).toBeCloseTo(((12.5 * 365) / 100000) * 100, 6);
   });
 
   it("clears farm signals and keeps the original APR when TVL/fees are non-positive", () => {

@@ -23,6 +23,7 @@ export function setBeamEntryScriptOverride(entry: string | undefined): void {
 
 function resolveEntryScript(): string {
   if (entryScriptOverride !== undefined) return entryScriptOverride;
+  // oxlint-disable-next-line anti-slop/no-runtime-typeof -- env guard for Bun runtime presence
   if (typeof Bun !== "undefined" && Bun.main) {
     return Bun.main;
   }

@@ -467,10 +467,12 @@ export interface AgentRebalanceCapitalGateInput {
  * agent-originated REBALANCE so advisors cannot bypass min-interval, gas, or
  * OOR recovery holds that protect the deterministic path.
  */
-export function evaluateAgentRebalanceCapitalGates(input: AgentRebalanceCapitalGateInput): {
+export interface CapitalGateVerdict {
   readonly approved: boolean;
   readonly reason: string;
-} {
+}
+
+export function evaluateAgentRebalanceCapitalGates(input: AgentRebalanceCapitalGateInput): CapitalGateVerdict {
   const timeSinceRebal = input.now - input.lastRebalanceAt;
   if (timeSinceRebal < input.minRebalanceIntervalMs && !input.oorGraceExpired) {
     return {

@@ -566,6 +566,7 @@ async function runBacktest(argv: ReadonlyArray<string>): Promise<void> {
 export { runBacktest };
 
 const isDirectBacktestExecution =
+  // oxlint-disable-next-line anti-slop/no-runtime-typeof -- Env guard: probes the Bun global to decide whether this file is being run directly.
   typeof Bun !== "undefined" &&
   (Bun.main?.endsWith("ops/backtest.ts") || Bun.main?.endsWith("ops/backtest.js"));
 if (isDirectBacktestExecution) {

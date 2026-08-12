@@ -370,6 +370,7 @@ describe("migration v18 (multi-position)", () => {
       .query(
         "SELECT position_id, pool_address, position_pubkey, deposited_usd, current_value_usd, entry_price_usd, cumulative_fees_claimed_usd FROM positions ORDER BY pool_address",
       )
+      // oxlint-disable-next-line anti-slop/no-unsafe-dictionary-type -- test value is genuinely heterogeneous data (raw DB row / wire-format JSON / capture array); no concrete owner exists
       .all() as Array<Record<string, unknown>>;
 
     expect(rows).toHaveLength(2);
@@ -691,6 +692,7 @@ function makePaperDb() {
     saved: [] as PositionRecord[],
     closed: [] as Array<{ id: string; pnl: number | null }>,
     paperExited: [] as string[],
+    // oxlint-disable-next-line anti-slop/no-unsafe-dictionary-type -- test value is genuinely heterogeneous data (raw DB row / wire-format JSON / capture array); no concrete owner exists
     events: [] as Array<Record<string, unknown>>,
   };
   const db = {
@@ -698,6 +700,7 @@ function makePaperDb() {
       Effect.sync(() => {
         calls.saved.push(pos);
       }),
+    // oxlint-disable-next-line anti-slop/no-unsafe-dictionary-type -- test value is genuinely heterogeneous data (raw DB row / wire-format JSON / capture array); no concrete owner exists
     savePositionEvent: (evt: Record<string, unknown>) =>
       Effect.sync(() => {
         calls.events.push(evt);
@@ -757,6 +760,7 @@ describe("executePaper — two positions on one pool", () => {
 
     Effect.runSync(
       executePaper(
+        // oxlint-disable-next-line anti-slop/no-shape-in-symbol-names -- `entryStrategyShape` is a real engine field name required by the engine API; cannot be renamed without breaking the contract
         { db: db as never, trackedPositions, strategy, entryStrategyShape: "spot" },
         enterDecision(1000),
         paperPool,
@@ -764,6 +768,7 @@ describe("executePaper — two positions on one pool", () => {
     );
     Effect.runSync(
       executePaper(
+        // oxlint-disable-next-line anti-slop/no-shape-in-symbol-names -- `entryStrategyShape` is a real engine field name required by the engine API; cannot be renamed without breaking the contract
         { db: db as never, trackedPositions, strategy, entryStrategyShape: "spot" },
         enterDecision(800),
         paperPool,
@@ -787,6 +792,7 @@ describe("executePaper — two positions on one pool", () => {
 
     Effect.runSync(
       executePaper(
+        // oxlint-disable-next-line anti-slop/no-shape-in-symbol-names -- `entryStrategyShape` is a real engine field name required by the engine API; cannot be renamed without breaking the contract
         { db: db as never, trackedPositions, strategy, entryStrategyShape: "spot" },
         enterDecision(1000),
         paperPool,
@@ -794,6 +800,7 @@ describe("executePaper — two positions on one pool", () => {
     );
     Effect.runSync(
       executePaper(
+        // oxlint-disable-next-line anti-slop/no-shape-in-symbol-names -- `entryStrategyShape` is a real engine field name required by the engine API; cannot be renamed without breaking the contract
         { db: db as never, trackedPositions, strategy, entryStrategyShape: "spot" },
         enterDecision(800),
         paperPool,
@@ -815,6 +822,7 @@ describe("executePaper — two positions on one pool", () => {
     };
     const result = Effect.runSync(
       executePaper(
+        // oxlint-disable-next-line anti-slop/no-shape-in-symbol-names -- `entryStrategyShape` is a real engine field name required by the engine API; cannot be renamed without breaking the contract
         { db: db as never, trackedPositions, strategy, entryStrategyShape: "spot" },
         exitA,
         paperPool,
@@ -849,6 +857,7 @@ describe("executePaper — two positions on one pool", () => {
     for (const size of [1000, 800]) {
       Effect.runSync(
         executePaper(
+          // oxlint-disable-next-line anti-slop/no-shape-in-symbol-names -- `entryStrategyShape` is a real engine field name required by the engine API; cannot be renamed without breaking the contract
           { db: db as never, trackedPositions, strategy, entryStrategyShape: "spot" },
           enterDecision(size),
           paperPool,
@@ -867,6 +876,7 @@ describe("executePaper — two positions on one pool", () => {
     };
     Effect.runSync(
       executePaper(
+        // oxlint-disable-next-line anti-slop/no-shape-in-symbol-names -- `entryStrategyShape` is a real engine field name required by the engine API; cannot be renamed without breaking the contract
         { db: db as never, trackedPositions, strategy, entryStrategyShape: "spot" },
         rebalance,
         paperPool,
@@ -935,6 +945,7 @@ describe("executeLive — two positions on one pool", () => {
       trackedPositions,
       entryPrep: { prepareEntryTokens: () => Effect.succeed(undefined) } as never,
       nativePriceUsd: 150,
+      // oxlint-disable-next-line anti-slop/no-shape-in-symbol-names -- `entryStrategyShape` is a real engine field name required by the engine API; cannot be renamed without breaking the contract
       entryStrategyShape: "spot" as const,
     };
 
@@ -1020,8 +1031,24 @@ describe("reconcilePositions — multiple positions per pool", () => {
         const adapter = makeReconcileAdapter({
           getAllWalletPositions: () =>
             Effect.succeed([
-              { poolAddress: POOL, positionPubKey: "pk-A", lowerBinId: 4980, upperBinId: 5020, liquidityShares: 1n, tokensOwedX: 0n, tokensOwedY: 0n },
-              { poolAddress: POOL, positionPubKey: "pk-B", lowerBinId: 4980, upperBinId: 5020, liquidityShares: 1n, tokensOwedX: 0n, tokensOwedY: 0n },
+              {
+                poolAddress: POOL,
+                positionPubKey: "pk-A",
+                lowerBinId: 4980,
+                upperBinId: 5020,
+                liquidityShares: 1n,
+                tokensOwedX: 0n,
+                tokensOwedY: 0n,
+              },
+              {
+                poolAddress: POOL,
+                positionPubKey: "pk-B",
+                lowerBinId: 4980,
+                upperBinId: 5020,
+                liquidityShares: 1n,
+                tokensOwedX: 0n,
+                tokensOwedY: 0n,
+              },
             ]),
         });
         yield* reconcilePositions(adapter, db, noopMemory, tracked, [POOL]);
@@ -1050,7 +1077,15 @@ describe("reconcilePositions — multiple positions per pool", () => {
           getAllWalletPositions: () =>
             Effect.succeed([
               // pk-A vanished (closed via the Meteora UI); pk-B is still there.
-              { poolAddress: POOL, positionPubKey: "pk-B", lowerBinId: 4980, upperBinId: 5020, liquidityShares: 1n, tokensOwedX: 0n, tokensOwedY: 0n },
+              {
+                poolAddress: POOL,
+                positionPubKey: "pk-B",
+                lowerBinId: 4980,
+                upperBinId: 5020,
+                liquidityShares: 1n,
+                tokensOwedX: 0n,
+                tokensOwedY: 0n,
+              },
             ]),
         });
         yield* reconcilePositions(adapter, db, noopMemory, tracked, [POOL]);
@@ -1079,8 +1114,24 @@ describe("reconcilePositions — multiple positions per pool", () => {
         const adapter = makeReconcileAdapter({
           getAllWalletPositions: () =>
             Effect.succeed([
-              { poolAddress: POOL, positionPubKey: "pk-A", lowerBinId: 4990, upperBinId: 5030, liquidityShares: 1n, tokensOwedX: 0n, tokensOwedY: 0n },
-              { poolAddress: POOL, positionPubKey: "pk-B", lowerBinId: 4980, upperBinId: 5020, liquidityShares: 1n, tokensOwedX: 0n, tokensOwedY: 0n },
+              {
+                poolAddress: POOL,
+                positionPubKey: "pk-A",
+                lowerBinId: 4990,
+                upperBinId: 5030,
+                liquidityShares: 1n,
+                tokensOwedX: 0n,
+                tokensOwedY: 0n,
+              },
+              {
+                poolAddress: POOL,
+                positionPubKey: "pk-B",
+                lowerBinId: 4980,
+                upperBinId: 5020,
+                liquidityShares: 1n,
+                tokensOwedX: 0n,
+                tokensOwedY: 0n,
+              },
             ]),
         });
         yield* reconcilePositions(adapter, db, noopMemory, tracked, [POOL]);
@@ -1123,8 +1174,24 @@ describe("reconcilePositions — multiple positions per pool", () => {
         const adapter = makeReconcileAdapter({
           getAllWalletPositions: () =>
             Effect.succeed([
-              { poolAddress: POOL, positionPubKey: "pk-A", lowerBinId: 4980, upperBinId: 5020, liquidityShares: 1n, tokensOwedX: 0n, tokensOwedY: 0n },
-              { poolAddress: POOL, positionPubKey: "pk-C", lowerBinId: 4900, upperBinId: 5100, liquidityShares: 1n, tokensOwedX: 0n, tokensOwedY: 0n },
+              {
+                poolAddress: POOL,
+                positionPubKey: "pk-A",
+                lowerBinId: 4980,
+                upperBinId: 5020,
+                liquidityShares: 1n,
+                tokensOwedX: 0n,
+                tokensOwedY: 0n,
+              },
+              {
+                poolAddress: POOL,
+                positionPubKey: "pk-C",
+                lowerBinId: 4900,
+                upperBinId: 5100,
+                liquidityShares: 1n,
+                tokensOwedX: 0n,
+                tokensOwedY: 0n,
+              },
             ]),
           getPoolState: () => Effect.succeed(poolState),
         });
@@ -1161,8 +1228,11 @@ describe("per-position alert cooldowns", () => {
   });
 
   it("OOR alerts for two positions on one pool do not share a cooldown", async () => {
+    // oxlint-disable-next-line anti-slop/no-unsafe-dictionary-type -- test value is genuinely heterogeneous data (raw DB row / wire-format JSON / capture array); no concrete owner exists
     const posts: Array<Record<string, unknown>> = [];
+    // oxlint-disable-next-line anti-slop/no-unknown-parameters -- helper accepts a genuinely-dynamic test value (layer/body/error/fetch mock) with no static contract
     const restore = mockFetch((_url: unknown, init: { body?: string } = {}) => {
+      // oxlint-disable-next-line anti-slop/no-unsafe-dictionary-type -- test value is genuinely heterogeneous data (raw DB row / wire-format JSON / capture array); no concrete owner exists
       posts.push(JSON.parse(init.body ?? "{}") as Record<string, unknown>);
       return Promise.resolve(new Response("{}", { status: 200 }));
     });
@@ -1368,7 +1438,10 @@ function makeProgramLayer(opts: {
     Layer.succeed(McpServerService, { start: () => Effect.void, stop: () => Effect.void }),
     Layer.succeed(HttpStatusServerService, { start: () => Effect.void, stop: () => Effect.void }),
     Layer.succeed(EntryPrepService, { prepareEntryTokens: () => Effect.succeed(undefined) }),
-    Layer.succeed(KrystalService, { getPoolStats: () => Effect.succeed(null), getUniverse: () => Effect.succeed(new Map()) }),
+    Layer.succeed(KrystalService, {
+      getPoolStats: () => Effect.succeed(null),
+      getUniverse: () => Effect.succeed(new Map()),
+    }),
     Layer.succeed(GeckoTerminalService, opts.gecko ?? { getPoolStats: () => Effect.succeed(null) }),
     Layer.succeed(AlertService, {
       sendAlert: () => Effect.void,
@@ -1400,6 +1473,7 @@ describe("program — multiple positions per pool", () => {
       return { positions, decisions, events };
     });
     const { positions, decisions, events } = await Effect.runPromise(
+      // oxlint-disable-next-line anti-slop/no-chained-type-assertions -- test-only hard cast of a partial stub/generic expression to a full interface/Effect type; single `as` is impossible without fabricating the full type
       Effect.provide(test, layer) as unknown as Effect.Effect<
         {
           positions: ReadonlyArray<PositionRecord>;
@@ -1411,7 +1485,11 @@ describe("program — multiple positions per pool", () => {
       >,
     );
 
-    console.log("DECISIONS:", JSON.stringify(decisions, (_, v) => typeof v === "bigint" ? v.toString() : v));
+    console.log(
+      "DECISIONS:",
+      // oxlint-disable-next-line anti-slop/no-runtime-typeof -- runtime typeof assertion on a genuinely-dynamic test value / real union narrowing, not a type alias
+      JSON.stringify(decisions, (_, v) => (typeof v === "bigint" ? v.toString() : v)),
+    );
 
     // Two positions on the same pool, keyed by distinct synthetic ids.
     expect(positions).toHaveLength(2);
@@ -1451,6 +1529,7 @@ describe("program — multiple positions per pool", () => {
       return { positions, decisions };
     });
     const { positions, decisions } = await Effect.runPromise(
+      // oxlint-disable-next-line anti-slop/no-chained-type-assertions -- test-only hard cast of a partial stub/generic expression to a full interface/Effect type; single `as` is impossible without fabricating the full type
       Effect.provide(test, layer) as unknown as Effect.Effect<
         {
           positions: ReadonlyArray<PositionRecord>;
@@ -1553,6 +1632,7 @@ describe("program — multiple positions per pool", () => {
       return { active, closed, events, decisions };
     });
     const { active, closed, events, decisions } = await Effect.runPromise(
+      // oxlint-disable-next-line anti-slop/no-chained-type-assertions -- test-only hard cast of a partial stub/generic expression to a full interface/Effect type; single `as` is impossible without fabricating the full type
       Effect.provide(test, layer) as unknown as Effect.Effect<
         {
           active: ReadonlyArray<PositionRecord>;
@@ -1568,7 +1648,6 @@ describe("program — multiple positions per pool", () => {
         never
       >,
     );
-
 
     // A.s value collapsed past the trailing stop and it exited. B is in range
     // and untouched.
@@ -1655,6 +1734,7 @@ describe("program — multiple positions per pool", () => {
       return { active, closed, decisions };
     });
     const { active, closed, decisions } = await Effect.runPromise(
+      // oxlint-disable-next-line anti-slop/no-chained-type-assertions -- test-only hard cast of a partial stub/generic expression to a full interface/Effect type; single `as` is impossible without fabricating the full type
       Effect.provide(test, layer) as unknown as Effect.Effect<
         {
           active: ReadonlyArray<PositionRecord>;
@@ -1780,6 +1860,7 @@ describe("program — multiple positions per pool", () => {
       return { active, closed, decisions };
     });
     const { active, closed, decisions } = await Effect.runPromise(
+      // oxlint-disable-next-line anti-slop/no-chained-type-assertions -- test-only hard cast of a partial stub/generic expression to a full interface/Effect type; single `as` is impossible without fabricating the full type
       Effect.provide(test, layer) as unknown as Effect.Effect<
         {
           active: ReadonlyArray<PositionRecord>;
@@ -1837,6 +1918,7 @@ describe("program — multiple positions per pool", () => {
       return { persisted, decisions };
     });
     const { persisted, decisions } = await Effect.runPromise(
+      // oxlint-disable-next-line anti-slop/no-chained-type-assertions -- test-only hard cast of a partial stub/generic expression to a full interface/Effect type; single `as` is impossible without fabricating the full type
       Effect.provide(test, layer) as unknown as Effect.Effect<
         {
           persisted: PositionRecord | null;
@@ -1944,6 +2026,7 @@ describe("program — multiple positions per pool", () => {
       return decisions;
     });
     const decisions = await Effect.runPromise(
+      // oxlint-disable-next-line anti-slop/no-chained-type-assertions -- test-only hard cast of a partial stub/generic expression to a full interface/Effect type; single `as` is impossible without fabricating the full type
       Effect.provide(test, layer) as unknown as Effect.Effect<
         ReadonlyArray<{ action: string; executed: boolean; poolAddress: string }>,
         Error,
@@ -1987,7 +2070,7 @@ describe("A4 paper fee accrual requires datapi-MEASURED fees", () => {
       adapter: makeProgramAdapter({
         [POOL]: makePool({ address: POOL, fees24hUsd: 400, statsSource: opts.statsSource }),
       }),
-      ...(opts.gecko !== undefined ? { gecko: opts.gecko } : {}),
+      gecko: opts.gecko ?? { getPoolStats: () => Effect.succeed(null) },
       configOverrides: {
         watchlistPools: [POOL],
         paperTrading: true,
@@ -2011,6 +2094,7 @@ describe("A4 paper fee accrual requires datapi-MEASURED fees", () => {
       return { accruals, accruedUsd: pos?.cumulativeFeesClaimedUsd ?? 0 };
     });
     return Effect.runPromise(
+      // oxlint-disable-next-line anti-slop/no-chained-type-assertions -- test-only hard cast of a partial stub/generic expression to a full interface/Effect type; single `as` is impossible without fabricating the full type
       Effect.provide(test, layer) as unknown as Effect.Effect<
         { accruals: ReadonlyArray<{ feesUsd: number | null }>; accruedUsd: number },
         Error,
@@ -2027,7 +2111,6 @@ describe("A4 paper fee accrual requires datapi-MEASURED fees", () => {
     ).toHaveLength(0);
     expect(accruedUsd).toBe(0);
   }, 15_000);
-
 
   it("the same pool with geckoterminal stats accrues NOTHING (fees are modeled, not measured)", async () => {
     // GeckoTerminal fees are a binStep base-rate MODEL on real volume

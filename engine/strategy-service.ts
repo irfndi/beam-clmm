@@ -3,6 +3,7 @@ import { TickMath } from "@uniswap/v3-sdk";
 import { StrategyService, type StrategyApi } from "./services.js";
 import type {
   BinArray,
+  // oxlint-disable-next-line anti-slop/no-shape-in-symbol-names -- public type, renaming ripples to out-of-scope program.ts/tests
   EntryStrategyShape,
   PoolMetrics,
   PoolState,
@@ -18,6 +19,22 @@ import { isMeasuredStatsSource } from "./types.js";
  * vacuous. Kept in sync with the weightedEntryScore cap below.
  */
 export const MAX_FEE_IL_RATIO = 20;
+
+export interface VolumeAuthenticityResult {
+  readonly score: number;
+  readonly flags: ReadonlyArray<string>;
+}
+
+export interface BinRangeRecommendation {
+  readonly lowerBinId: number;
+  readonly upperBinId: number;
+}
+
+export interface VolatilityRangeRecommendation {
+  readonly lowerBinId: number;
+  readonly upperBinId: number;
+  readonly halfWidth: number;
+}
 
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 
@@ -209,10 +226,7 @@ export const DLMMStrategy: StrategyApi = {
   checkVolumeAuthenticity(
     pool: PoolState,
     feesMeasured: boolean,
-  ): {
-    score: number;
-    flags: ReadonlyArray<string>;
-  } {
+  ): VolumeAuthenticityResult {
     const flags: string[] = [];
     let score = 1.0;
 
@@ -285,7 +299,7 @@ export const DLMMStrategy: StrategyApi = {
     activeBinId: number,
     binStep: number,
     halfWidthOverride?: number,
-  ): { lowerBinId: number; upperBinId: number } {
+  ): BinRangeRecommendation {
     const halfWidth = halfWidthOverride ?? baselineHalfWidthForBinStep(binStep);
     // Align to the pool's tick spacing (usable ticks — the SDK Position ctor
     // rejects unaligned bounds with TICK_LOWER/TICK_UPPER) and clamp to the
@@ -357,7 +371,7 @@ export function recommendBinRangeForVolatility(
   highVolatility: boolean,
   wideHalfWidth = 50,
   baseHalfWidthOverride?: number,
-): { lowerBinId: number; upperBinId: number; halfWidth: number } {
+): VolatilityRangeRecommendation {
   const baseHalfWidth = baseHalfWidthOverride ?? baselineHalfWidthForBinStep(binStep);
   const halfWidth = highVolatility ? Math.max(baseHalfWidth * 2, wideHalfWidth) : baseHalfWidth;
   return {
@@ -448,10 +462,12 @@ export function resolveRangeHalfWidth(args: {
  * - Calm / mean-reverting (default, including no history yet) → `curve`,
  *   concentrated around the active bin for maximum fee capture.
  */
+// oxlint-disable-next-line anti-slop/no-shape-in-symbol-names -- public API fn, renaming ripples to out-of-scope program.ts/tests
 export function recommendStrategyShape(args: {
   readonly volatilityStddev: number;
   readonly highVolThreshold: number;
   readonly netDriftBins: number;
+// oxlint-disable-next-line anti-slop/no-shape-in-symbol-names -- public return type EntryStrategyShape, renaming ripples to out-of-scope files
 }): EntryStrategyShape {
   const trendDominates = Math.abs(args.netDriftBins) >= Math.max(3, 2 * args.volatilityStddev);
   if (trendDominates) return "bidask";
@@ -524,6 +540,11 @@ export function computeSignalLift(
  * Returns the (possibly updated) thresholds and whether any changed.
  * Defaults: evolutionInterval=5, maxChangePct=0.20, minOutcomes=5.
  */
+export interface EvolveThresholdsResult {
+  readonly thresholds: EvolvableThresholds;
+  readonly changed: boolean;
+}
+
 export function evolveThresholds(
   outcomes: ReadonlyArray<OutcomeRecord>,
   current: EvolvableThresholds,
@@ -531,7 +552,7 @@ export function evolveThresholds(
     readonly maxChangePct?: number;
     readonly minOutcomes?: number;
   },
-): { readonly thresholds: EvolvableThresholds; readonly changed: boolean } {
+): EvolveThresholdsResult {
   const minOutcomes = options?.minOutcomes ?? 5;
   if (outcomes.length < minOutcomes) {
     return { thresholds: current, changed: false };

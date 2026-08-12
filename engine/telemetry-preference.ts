@@ -29,11 +29,13 @@ export function readTelemetryPreference(): TelemetryPreference {
     }
     const raw = readFileSync(path, "utf-8");
     const parsed = JSON.parse(raw) as Partial<TelemetryPreference>;
+    // oxlint-disable-next-line anti-slop/no-runtime-typeof -- guard validates external JSON read from config file at I/O boundary
     if (typeof parsed.enabled !== "boolean") {
       return { enabled: true, updatedAt: new Date().toISOString() };
     }
     return {
       enabled: parsed.enabled,
+      // oxlint-disable-next-line anti-slop/no-runtime-typeof -- guard validates external JSON field from config file at I/O boundary
       updatedAt: typeof parsed.updatedAt === "string" ? parsed.updatedAt : new Date().toISOString(),
     };
   } catch (error) {
@@ -43,10 +45,12 @@ export function readTelemetryPreference(): TelemetryPreference {
   }
 }
 
-export function writeTelemetryPreference(enabled: boolean): {
+export interface TelemetryWriteResult {
   readonly ok: boolean;
   readonly error?: string;
-} {
+}
+
+export function writeTelemetryPreference(enabled: boolean): TelemetryWriteResult {
   const path = getTelemetryPreferencePath();
   const dir = dirname(path);
   try {

@@ -39,6 +39,7 @@ describe("telemetry preference file I/O", () => {
   it("readTelemetryPreference returns the written (disabled) preference", () => {
     const read = readTelemetryPreference();
     expect(read.enabled).toBe(false);
+    // oxlint-disable-next-line anti-slop/no-runtime-typeof -- runtime typeof assertion on a genuinely-dynamic test value / real union narrowing, not a type alias
     expect(typeof read.updatedAt).toBe("string");
     const parsed = Date.parse(read.updatedAt);
     expect(Number.isFinite(parsed)).toBe(true);

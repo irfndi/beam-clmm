@@ -1,5 +1,8 @@
 import { describe, it, expect } from "vitest";
-import { advanceScreenedCandidates, type AdvanceScreenedCandidatesInput } from "../engine/candidate-discovery.js";
+import {
+  advanceScreenedCandidates,
+  type AdvanceScreenedCandidatesInput,
+} from "../engine/candidate-discovery.js";
 import { createTokenCandidate } from "../engine/candidate-policy.js";
 import { NATIVE_MINT } from "../engine/constants.js";
 import type { ScreenedPool, TokenPriceEvidence } from "../engine/services.js";
@@ -30,7 +33,9 @@ function bothEvidence(observedAt = 1_500): TokenPriceEvidence[] {
   return [evidence("0xToken", observedAt), evidence(NATIVE_MINT, observedAt)];
 }
 
-function input(overrides: Partial<AdvanceScreenedCandidatesInput> = {}): AdvanceScreenedCandidatesInput {
+function input(
+  overrides: Partial<AdvanceScreenedCandidatesInput> = {},
+): AdvanceScreenedCandidatesInput {
   return {
     walletAddress: "wallet-1",
     agentInstanceId: "agent-1",

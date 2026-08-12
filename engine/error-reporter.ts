@@ -46,6 +46,7 @@ export interface ErrorReport {
   readonly severity: ErrorSeverity;
   readonly cycleId?: string;
   readonly poolAddress?: string;
+  // oxlint-disable-next-line anti-slop/no-unsafe-dictionary-type -- error metadata is intentionally arbitrary key/value context captured at the throw site
   readonly metadata?: Record<string, unknown>;
 }
 
@@ -78,6 +79,7 @@ function readBeamApiKey(): Effect.Effect<string | null, never> {
       const value = JSON.parse(readFileSync(credentialsFile, "utf-8")) as {
         apiKey?: unknown;
       };
+      // oxlint-disable-next-line anti-slop/no-runtime-typeof -- runtime guard on unparsed credentials JSON field
       return typeof value.apiKey === "string" && value.apiKey.length > 0 ? value.apiKey : null;
     },
     catch: (cause) => (cause instanceof Error ? cause : new Error(String(cause))),
@@ -181,8 +183,10 @@ export class ErrorReporter {
   constructor(config: ErrorReporterConfig = {}) {
     const explicitEndpoint =
       config.endpoint ??
+      // oxlint-disable-next-line anti-slop/no-runtime-typeof -- env guard for Node/Bun-compatible builds
       (typeof process !== "undefined" ? process.env.BEAM_ERROR_ENDPOINT : undefined);
     const reportingEnv =
+      // oxlint-disable-next-line anti-slop/no-runtime-typeof -- env guard for Node/Bun-compatible builds
       typeof process !== "undefined" ? process.env.BEAM_ERROR_REPORTING : undefined;
     const optOut = config.optOut ?? !readTelemetryPreference().enabled;
     const explicitEnabled = config.enabled ?? reportingEnv !== "false";
@@ -200,6 +204,7 @@ export class ErrorReporter {
         Effect.runFork(this.flushEffect());
       }, this.flushIntervalMs);
       // Allow the process to exit even if the timer is still active
+      // oxlint-disable-next-line anti-slop/no-runtime-typeof -- presence-check on the typed setInterval return to guard unref availability
       if (typeof this.timerId === "object" && this.timerId !== null && "unref" in this.timerId) {
         (this.timerId as NodeJS.Timeout).unref();
       }
@@ -227,9 +232,9 @@ export class ErrorReporter {
       stack: sanitizedStack,
       category,
       severity: context?.severity ?? "medium",
-      ...(context?.cycleId !== undefined ? { cycleId: context.cycleId } : {}),
-      ...(context?.poolAddress !== undefined ? { poolAddress: context.poolAddress } : {}),
     };
+    if (context?.cycleId !== undefined) Object.assign(report, { cycleId: context.cycleId });
+    if (context?.poolAddress !== undefined) Object.assign(report, { poolAddress: context.poolAddress });
 
     if (this.pending.length >= MAX_PENDING_BUFFER) {
       this.pending.shift();
@@ -270,12 +275,10 @@ export class ErrorReporter {
         version: this.appVersion,
         reports: batch,
       };
-      const headers: Record<string, string> = {
+      const headers = {
         "Content-Type": "application/json",
       };
-      if (apiKey) {
-        headers.Authorization = `Bearer ${apiKey}`;
-      }
+      if (apiKey) Object.assign(headers, { Authorization: `Bearer ${apiKey}` });
       const response = yield* Effect.tryPromise({
         try: () =>
           fetch(endpoint, {

@@ -50,26 +50,30 @@ interface ManifestResult {
   status: number;
   stdout: string;
   stderr: string;
+  // oxlint-disable-next-line anti-slop/no-unsafe-dictionary-type -- manifest is arbitrary parsed JSON; no concrete value type exists in the fixture
   manifest: Record<string, unknown> | null;
   dir: string;
 }
 
-function runManifest(
-  opts: { version: string; files: string[]; requireAllBundles?: boolean },
-): ManifestResult {
+function runManifest(opts: {
+  version: string;
+  files: string[];
+  requireAllBundles?: boolean;
+}): ManifestResult {
   const dir = mkdtempSync(path.join(sandbox, "run-"));
   for (const file of opts.files) {
     writeFileSync(path.join(dir, file), "fixture");
   }
-  const env: Record<string, string> = {
+  const env = {
     ...(process.env as Record<string, string>),
     VERSION: opts.version,
     R2_BASE_URL: R2_BASE,
     OUT_FILE: "manifest.json",
-  };
-  if (opts.requireAllBundles !== undefined) {
-    env.REQUIRE_ALL_BUNDLES = String(opts.requireAllBundles);
-  }
+    // oxlint-disable-next-line anti-slop/no-conditional-empty-object-spread -- conditionally add the optional flag key to the spawned env when set
+    ...(opts.requireAllBundles !== undefined
+      ? { REQUIRE_ALL_BUNDLES: String(opts.requireAllBundles) }
+      : {}),
+  } satisfies Record<string, string>;
   const res = spawnSync(process.execPath, [MANIFEST_SCRIPT], {
     cwd: dir,
     env,
@@ -81,14 +85,18 @@ function runManifest(
   const stderr = String(res.stderr ?? "");
   const manifestFile = path.join(dir, "manifest.json");
   const manifest = existsSync(manifestFile)
-    ? (JSON.parse(readFileSync(manifestFile, "utf8")) as Record<string, unknown>)
+    ? // oxlint-disable-next-line anti-slop/no-unsafe-dictionary-type -- parsed manifest.json is heterogeneous JSON from an external file
+      (JSON.parse(readFileSync(manifestFile, "utf8")) as Record<string, unknown>)
     : null;
   return { status, stdout, stderr, manifest, dir };
 }
 
 function happyPathFiles(version: string): string[] {
   return [
-    ...PLATFORMS.flatMap((p) => [`beam-v${version}-${p}.tar.gz`, `beam-v${version}-${p}.tar.gz.sha256`]),
+    ...PLATFORMS.flatMap((p) => [
+      `beam-v${version}-${p}.tar.gz`,
+      `beam-v${version}-${p}.tar.gz.sha256`,
+    ]),
     `beam-v${version}.tar.gz`,
     `beam-v${version}.tar.gz.sha256`,
   ];
@@ -117,7 +125,9 @@ describe("scripts/generate-release-manifest.ts — bundle filtering", () => {
     expect(m.channel).toBe("stable");
     const bundles = m.bundles as Record<string, { url: string; sha256_url: string }>;
     expect(Object.keys(bundles).sort()).toEqual([...PLATFORMS].sort());
-    expect(bundles["linux-x64"]!.url).toBe(`${R2_BASE}/releases/v1.2.3/beam-v1.2.3-linux-x64.tar.gz`);
+    expect(bundles["linux-x64"]!.url).toBe(
+      `${R2_BASE}/releases/v1.2.3/beam-v1.2.3-linux-x64.tar.gz`,
+    );
     expect(bundles["linux-x64"]!.sha256_url).toBe(
       `${R2_BASE}/releases/v1.2.3/beam-v1.2.3-linux-x64.tar.gz.sha256`,
     );
@@ -147,7 +157,7 @@ describe("scripts/generate-release-manifest.ts — bundle filtering", () => {
     });
     expect(res.status).toBe(0);
     expect(res.stderr).toContain("Missing checksum");
-    const bundles = res.manifest!.bundles as Record<string, unknown>;
+    const bundles = res.manifest!.bundles as Record<string, string>;
     expect(Object.keys(bundles)).toEqual(["darwin-arm64"]);
   });
 
@@ -177,7 +187,9 @@ describe("scripts/generate-release-manifest.ts — artifact correspondence", () 
     const advertised: Array<[string, string]> = [["tarball_url", String(m.tarball_url)]];
     if (m.sha256_url) advertised.push(["sha256_url", m.sha256_url as string]);
     if (m.signature_url) advertised.push(["signature_url", m.signature_url as string]);
-    for (const bundle of Object.values(m.bundles as Record<string, { url: string; sha256_url: string }>)) {
+    for (const bundle of Object.values(
+      m.bundles as Record<string, { url: string; sha256_url: string }>,
+    )) {
       advertised.push(["bundle.url", bundle.url], ["bundle.sha256_url", bundle.sha256_url]);
     }
     for (const [key, url] of advertised) {

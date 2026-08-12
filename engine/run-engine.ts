@@ -24,18 +24,27 @@ function redirectStdoutStderrToFile(): void {
   const stream = fs.createWriteStream(logPath, { flags: "a" });
 
   const originalStdoutWrite = process.stdout.write.bind(process.stdout) as (
+    // oxlint-disable-next-line anti-slop/no-unknown-parameters -- Node write() overload shadow, params dictated by typeof process.stdout.write
     chunk: unknown,
+    // oxlint-disable-next-line anti-slop/no-unknown-parameters -- Node write() overload shadow, params dictated by typeof process.stdout.write
     encoding?: unknown,
+    // oxlint-disable-next-line anti-slop/no-unknown-parameters -- Node write() overload shadow, params dictated by typeof process.stdout.write
     cb?: unknown,
   ) => boolean;
   const originalStderrWrite = process.stderr.write.bind(process.stderr) as (
+    // oxlint-disable-next-line anti-slop/no-unknown-parameters -- Node write() overload shadow, params dictated by typeof process.stderr.write
     chunk: unknown,
+    // oxlint-disable-next-line anti-slop/no-unknown-parameters -- Node write() overload shadow, params dictated by typeof process.stderr.write
     encoding?: unknown,
+    // oxlint-disable-next-line anti-slop/no-unknown-parameters -- Node write() overload shadow, params dictated by typeof process.stderr.write
     cb?: unknown,
   ) => boolean;
   const streamWrite = stream.write.bind(stream) as (
+    // oxlint-disable-next-line anti-slop/no-unknown-parameters -- Node stream.write() overload shadow, params dictated by stream.write type
     chunk: unknown,
+    // oxlint-disable-next-line anti-slop/no-unknown-parameters -- Node stream.write() overload shadow, params dictated by stream.write type
     encoding?: unknown,
+    // oxlint-disable-next-line anti-slop/no-unknown-parameters -- Node stream.write() overload shadow, params dictated by stream.write type
     cb?: unknown,
   ) => boolean;
 
@@ -50,6 +59,7 @@ function redirectStdoutStderrToFile(): void {
     process.stderr.write(`[run-engine] log stream error: ${err.message}\n`);
   });
 
+  // oxlint-disable-next-line anti-slop/no-unknown-parameters -- Node write() overload shadow, params dictated by process.stdout.write type
   function safeStreamWrite(chunk: unknown, encoding?: unknown, cb?: unknown): void {
     if (streamBroken) return;
     Effect.runSync(
@@ -60,11 +70,13 @@ function redirectStdoutStderrToFile(): void {
     );
   }
 
+  // oxlint-disable-next-line anti-slop/no-unknown-parameters -- Node write() overload shadow, params dictated by typeof process.stdout.write
   process.stdout.write = function (chunk: unknown, encoding?: unknown, cb?: unknown): boolean {
     safeStreamWrite(chunk, encoding, cb);
     return originalStdoutWrite(chunk, encoding, cb);
   } as typeof process.stdout.write;
 
+  // oxlint-disable-next-line anti-slop/no-unknown-parameters -- Node write() overload shadow, params dictated by typeof process.stderr.write
   process.stderr.write = function (chunk: unknown, encoding?: unknown, cb?: unknown): boolean {
     safeStreamWrite(chunk, encoding, cb);
     return originalStderrWrite(chunk, encoding, cb);
@@ -139,6 +151,7 @@ export function runEngine(): Promise<void> {
     }
   }).pipe(Effect.provide(buildLayer(config)));
 
+  // oxlint-disable-next-line anti-slop/no-unknown-parameters -- error callback accepts any thrown value
   const fatal = (err: unknown) =>
     Effect.sync(() => {
       errorReporter.report(ensureError(err), { severity: "critical" });

@@ -11,18 +11,19 @@ interface LockfileData {
   readonly timestamp: number;
 }
 
-function isNodeError(err: unknown): err is NodeJS.ErrnoException {
+// The three guards below (isNodeError/isObject/isLockfileData) hand-roll the boundary contract for a JSON lockfile read from disk and thrown errors. Their `unknown` params, the Record<string, unknown> narrow, and numeric typeof checks ARE the parse-at-boundary step, not unsafe escape hatches, so they are exempted here.
+function isNodeError(err: unknown): err is NodeJS.ErrnoException { // oxlint-disable-line anti-slop/no-unknown-parameters
   return err instanceof Error && "code" in err;
 }
 
-function isObject(err: unknown): err is Record<string, unknown> {
-  return typeof err === "object" && err !== null;
+function isObject(err: unknown): err is Record<string, unknown> { // oxlint-disable-line anti-slop/no-unknown-parameters, anti-slop/no-unsafe-dictionary-type
+  return typeof err === "object" && err !== null; // oxlint-disable-line anti-slop/no-runtime-typeof
 }
 
-function isLockfileData(parsed: unknown): parsed is LockfileData {
+function isLockfileData(parsed: unknown): parsed is LockfileData { // oxlint-disable-line anti-slop/no-unknown-parameters
   if (!isObject(parsed)) return false;
-  if (typeof parsed.pid !== "number") return false;
-  if (typeof parsed.timestamp !== "number") return false;
+  if (typeof parsed.pid !== "number") return false; // oxlint-disable-line anti-slop/no-runtime-typeof
+  if (typeof parsed.timestamp !== "number") return false; // oxlint-disable-line anti-slop/no-runtime-typeof
   return true;
 }
 
@@ -86,6 +87,7 @@ export function findRunningEngineProcess(
     });
     if (result.error || !result.stdout) return null;
     const stdout =
+      // oxlint-disable-next-line anti-slop/no-runtime-typeof -- `ps` stdout from the host process arrives untyped; narrows to pick text vs Buffer.
       typeof result.stdout === "string" ? result.stdout : result.stdout.toString("utf-8");
     const lines = stdout.trim().split("\n").slice(1);
     for (const line of lines) {

@@ -35,6 +35,7 @@ function liveResponse(priceStr: string, expo: number, publishSec: number) {
   };
 }
 
+// oxlint-disable-next-line anti-slop/no-unknown-parameters -- helper accepts a genuinely-dynamic test value (layer/body/error/fetch mock) with no static contract
 function fetchReturning(body: unknown, status = 200): FetchLike {
   return (_url, init) => {
     lastInit = init;
@@ -42,6 +43,7 @@ function fetchReturning(body: unknown, status = 200): FetchLike {
   };
 }
 
+// oxlint-disable-next-line anti-slop/no-unknown-parameters -- helper accepts a genuinely-dynamic test value (layer/body/error/fetch mock) with no static contract
 function fetchRejecting(error: unknown): FetchLike {
   return () => Promise.reject(error);
 }
@@ -49,6 +51,7 @@ function fetchRejecting(error: unknown): FetchLike {
 let lastInit: RequestInit | undefined;
 let lastUrl: string | undefined;
 
+// oxlint-disable-next-line anti-slop/no-unknown-parameters -- helper accepts a genuinely-dynamic test value (layer/body/error/fetch mock) with no static contract
 function fetchCapturing(body: unknown, status = 200): FetchLike {
   return (url, init) => {
     lastUrl = String(url as unknown);

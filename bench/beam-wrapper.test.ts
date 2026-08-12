@@ -80,13 +80,13 @@ function runBeam(
   args: string[],
   opts: { version?: string; home?: string; path?: string; cwd?: string; script?: string } = {},
 ): RunResult {
-  const env: Record<string, string> = {
+  const env = {
     ...(process.env as Record<string, string>),
     FAKE_BUN_VERSION: opts.version ?? MIN_BUN_VERSION,
     STUB_LOG: stubLog,
     PATH: opts.path ?? `${stubDir}:/usr/bin:/bin`,
     HOME: opts.home ?? sandbox,
-  };
+  } satisfies Record<string, string>;
   const script = opts.script ?? BEAM_SH;
   try {
     const stdout = execFileSync("bash", [script, ...args], {

@@ -119,6 +119,7 @@ export class OpenClawWebhookTransport implements AgentRuntimeTransport {
   }
 
   private authHeaders(): Record<string, string> {
+    // oxlint-disable-next-line anti-slop/no-known-value-widening -- mutable headers map; conditional Authorization injection requires an open string-keyed type
     const headers: Record<string, string> = {
       "Content-Type": "application/json",
     };
@@ -126,9 +127,11 @@ export class OpenClawWebhookTransport implements AgentRuntimeTransport {
       headers.Authorization = `Bearer ${this.options.token}`;
       headers["x-openclaw-token"] = this.options.token;
     }
+    // oxlint-disable-next-line anti-slop/no-known-value-widening -- open dictionary return required for header width + conditional Authorization
     return headers;
   }
 
+  // oxlint-disable-next-line anti-slop/no-unknown-parameters -- webhook body is intentionally arbitrary JSON payload
   private post(body: unknown, timeoutMs?: number): Effect.Effect<string, Error> {
     return Effect.tryPromise({
       try: async () => {

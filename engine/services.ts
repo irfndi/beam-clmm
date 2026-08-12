@@ -5,6 +5,7 @@ import type {
   AgentProposal,
   BinArray,
   EntryDepositMode,
+  // oxlint-disable-next-line anti-slop/no-shape-in-symbol-names -- public type, renaming ripples to out-of-scope program.ts/tests
   EntryStrategyShape,
   MemoryCategory,
   MemoryEntry,
@@ -90,6 +91,7 @@ export interface SwapQuote {
     readonly inputMint: string;
     readonly outputMint: string;
   }>;
+  // oxlint-disable-next-line anti-slop/no-unsafe-dictionary-type -- raw external relay quote, narrowed per-field at use site
   readonly rawQuote: Record<string, unknown>;
 }
 
@@ -234,7 +236,8 @@ export interface AdapterApi {
     lowerBinId: number,
     upperBinId: number,
     positionSizeUsd: number,
-    options?: { strategyShape?: EntryStrategyShape },
+    // oxlint-disable-next-line anti-slop/no-shape-in-symbol-names -- public option key + public type; renaming ripples to out-of-scope files
+  options?: { strategyShape?: EntryStrategyShape },
   ) => Effect.Effect<
     {
       positionPubKey: string;
@@ -483,6 +486,7 @@ export interface AdapterApi {
     inputMint: string,
     outputMint: string,
     amountAtomic: bigint,
+    // oxlint-disable-next-line anti-slop/no-unsafe-dictionary-type -- external quote payload, narrowed per-field at use site
     quoteData?: Record<string, unknown>,
   ) => Effect.Effect<string, Error>;
   readonly quoteSwap?: (request: SwapRequest) => Effect.Effect<SwapQuote, Error>;
@@ -987,6 +991,7 @@ export interface DbApi {
     valueUsd: number | null;
     feesUsd: number | null;
     price: number | null;
+    // oxlint-disable-next-line anti-slop/no-unsafe-dictionary-type -- arbitrary event metadata, consumed loosely at parity boundary
     metadata?: Record<string, unknown> | null;
     createdAt: number;
   }) => Effect.Effect<void, Error>;
@@ -1481,6 +1486,7 @@ export interface EngineAlert {
    * the same pool throttle independently.
    */
   readonly positionId?: string;
+  // oxlint-disable-next-line anti-slop/no-unsafe-dictionary-type -- arbitrary event data, consumed loosely at parity boundary
   readonly data?: Record<string, unknown>;
 }
 

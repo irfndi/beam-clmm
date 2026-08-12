@@ -45,24 +45,34 @@ function readApiKey(): Effect.Effect<string | null, never> {
     try: () => {
       const raw = fs.readFileSync(CREDENTIALS_FILE, "utf-8");
       const parsed: unknown = JSON.parse(raw);
+      // oxlint-disable-next-line anti-slop/no-runtime-typeof -- guard validates external credentials file at I/O boundary
       if (typeof parsed !== "object" || parsed === null || !("apiKey" in parsed)) return null;
       const key = (parsed as { apiKey: unknown }).apiKey;
+      // oxlint-disable-next-line anti-slop/no-runtime-typeof -- guard validates external credentials file at I/O boundary
       return typeof key === "string" && key.length > 0 ? key : null;
     },
     catch: (cause) => (cause instanceof Error ? cause : new Error(String(cause))),
   }).pipe(Effect.catch(() => Effect.succeed(null)));
 }
 
+// oxlint-disable-next-line anti-slop/no-unknown-parameters -- data is unparsed external revenue-config payload at I/O boundary
 export function parseRevenueConfig(data: unknown): RevenueConfig | null {
+  // oxlint-disable-next-line anti-slop/no-runtime-typeof -- guard validates external config payload at I/O boundary
   if (typeof data !== "object" || data === null) return null;
+  // oxlint-disable-next-line anti-slop/no-unsafe-dictionary-type -- external config payload accessed per-field at I/O boundary
   const obj = data as Record<string, unknown>;
   return {
+    // oxlint-disable-next-line anti-slop/no-runtime-typeof -- external config field guard
     tier: typeof obj.tier === "string" ? obj.tier : "free",
+    // oxlint-disable-next-line anti-slop/no-runtime-typeof -- external config field guard
     platformFeeRate: typeof obj.platformFeeRate === "number" ? obj.platformFeeRate : 0,
     revenueShareEnabled:
+      // oxlint-disable-next-line anti-slop/no-runtime-typeof -- external config field guard
       typeof obj.revenueShareEnabled === "boolean" ? obj.revenueShareEnabled : false,
     revenueShareOperatorPct:
+      // oxlint-disable-next-line anti-slop/no-runtime-typeof -- external config field guard
       typeof obj.revenueShareOperatorPct === "number" ? obj.revenueShareOperatorPct : 0,
+    // oxlint-disable-next-line anti-slop/no-runtime-typeof -- external config field guard
     feeWalletAddress: typeof obj.feeWalletAddress === "string" ? obj.feeWalletAddress : "",
   };
 }

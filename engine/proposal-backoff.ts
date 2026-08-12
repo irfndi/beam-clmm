@@ -9,6 +9,11 @@ export interface ProposalBackoffOptions {
   readonly jitter?: number;
 }
 
+export interface BackoffSnapshot {
+  readonly failures: number;
+  readonly open: boolean;
+}
+
 export function nextProposalBackoff(
   previous: ProposalBackoff | undefined,
   now: number,
@@ -70,7 +75,7 @@ export class ProposalCircuitBreaker {
     return !this.isOpen(now);
   }
 
-  getState(): { readonly failures: number; readonly open: boolean } {
+  getState(): BackoffSnapshot {
     const open = this.isOpen(Date.now());
     return { failures: this.failures, open };
   }

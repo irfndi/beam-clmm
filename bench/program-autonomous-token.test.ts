@@ -80,6 +80,7 @@ function runSettlementProcessor(
   return Effect.runPromise(
     processSettlementJobs({
       adapter,
+// oxlint-disable-next-line anti-slop/no-chained-type-assertions -- test-only hard cast of a partial stub/generic expression to a full interface/Effect type; single `as` is impossible without fabricating the full type
       db: {
         saveSettlementJob: (job: SettlementJobRecord) =>
           Effect.sync(() => {
@@ -428,6 +429,7 @@ describe("settlement job processing", () => {
     // Given
     const job = settlementJob({ expiresAt: 9_999 });
     const savedJobs: SettlementJobRecord[] = [];
+// oxlint-disable-next-line anti-slop/no-chained-type-assertions -- test-only hard cast of a partial stub/generic expression to a full interface/Effect type; single `as` is impossible without fabricating the full type
     const adapter = {
       getTokenPrices: () => Effect.fail(new Error("expired settlement")),
     } as unknown as AdapterApi;
@@ -444,6 +446,7 @@ describe("settlement job processing", () => {
     // Given
     const job = settlementJob();
     const savedJobs: SettlementJobRecord[] = [];
+// oxlint-disable-next-line anti-slop/no-chained-type-assertions -- test-only hard cast of a partial stub/generic expression to a full interface/Effect type; single `as` is impossible without fabricating the full type
     const adapter = {
       getTokenPrices: () => Effect.succeed({ [NATIVE_MINT]: 1, [job.tokenMint]: 1 }),
       getTokenDecimals: () => Effect.succeed(6),
@@ -461,6 +464,7 @@ describe("settlement job processing", () => {
     // Given
     const job = settlementJob({ status: "submitted", txSignature: "signature-1", attempts: 2 });
     const savedJobs: SettlementJobRecord[] = [];
+// oxlint-disable-next-line anti-slop/no-chained-type-assertions -- test-only hard cast of a partial stub/generic expression to a full interface/Effect type; single `as` is impossible without fabricating the full type
     const adapter = {
       getSwapStatus: () => Effect.succeed({ state: "processed", error: null }),
     } as unknown as AdapterApi;
@@ -484,6 +488,7 @@ describe("settlement job processing", () => {
     const job = settlementJob({ status: "submitted", txSignature: "signature-1", attempts: 1 });
     const savedJobs: SettlementJobRecord[] = [];
     let quoteCalls = 0;
+// oxlint-disable-next-line anti-slop/no-chained-type-assertions -- test-only hard cast of a partial stub/generic expression to a full interface/Effect type; single `as` is impossible without fabricating the full type
     const adapter = {
       getSwapStatus: () => Effect.succeed({ state: "not_found", error: null }),
       getTokenPrices: () => Effect.succeed({ [NATIVE_MINT]: 1, [job.tokenMint]: 1 }),
@@ -524,6 +529,7 @@ describe("settlement job processing", () => {
     });
     const savedJobs: SettlementJobRecord[] = [];
     let quoteCalls = 0;
+// oxlint-disable-next-line anti-slop/no-chained-type-assertions -- test-only hard cast of a partial stub/generic expression to a full interface/Effect type; single `as` is impossible without fabricating the full type
     const adapter = {
       getSwapStatus: () => Effect.succeed({ state: "not_found", error: null }),
       quoteSwap: () =>
@@ -558,6 +564,7 @@ describe("settlement job processing", () => {
     };
     const simulation: SwapSimulation = { successful: true, logs: [], unitsConsumed: null };
     const savedJobs: SettlementJobRecord[] = [];
+// oxlint-disable-next-line anti-slop/no-chained-type-assertions -- test-only hard cast of a partial stub/generic expression to a full interface/Effect type; single `as` is impossible without fabricating the full type
     const adapter = {
       getTokenPrices: () => Effect.succeed({ [NATIVE_MINT]: 1, [job.tokenMint]: 1 }),
       getTokenDecimals: () => Effect.succeed(6),
@@ -592,6 +599,7 @@ describe("settlement job processing", () => {
     // Given
     const job = settlementJob({ tokenMint: NATIVE_MINT });
     const savedJobs: SettlementJobRecord[] = [];
+// oxlint-disable-next-line anti-slop/no-chained-type-assertions -- test-only hard cast of a partial stub/generic expression to a full interface/Effect type; single `as` is impossible without fabricating the full type
     const adapter = {
       getTokenPrices: () => Effect.succeed({ [NATIVE_MINT]: 1 }),
     } as unknown as AdapterApi;
@@ -620,6 +628,7 @@ describe("settlement job processing", () => {
     };
     let closedPnl: number | null = null;
     let outcome: { snapshotId: number; pnl: number } | null = null;
+// oxlint-disable-next-line anti-slop/no-chained-type-assertions -- test-only hard cast of a partial stub/generic expression to a full interface/Effect type; single `as` is impossible without fabricating the full type
     const db = {
       saveSettlementJob: () => Effect.void,
       getPosition: () => Effect.succeed(position),
@@ -662,6 +671,7 @@ describe("settlement job processing", () => {
       executionCostUsd: null,
     });
     const savedJobs: SettlementJobRecord[] = [];
+// oxlint-disable-next-line anti-slop/no-chained-type-assertions -- test-only hard cast of a partial stub/generic expression to a full interface/Effect type; single `as` is impossible without fabricating the full type
     const adapter = {
       getSwapStatus: () => Effect.succeed({ state: "confirmed", error: null }),
       // 0.1 ETH output, 0.0005 ETH fee — native is 18 decimals on 4663.
@@ -692,6 +702,7 @@ describe("settlement job processing", () => {
       executionCostUsd: 0.25,
     });
     const savedJobs: SettlementJobRecord[] = [];
+// oxlint-disable-next-line anti-slop/no-chained-type-assertions -- test-only hard cast of a partial stub/generic expression to a full interface/Effect type; single `as` is impossible without fabricating the full type
     const adapter = {
       getSwapStatus: () => Effect.succeed({ state: "confirmed", error: null }),
     } as unknown as AdapterApi;
@@ -718,6 +729,7 @@ describe("settlement job processing", () => {
       executionCostUsd: null,
     });
     const savedJobs: SettlementJobRecord[] = [];
+// oxlint-disable-next-line anti-slop/no-chained-type-assertions -- test-only hard cast of a partial stub/generic expression to a full interface/Effect type; single `as` is impossible without fabricating the full type
     const adapter = {
       getSwapStatus: () => Effect.succeed({ state: "confirmed", error: null }),
       getConfirmedSwapOutput: () => Effect.succeed(null),
@@ -743,6 +755,7 @@ describe("settlement job processing", () => {
       executionCostUsd: null,
     });
     const savedJobs: SettlementJobRecord[] = [];
+// oxlint-disable-next-line anti-slop/no-chained-type-assertions -- test-only hard cast of a partial stub/generic expression to a full interface/Effect type; single `as` is impossible without fabricating the full type
     const adapter = {
       getSwapStatus: () => Effect.succeed({ state: "confirmed", error: null }),
       getConfirmedSwapOutput: () =>
@@ -807,6 +820,7 @@ describe("settlement job processing", () => {
       depositedUsd: 100,
       entrySignalSnapshotId: null,
     };
+// oxlint-disable-next-line anti-slop/no-chained-type-assertions -- test-only hard cast of a partial stub/generic expression to a full interface/Effect type; single `as` is impossible without fabricating the full type
     const db = {
       saveSettlementJob: () => Effect.void,
       getPosition: () => Effect.succeed(position),
@@ -850,6 +864,7 @@ describe("settlement job processing", () => {
       txSignature: "submitted-sig",
     });
     let finalizedCount = 0;
+// oxlint-disable-next-line anti-slop/no-chained-type-assertions -- test-only hard cast of a partial stub/generic expression to a full interface/Effect type; single `as` is impossible without fabricating the full type
     const db = {
       saveSettlementJob: () => Effect.fail(new Error("database unavailable")),
       getPosition: () =>
@@ -864,6 +879,7 @@ describe("settlement job processing", () => {
           finalizedCount++;
         }),
     } as unknown as DbApi;
+// oxlint-disable-next-line anti-slop/no-chained-type-assertions -- test-only hard cast of a partial stub/generic expression to a full interface/Effect type; single `as` is impossible without fabricating the full type
     const adapter = {
       getSwapStatus: () => Effect.succeed({ state: "confirmed", error: null }),
       getConfirmedSwapOutput: () => Effect.succeed(null),
@@ -943,6 +959,7 @@ describe("issue #166 settlement recovery", () => {
     // Jupiter rate limit on every quote.
     const job = settlementJob({ expiresAt: 9_000 });
     const savedJobs: SettlementJobRecord[] = [];
+// oxlint-disable-next-line anti-slop/no-chained-type-assertions -- test-only hard cast of a partial stub/generic expression to a full interface/Effect type; single `as` is impossible without fabricating the full type
     const adapter = {
       getTokenPrices: () => Effect.succeed({ [NATIVE_MINT]: 100, "token-1": 1 }),
       getTokenDecimals: () => Effect.succeed(6),
@@ -969,6 +986,7 @@ describe("issue #166 settlement recovery", () => {
     // Given
     const job = settlementJob({ expiresAt: 9_000 });
     const savedJobs: SettlementJobRecord[] = [];
+// oxlint-disable-next-line anti-slop/no-chained-type-assertions -- test-only hard cast of a partial stub/generic expression to a full interface/Effect type; single `as` is impossible without fabricating the full type
     const adapter = {
       getTokenPrices: () => Effect.succeed({ [NATIVE_MINT]: 100, "token-1": 1 }),
       getTokenDecimals: () => Effect.succeed(6),
@@ -994,6 +1012,7 @@ describe("issue #166 settlement recovery", () => {
     // Given
     const job = settlementJob({ expiresAt: 100_000 });
     const savedJobs: SettlementJobRecord[] = [];
+// oxlint-disable-next-line anti-slop/no-chained-type-assertions -- test-only hard cast of a partial stub/generic expression to a full interface/Effect type; single `as` is impossible without fabricating the full type
     const adapter = {
       getTokenPrices: () => Effect.succeed({ [NATIVE_MINT]: 100, "token-1": 1 }),
       getTokenDecimals: () => Effect.succeed(6),
@@ -1017,6 +1036,7 @@ describe("issue #166 settlement recovery", () => {
     // no position row to finalize, so no PnL can be booked against the
     // still-in-wallet tokens.
     const job = settlementJob({ tokenMint: "no-price-1", positionId: "orphan:test" });
+// oxlint-disable-next-line anti-slop/no-chained-type-assertions -- test-only hard cast of a partial stub/generic expression to a full interface/Effect type; single `as` is impossible without fabricating the full type
     const adapter = {
       getTokenPrices: () => Effect.succeed({ [NATIVE_MINT]: 100, "no-price-1": 0 }),
       getTokenDecimals: () => Effect.succeed(6),
@@ -1025,6 +1045,7 @@ describe("issue #166 settlement recovery", () => {
       simulateSwap: () => Effect.fail(new Error("unused")),
       submitSwap: () => Effect.fail(new Error("unused")),
     } as unknown as AdapterApi;
+// oxlint-disable-next-line anti-slop/no-chained-type-assertions -- test-only hard cast of a partial stub/generic expression to a full interface/Effect type; single `as` is impossible without fabricating the full type
     const db = {
       saveSettlementJob: () => Effect.void,
       getPosition: () => Effect.succeed(null),
@@ -1062,6 +1083,7 @@ describe("issue #166 settlement recovery", () => {
     // in the wallet. It must fall through to the quote path instead
     // (bounded retries, then terminal on expiry — operator-visible).
     const job = settlementJob({ tokenMint: "no-price-1" }); // default real positionId
+// oxlint-disable-next-line anti-slop/no-chained-type-assertions -- test-only hard cast of a partial stub/generic expression to a full interface/Effect type; single `as` is impossible without fabricating the full type
     const adapter = {
       getTokenPrices: () => Effect.succeed({ [NATIVE_MINT]: 100, "no-price-1": 0 }),
       getTokenDecimals: () => Effect.succeed(6),
@@ -1070,6 +1092,7 @@ describe("issue #166 settlement recovery", () => {
       simulateSwap: () => Effect.fail(new Error("unused")),
       submitSwap: () => Effect.fail(new Error("unused")),
     } as unknown as AdapterApi;
+// oxlint-disable-next-line anti-slop/no-chained-type-assertions -- test-only hard cast of a partial stub/generic expression to a full interface/Effect type; single `as` is impossible without fabricating the full type
     const db = {
       saveSettlementJob: () => Effect.void,
       getPosition: () => Effect.succeed(null),
@@ -1099,6 +1122,7 @@ describe("issue #166 settlement recovery", () => {
   it("dust-confirms a priceable sub-dust settlement with the plain dust error", async () => {
     // Given a tiny priceable amount below the dust cutoff.
     const job = settlementJob({ amountAtomic: "1000" }); // 0.001 token at $1
+// oxlint-disable-next-line anti-slop/no-chained-type-assertions -- test-only hard cast of a partial stub/generic expression to a full interface/Effect type; single `as` is impossible without fabricating the full type
     const adapter = {
       getTokenPrices: () => Effect.succeed({ [NATIVE_MINT]: 100, "token-1": 1 }),
       getTokenDecimals: () => Effect.succeed(6),
@@ -1107,6 +1131,7 @@ describe("issue #166 settlement recovery", () => {
       simulateSwap: () => Effect.fail(new Error("unused")),
       submitSwap: () => Effect.fail(new Error("unused")),
     } as unknown as AdapterApi;
+// oxlint-disable-next-line anti-slop/no-chained-type-assertions -- test-only hard cast of a partial stub/generic expression to a full interface/Effect type; single `as` is impossible without fabricating the full type
     const db = {
       saveSettlementJob: () => Effect.void,
       getPosition: () => Effect.succeed(null),
@@ -1159,12 +1184,14 @@ describe("issue #166 settlement recovery", () => {
       createdAt: 1,
       updatedAt: 1,
     });
+// oxlint-disable-next-line anti-slop/no-chained-type-assertions -- test-only hard cast of a partial stub/generic expression to a full interface/Effect type; single `as` is impossible without fabricating the full type
     const adapter = {
       hasWallet: () => true,
       getWalletHoldings: () => Effect.succeed(holdings),
       getPoolState: () => Effect.succeed(null),
       getTokenPrices: () => Effect.succeed({ "unpriceable-1": 0 }),
     } as unknown as AdapterApi;
+// oxlint-disable-next-line anti-slop/no-chained-type-assertions -- test-only hard cast of a partial stub/generic expression to a full interface/Effect type; single `as` is impossible without fabricating the full type
     const db = {
       listSettlementJobs: () => Effect.succeed([terminalJob]),
       getAllPositions: () => Effect.succeed([]),
@@ -1209,6 +1236,7 @@ describe("issue #166 settlement recovery", () => {
       createdAt: 1,
       error: "Jupiter quote failed: 429",
     });
+// oxlint-disable-next-line anti-slop/no-chained-type-assertions -- test-only hard cast of a partial stub/generic expression to a full interface/Effect type; single `as` is impossible without fabricating the full type
     const adapter = {
       getTokenPrices: () => Effect.succeed({ [NATIVE_MINT]: 100, "no-price-1": 0 }),
       getTokenDecimals: () => Effect.succeed(6),
@@ -1217,6 +1245,7 @@ describe("issue #166 settlement recovery", () => {
       simulateSwap: () => Effect.fail(new Error("unused")),
       submitSwap: () => Effect.fail(new Error("unused")),
     } as unknown as AdapterApi;
+// oxlint-disable-next-line anti-slop/no-chained-type-assertions -- test-only hard cast of a partial stub/generic expression to a full interface/Effect type; single `as` is impossible without fabricating the full type
     const db = {
       saveSettlementJob: () => Effect.void,
       getPosition: () => Effect.succeed(null),
@@ -1275,6 +1304,7 @@ describe("issue #166 settlement recovery", () => {
       [NATIVE_MINT, { amountAtomic: 1_000_000_000n, decimals: 9 }], // settlement asset → skip
       ["zero-1", { amountAtomic: 0n, decimals: 6 }], // nothing held → skip
     ]);
+// oxlint-disable-next-line anti-slop/no-chained-type-assertions -- test-only hard cast of a partial stub/generic expression to a full interface/Effect type; single `as` is impossible without fabricating the full type
     const adapter = {
       hasWallet: () => true,
       getWalletHoldings: () => Effect.succeed(holdings),
@@ -1284,6 +1314,7 @@ describe("issue #166 settlement recovery", () => {
           Object.fromEntries(mints.map((mint) => [mint, mint === "unpriceable-1" ? 0 : 1])),
         ),
     } as unknown as AdapterApi;
+// oxlint-disable-next-line anti-slop/no-chained-type-assertions -- test-only hard cast of a partial stub/generic expression to a full interface/Effect type; single `as` is impossible without fabricating the full type
     const db = {
       listSettlementJobs: () => Effect.succeed([]),
       getAllPositions: () => Effect.succeed([{ positionId: "live-pos-1", poolAddress: "pool-1" }]),
@@ -1324,6 +1355,7 @@ describe("issue #166 settlement recovery", () => {
     const holdings = new Map<string, { amountAtomic: bigint; decimals: number }>([
       ["unpriceable-1", { amountAtomic: 5_000_000n, decimals: 6 }],
     ]);
+// oxlint-disable-next-line anti-slop/no-chained-type-assertions -- test-only hard cast of a partial stub/generic expression to a full interface/Effect type; single `as` is impossible without fabricating the full type
     const adapter = {
       hasWallet: () => true,
       getWalletHoldings: () => Effect.succeed(holdings),
@@ -1331,6 +1363,7 @@ describe("issue #166 settlement recovery", () => {
       getTokenPrices: (mints: string[]) =>
         Effect.succeed(Object.fromEntries(mints.map((mint) => [mint, 0]))),
     } as unknown as AdapterApi;
+// oxlint-disable-next-line anti-slop/no-chained-type-assertions -- test-only hard cast of a partial stub/generic expression to a full interface/Effect type; single `as` is impossible without fabricating the full type
     const db = {
       listSettlementJobs: () => Effect.succeed([]),
       getAllPositions: () => Effect.succeed([]),
@@ -1377,6 +1410,7 @@ describe("issue #166 settlement recovery", () => {
       ["pool-leg-x", { amountAtomic: 1_000_000n, decimals: 6 }],
       ["active-job-token", { amountAtomic: 1_000_000n, decimals: 6 }],
     ]);
+// oxlint-disable-next-line anti-slop/no-chained-type-assertions -- test-only hard cast of a partial stub/generic expression to a full interface/Effect type; single `as` is impossible without fabricating the full type
     const adapter = {
       hasWallet: () => true,
       getWalletHoldings: () => Effect.succeed(holdings),
@@ -1389,6 +1423,7 @@ describe("issue #166 settlement recovery", () => {
           Object.fromEntries(mints.map((mint) => [mint, mint === "stranded-1" ? 1000 : 1])),
         ),
     } as unknown as AdapterApi;
+// oxlint-disable-next-line anti-slop/no-chained-type-assertions -- test-only hard cast of a partial stub/generic expression to a full interface/Effect type; single `as` is impossible without fabricating the full type
     const db = {
       listSettlementJobs: () =>
         Effect.succeed([
@@ -1430,9 +1465,11 @@ describe("issue #166 settlement recovery", () => {
 
   it("skips the sweep entirely without a wallet or without candidate holdings", async () => {
     // Given
+// oxlint-disable-next-line anti-slop/no-chained-type-assertions -- test-only hard cast of a partial stub/generic expression to a full interface/Effect type; single `as` is impossible without fabricating the full type
     const walletless = {
       hasWallet: () => false,
     } as unknown as AdapterApi;
+// oxlint-disable-next-line anti-slop/no-chained-type-assertions -- test-only hard cast of a partial stub/generic expression to a full interface/Effect type; single `as` is impossible without fabricating the full type
     const emptyHoldings = {
       hasWallet: () => true,
       getWalletHoldings: () => Effect.succeed(new Map()),
@@ -1473,6 +1510,7 @@ describe("issue #166 settlement recovery", () => {
     const holdings = new Map<string, { amountAtomic: bigint; decimals: number }>([
       ["paper-leg-token", { amountAtomic: 1_000_000n, decimals: 6 }],
     ]);
+// oxlint-disable-next-line anti-slop/no-chained-type-assertions -- test-only hard cast of a partial stub/generic expression to a full interface/Effect type; single `as` is impossible without fabricating the full type
     const adapter = {
       hasWallet: () => true,
       getWalletHoldings: () => Effect.succeed(holdings),
@@ -1480,6 +1518,7 @@ describe("issue #166 settlement recovery", () => {
       getTokenPrices: (mints: string[]) =>
         Effect.succeed(Object.fromEntries(mints.map((mint) => [mint, 1]))),
     } as unknown as AdapterApi;
+// oxlint-disable-next-line anti-slop/no-chained-type-assertions -- test-only hard cast of a partial stub/generic expression to a full interface/Effect type; single `as` is impossible without fabricating the full type
     const db = {
       listSettlementJobs: () => Effect.succeed([]),
       getAllPositions: () =>
@@ -1511,6 +1550,7 @@ describe("issue #166 settlement recovery", () => {
     const holdings = new Map<string, { amountAtomic: bigint; decimals: number }>([
       ["stranded-1", { amountAtomic: 15_413n, decimals: 6 }],
     ]);
+// oxlint-disable-next-line anti-slop/no-chained-type-assertions -- test-only hard cast of a partial stub/generic expression to a full interface/Effect type; single `as` is impossible without fabricating the full type
     const adapter = {
       hasWallet: () => true,
       getWalletHoldings: () => Effect.succeed(holdings),
@@ -1518,6 +1558,7 @@ describe("issue #166 settlement recovery", () => {
       getTokenPrices: (mints: string[]) =>
         Effect.succeed(Object.fromEntries(mints.map((mint) => [mint, 1000]))),
     } as unknown as AdapterApi;
+// oxlint-disable-next-line anti-slop/no-chained-type-assertions -- test-only hard cast of a partial stub/generic expression to a full interface/Effect type; single `as` is impossible without fabricating the full type
     const db = {
       listSettlementJobs: () =>
         Effect.succeed([
@@ -1559,6 +1600,7 @@ describe("issue #166 settlement recovery", () => {
 
   it("fails open when the holdings read errors", async () => {
     // Given
+// oxlint-disable-next-line anti-slop/no-chained-type-assertions -- test-only hard cast of a partial stub/generic expression to a full interface/Effect type; single `as` is impossible without fabricating the full type
     const adapter = {
       hasWallet: () => true,
       getWalletHoldings: () => Effect.fail(new Error("rpc down")),

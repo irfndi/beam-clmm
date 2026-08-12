@@ -23,22 +23,19 @@ function getAuditStream(): fs.WriteStream {
   return auditStream;
 }
 
-const LEVEL_COLOR: Record<LogLevel, string> = {
+const LEVEL_COLOR = {
   debug: "\x1b[90m",
   info: "\x1b[36m",
   warn: "\x1b[33m",
   error: "\x1b[31m",
-};
+} satisfies Record<LogLevel, string>;
 const RESET = "\x1b[0m";
 
+// oxlint-disable-next-line anti-slop/no-unknown-parameters -- log payload is intentionally arbitrary JSON
 function emit(level: LogLevel, component: string, msg: string, data?: unknown) {
-  const entry: LogEntry = {
-    ts: new Date().toISOString(),
-    level,
-    component,
-    msg,
-    ...(data !== undefined ? { data } : {}),
-  };
+  const entry: LogEntry = data !== undefined
+  ? { ts: new Date().toISOString(), level, component, msg, data }
+  : { ts: new Date().toISOString(), level, component, msg };
 
   const color = LEVEL_COLOR[level];
   const tag = `${color}[${level.toUpperCase().padEnd(5)}]${RESET}`;
@@ -57,9 +54,13 @@ function emit(level: LogLevel, component: string, msg: string, data?: unknown) {
 
 export function createLogger(component: string) {
   return {
+    // oxlint-disable-next-line anti-slop/no-unknown-parameters -- log payload is intentionally arbitrary JSON
     debug: (msg: string, data?: unknown) => emit("debug", component, msg, data),
+    // oxlint-disable-next-line anti-slop/no-unknown-parameters -- log payload is intentionally arbitrary JSON
     info: (msg: string, data?: unknown) => emit("info", component, msg, data),
+    // oxlint-disable-next-line anti-slop/no-unknown-parameters -- log payload is intentionally arbitrary JSON
     warn: (msg: string, data?: unknown) => emit("warn", component, msg, data),
+    // oxlint-disable-next-line anti-slop/no-unknown-parameters -- log payload is intentionally arbitrary JSON
     error: (msg: string, data?: unknown) => emit("error", component, msg, data),
   };
 }

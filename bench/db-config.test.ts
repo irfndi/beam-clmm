@@ -14,6 +14,7 @@ import type { AppConfig } from "../engine/config-service.js";
 
 /** AppConfig-shaped base carrying every DB-tunable declared field (so the typo guard sees a realistic resolved config). */
 function baseConfig(): AppConfig {
+  // oxlint-disable-next-line anti-slop/no-chained-type-assertions -- partial AppConfig stub: only DB-tunable fields are set
   return {
     minPoolTvlUsd: 50_000,
     volumeAuthThreshold: 0.7,
@@ -117,7 +118,7 @@ describe("db-config registry", () => {
       base,
       new Map([[dbConfigKey("MARKET_SCAN_ENABLED"), "true"]]),
     );
-    expect((overridden as unknown as Record<string, unknown>).marketScanEnabled).toBe(true);
+    expect(overridden.marketScanEnabled).toBe(true);
   });
 
   it("clamps market-scan values to their bounds", () => {
@@ -147,7 +148,7 @@ describe("db-config registry", () => {
         [dbConfigKey("MARKET_SCAN_MAX_BIN_STEP"), "1"],
       ]),
     );
-    const cfg = overridden as unknown as Record<string, unknown>;
+    const cfg = overridden;
     expect(cfg.marketScanMinBinStep).toBe(100);
     expect(cfg.marketScanMaxBinStep).toBe(100);
   });
@@ -156,7 +157,7 @@ describe("db-config registry", () => {
     vi.stubEnv("MARKET_SCAN_MIN_BIN_STEP", "100");
     vi.stubEnv("MARKET_SCAN_MAX_BIN_STEP", "1");
     const overridden = applyDbConfigOverrides(baseConfig(), new Map());
-    const cfg = overridden as unknown as Record<string, unknown>;
+    const cfg = overridden;
     expect(cfg.marketScanMinBinStep).toBe(100);
     expect(cfg.marketScanMaxBinStep).toBe(100);
   });

@@ -21,7 +21,7 @@ afterEach(() => {
 
 function createChildEnvironment(
   overrides: Readonly<Record<string, string>>,
-): Record<string, string> {
+) {
   const environment: Record<string, string> = {};
   for (const [key, value] of Object.entries(process.env)) {
     if (value !== undefined) environment[key] = value;
@@ -41,11 +41,11 @@ function decode(output: Uint8Array): string {
   return new TextDecoder().decode(output);
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
+function isRecord(value: unknown): value is Record<string, unknown> { /* oxlint-disable-line anti-slop/no-unknown-parameters, anti-slop/no-unsafe-dictionary-type */
+  return typeof value === "object" && value !== null && !Array.isArray(value); /* oxlint-disable-line anti-slop/no-runtime-typeof */
 }
 
-function decodeJsonObject(output: Uint8Array): Record<string, unknown> {
+function decodeJsonObject(output: Uint8Array): Record<string, unknown> { /* oxlint-disable-line anti-slop/no-unsafe-dictionary-type */
   const parsed: unknown = JSON.parse(decode(output));
   if (!isRecord(parsed)) {
     throw new Error("CLI JSON output must be an object");

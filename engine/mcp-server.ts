@@ -26,6 +26,7 @@ interface McpResponse {
 interface McpTool {
   readonly name: string;
   readonly description: string;
+  // oxlint-disable-next-line anti-slop/no-unsafe-dictionary-type -- JSON Schema tool inputSchema is arbitrary transport data
   readonly inputSchema: Record<string, unknown>;
 }
 
@@ -100,7 +101,7 @@ const tools: ReadonlyArray<McpTool> = [
   },
 ];
 
-function sanitizeConfig(cfg: AppConfig): Record<string, unknown> {
+function sanitizeConfig(cfg: AppConfig) {
   return {
     paperTrading: cfg.paperTrading,
     scanIntervalMs: cfg.scanIntervalMs,
@@ -153,10 +154,12 @@ export class McpServer {
     return { tools };
   }
 
+  // oxlint-disable-next-line anti-slop/no-unknown-parameters -- params is external JSON-RPC request at transport boundary
   private async handleToolsCall(params: unknown): Promise<McpResponse["result"]> {
-    const args =
-      typeof params === "object" && params !== null ? (params as Record<string, unknown>) : {};
+    // oxlint-disable-next-line anti-slop/no-runtime-typeof, anti-slop/no-unsafe-dictionary-type -- external JSON-RPC params guard at transport boundary
+    const args = (typeof params === "object" && params !== null ? params : {}) as Record<string, unknown>;
     const name = args.name;
+    // oxlint-disable-next-line anti-slop/no-unsafe-dictionary-type -- external JSON-RPC arguments at transport boundary
     const arguments_ = (args.arguments as Record<string, unknown>) ?? {};
     const snapshot = await Effect.runPromise(this.state.getSnapshot());
 
@@ -191,6 +194,7 @@ export class McpServer {
         };
       }
       case "beam_decisions": {
+        // oxlint-disable-next-line anti-slop/no-runtime-typeof -- external JSON-RPC argument guard at transport boundary
         const limit = typeof arguments_.limit === "number" ? arguments_.limit : 10;
         const pool = arguments_.pool as string | undefined;
         let decisions = snapshot.recentDecisions;
@@ -246,6 +250,7 @@ export class McpServer {
         // advisor cannot approve its own proposals. Fail-closed: no fallback
         // to the proposal enqueue token.
         const expectedToken = this.config.agentApprovalToken;
+        // oxlint-disable-next-line anti-slop/no-runtime-typeof -- external JSON-RPC argument guard at transport boundary
         const providedToken = typeof arguments_.token === "string" ? arguments_.token : "";
         const expectedBuf = Buffer.from(expectedToken);
         const actualBuf = Buffer.from(providedToken);
@@ -257,7 +262,7 @@ export class McpServer {
           throw new Error("Unauthorized: invalid approval token");
         }
         const proposalIds = Array.isArray(arguments_.proposalIds)
-          ? arguments_.proposalIds.filter((id): id is string => typeof id === "string")
+          ? arguments_.proposalIds.filter((id): id is string => typeof id === "string") // oxlint-disable-line anti-slop/no-runtime-typeof -- external JSON-RPC argument guard at transport boundary
           : [];
         if (proposalIds.length === 0) {
           throw new Error("proposalIds must be a non-empty array of strings");

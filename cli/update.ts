@@ -33,6 +33,7 @@ import { Effect } from "effect";
 import { createLogger } from "../engine/logger.js";
 import { findRunningEngineProcess, isProcessAlive, readLockfile } from "./lockfile.js";
 
+// oxlint-disable-next-line anti-slop/no-runtime-typeof -- Env guard: probes for the Bun global that only exists under the Bun runtime before deciding to exit.
 if (typeof Bun === "undefined") {
   console.error("The beam update command requires the Bun runtime.");
   process.exit(1);
@@ -83,13 +84,14 @@ function runCommand(
   options?: { cwd?: string; timeout?: number },
 ): void {
   const bin = resolveBin(name);
-  const result = Bun.spawnSync([bin, ...args], {
+  const spawnOptions: Parameters<typeof Bun.spawnSync>[1] = {
     stdin: "inherit",
     stdout: "inherit",
     stderr: "inherit",
-    ...(options?.cwd ? { cwd: options.cwd } : {}),
-    ...(options?.timeout ? { timeout: options.timeout } : {}),
-  });
+  };
+  if (options?.cwd) spawnOptions.cwd = options.cwd;
+  if (options?.timeout) spawnOptions.timeout = options.timeout;
+  const result = Bun.spawnSync([bin, ...args], spawnOptions);
   if (!result.success) {
     const cwdMsg = options?.cwd ? ` in ${options.cwd}` : "";
     throw new UpdateAbort(
@@ -104,20 +106,21 @@ function runCommandOutput(
   options?: { cwd?: string; timeout?: number },
 ): string {
   const bin = resolveBin(name);
-  const result = Bun.spawnSync([bin, ...args], {
+  const spawnOptions: Parameters<typeof Bun.spawnSync>[1] = {
     stdin: "inherit",
     stdout: "pipe",
     stderr: "inherit",
-    ...(options?.cwd ? { cwd: options.cwd } : {}),
-    ...(options?.timeout ? { timeout: options.timeout } : {}),
-  });
+  };
+  if (options?.cwd) spawnOptions.cwd = options.cwd;
+  if (options?.timeout) spawnOptions.timeout = options.timeout;
+  const result = Bun.spawnSync([bin, ...args], spawnOptions);
   if (!result.success) {
     const cwdMsg = options?.cwd ? ` in ${options.cwd}` : "";
     throw new UpdateAbort(
       `Command failed: ${name} ${args.join(" ")}${cwdMsg} (exit ${result.exitCode})`,
     );
   }
-  return result.stdout.toString().trim();
+  return result.stdout!.toString().trim();
 }
 
 async function downloadFile(url: string, dest: string): Promise<void> {
@@ -311,6 +314,7 @@ function resolveInstallRoot(): string {
   } catch {}
 
   try {
+    // oxlint-disable-next-line anti-slop/no-runtime-typeof -- Env guard: reads Bun.main only under the Bun runtime, falling back to an argv path otherwise.
     const main = typeof Bun !== "undefined" ? Bun.main : (process.argv[1] ?? "");
     if (main) {
       const mainReal = realpathSync(main);

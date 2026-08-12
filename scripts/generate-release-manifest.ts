@@ -81,23 +81,36 @@ const tarballUrl = `${r2Base}/${keyPrefix}/beam-v${version}.tar.gz`;
 // that can consume this manifest; deriving it here keeps the two from drifting.
 let minCliVersion = "0.0.0";
 try {
-  const pkg = JSON.parse(fs.readFileSync(path.join(repoRoot, "package.json"), "utf-8")) as {
+const pkg = JSON.parse(fs.readFileSync(path.join(repoRoot, "package.json"), "utf-8")) as Readonly<{
     version?: string;
-  };
+  }>;
+  // The value comes from parsed package.json — a runtime typeof is the
+  // parse-at-boundary contract for an optional string field.
+  // oxlint-disable-next-line anti-slop/no-runtime-typeof -- boundary guard on parsed package.json
   if (typeof pkg.version === "string" && pkg.version) minCliVersion = pkg.version;
 } catch {
   // fall back to "0.0.0" if package.json is unreadable
 }
 
-const manifest: Record<string, unknown> = {
+const manifest = {
   version,
   channel,
+  // oxlint-disable-next-line anti-slop/no-conditional-empty-object-spread -- omit the key from the serialized JSON when commit is absent (a present-undefined key would change the output)
   ...(commit ? { commit } : {}),
   tarball_url: tarballUrl,
   sha256_url: `${tarballUrl}.sha256`,
   published_at: new Date().toISOString(),
   min_cli_version: minCliVersion,
   bundles,
+} satisfies {
+  version: string;
+  channel: string;
+  commit?: string;
+  tarball_url: string;
+  sha256_url: string;
+  published_at: string;
+  min_cli_version: string;
+  bundles: Record<string, { url: string; sha256_url: string }>;
 };
 
 fs.writeFileSync(outFile, JSON.stringify(manifest, null, 2) + "\n");

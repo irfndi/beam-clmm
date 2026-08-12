@@ -25,16 +25,20 @@ export interface BeamCredentials {
   createdAt: string;
 }
 
+interface ApiRequestOptions {
+  apiKey?: string;
+  signal?: AbortSignal;
+}
+
 export async function beamApiPost<T = unknown>(
   path: string,
+  // oxlint-disable-next-line anti-slop/no-unsafe-dictionary-type -- Generic API client: the request body is arbitrary JSON payloads sent to a third-party HTTP boundary; the schema varies per endpoint, so the value type is intentionally open.
   body: Record<string, unknown>,
-  options: { apiKey?: string; signal?: AbortSignal } = {},
+  options: ApiRequestOptions = {},
 ): Promise<ApiResponse<T>> {
-  const headers: Record<string, string> = {
-    "Content-Type": "application/json",
-  };
+  const headers = new Headers({ "Content-Type": "application/json" });
   if (options.apiKey) {
-    headers.Authorization = `Bearer ${options.apiKey}`;
+    headers.set("Authorization", `Bearer ${options.apiKey}`);
   }
   const init: RequestInit = {
     method: "POST",
@@ -151,7 +155,7 @@ export function pingInstall(
 ): Promise<boolean> {
   return (async () => {
     try {
-      const body: Record<string, string> = {
+      const body = {
         installId: getOrCreateInstallId(),
         event,
         version: getCurrentVersion(),
@@ -163,7 +167,7 @@ export function pingInstall(
       if (options.userId && credentials?.userId !== options.userId) return false;
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 3000);
-      const requestOptions: { apiKey?: string; signal: AbortSignal } = {
+      const requestOptions: ApiRequestOptions = {
         signal: controller.signal,
       };
       if (credentials?.apiKey) requestOptions.apiKey = credentials.apiKey;

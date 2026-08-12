@@ -88,14 +88,19 @@ export interface GeckoPoolStats {
 
 // ─── Response parsing (live-verified semantics) ──────────────────────────────
 
+// oxlint-disable-next-line anti-slop/no-unknown-parameters, anti-slop/no-unsafe-dictionary-type -- runtime guard over untrusted GeckoTerminal API JSON; Record<string, unknown> is the open-dictionary contract for it
 function isObject(value: unknown): value is Record<string, unknown> {
+  // oxlint-disable-next-line anti-slop/no-runtime-typeof -- manual null-object guard on unparsed external API payload
   return typeof value === "object" && value !== null;
 }
 
 /** Parse a numeric STRING or number into a finite number, else null. GeckoTerminal
  *  returns numeric fields as decimal strings ("23551730.42"). */
+// oxlint-disable-next-line anti-slop/no-unknown-parameters -- parses unparsed numeric field from external API payload
 function readFiniteNumber(value: unknown): number | null {
+  // oxlint-disable-next-line anti-slop/no-runtime-typeof -- runtime guard on unparsed external number field
   if (typeof value === "number") return Number.isFinite(value) ? value : null;
+  // oxlint-disable-next-line anti-slop/no-runtime-typeof -- runtime guard on unparsed external number-as-string field
   if (typeof value === "string" && value.trim().length > 0) {
     const parsed = Number(value);
     return Number.isFinite(parsed) ? parsed : null;
@@ -109,6 +114,7 @@ function readFiniteNumber(value: unknown): number | null {
  * tested (verified live 2026-07-22) — the binStep-derived baseFeeRate is the
  * operative path; this only ever runs if GeckoTerminal starts populating it.
  */
+// oxlint-disable-next-line anti-slop/no-unknown-parameters -- value is unparsed external pool field; delegated to readFiniteNumber guard
 function parseFeePercentageFraction(value: unknown): number | null {
   const num = readFiniteNumber(value);
   if (num === null || num < 0) return null;
@@ -124,6 +130,7 @@ function parseFeePercentageFraction(value: unknown): number | null {
  * `baseFeeRate` is the pool's binStep-derived base-fee fraction used to price
  * real volume into fees when `pool_fee_percentage` is null (always, for DLMM).
  */
+// oxlint-disable-next-line anti-slop/no-unknown-parameters -- raw is unparsed GeckoTerminal pool API payload; parsed via isObject/field guards
 export function parseGeckoPoolStats(raw: unknown, baseFeeRate: number): GeckoPoolStats | null {
   if (!isObject(raw)) return null;
   const data = raw["data"];

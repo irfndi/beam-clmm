@@ -52,7 +52,7 @@ function encodeRevert(reason: string): Hex {
   const word = (s: string) => s.padStart(64, "0");
   return `0x08c379a0${word("20")}${word(data.length.toString(16))}${data}${"0".repeat((64 - (data.length % 64)) % 64)}`;
 }
-function revertCall(reason: string): { returnData: Hex; status: "0x0"; logs: SimLog[] } {
+function revertCall(reason: string): SimCall {
   return { returnData: encodeRevert(reason), status: "0x0", logs: [] };
 }
 
@@ -75,6 +75,9 @@ interface SimLog {
   topics: string[];
   data: Hex;
 }
+
+/** Result of simulating one EVM call against the FakeERC20/FakePool scratch state. */
+type SimCall = { returnData: Hex; status: "0x0" | "0x1"; logs: SimLog[] };
 
 class FakeERC20 {
   readonly address: Address;
@@ -105,7 +108,7 @@ class FakeERC20 {
   }
 
   /** Execute one call against `scratch`, returning the logs the call emitted. */
-  run(tx: { from?: Address; data: Hex }, scratch: Map<string, Hex>): { returnData: Hex; status: "0x0" | "0x1"; logs: SimLog[] } {
+  run(tx: { from?: Address; data: Hex }, scratch: Map<string, Hex>): SimCall {
     const data = tx.data ?? "0x";
     const selector = data.slice(0, 10);
     const logs: SimLog[] = [];
@@ -162,7 +165,7 @@ interface FakePool {
   revertReason: string;
 }
 
-function applyOverride(token: FakeERC20, override: unknown): Map<string, Hex> {
+function applyOverride(token: FakeERC20, override: unknown): Map<string, Hex> { /* oxlint-disable-line anti-slop/no-unknown-parameters */
   const scratch = new Map(token.storage);
   const entry = (override as Record<string, { state?: Record<Hex, Hex>; stateDiff?: Record<Hex, Hex> }> | undefined)?.[
     token.address.toLowerCase()
@@ -180,7 +183,7 @@ function makeRpcMock(tokens: FakeERC20[], pool?: FakePool) {
   let rpcCalls = 0;
   const simulateParams: unknown[] = [];
 
-  function tokenCall(tx: { from?: Address; to: Address; data: Hex }, override: unknown) {
+  function tokenCall(tx: { from?: Address; to: Address; data: Hex }, override: unknown) { /* oxlint-disable-line anti-slop/no-unknown-parameters */
     const token = byAddress.get(tx.to.toLowerCase());
     if (!token) return revertCall("unknown target");
     const scratch = applyOverride(token, override);
@@ -277,8 +280,8 @@ function makeRpcMock(tokens: FakeERC20[], pool?: FakePool) {
   }
 
   const fetchImpl = async (_url: string | URL, init?: RequestInit): Promise<Response> => {
-    const body = typeof init?.body === "string" ? JSON.parse(init.body) : null;
-    if (!body || typeof body.method !== "string") {
+    const body = typeof init?.body === "string" ? JSON.parse(init.body) : null; /* oxlint-disable-line anti-slop/no-runtime-typeof */
+    if (!body || typeof body.method !== "string") { /* oxlint-disable-line anti-slop/no-runtime-typeof */
       return new Response(JSON.stringify({ jsonrpc: "2.0", id: body?.id ?? 0, error: { code: -32600, message: "invalid request" } }), {
         status: 200,
         headers: { "content-type": "application/json" },
@@ -291,6 +294,7 @@ function makeRpcMock(tokens: FakeERC20[], pool?: FakePool) {
     });
   };
 
+    // oxlint-disable-next-line anti-slop/no-chained-type-assertions -- cast mock fetch impl into global fetch shape
   return { fetchImpl: fetchImpl as unknown as typeof fetch, rpcCalls: () => rpcCalls, simulateParams };
 }
 
@@ -330,9 +334,9 @@ describe("evm-token-risk pure helpers", () => {
 
   it("compositeVerdict: any fail rejects, warn-only warns, clean is ok", () => {
     const checks = (overrides: Partial<Record<"sanity" | "tax" | "owner" | "upgradable" | "sellRoute", "pass" | "warn" | "fail" | "skip">>) => {
-      const base: Record<"sanity" | "tax" | "owner" | "upgradable" | "sellRoute", "pass" | "warn" | "fail" | "skip"> = {
+      const base = {
         sanity: "pass", tax: "pass", owner: "pass", upgradable: "pass", sellRoute: "skip",
-      };
+      } satisfies Record<"sanity" | "tax" | "owner" | "upgradable" | "sellRoute", "pass" | "warn" | "fail" | "skip">;
       const merged = { ...base, ...overrides };
       return {
         sanity: { status: merged.sanity, detail: "", data: null },
@@ -534,7 +538,7 @@ describe("evm-token-risk decision paths (mocked RPC)", () => {
     const stateEntries = sims.flatMap((params) =>
       params
         .filter((p): p is { blockStateCalls: Array<{ stateOverrides: Record<string, { state?: Record<string, string>; stateDiff?: unknown }> }> } =>
-          typeof p === "object" && p !== null && "blockStateCalls" in p,
+          typeof p === "object" && p !== null && "blockStateCalls" in p, /* oxlint-disable-line anti-slop/no-runtime-typeof */
         )
         .flatMap((p) => p.blockStateCalls.flatMap((b) => Object.entries(b.stateOverrides ?? {}))),
     );

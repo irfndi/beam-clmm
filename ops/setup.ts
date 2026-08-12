@@ -3,6 +3,7 @@ import fs from "fs";
 import path from "path";
 
 const isDirectSetupExecution =
+  // oxlint-disable-next-line anti-slop/no-runtime-typeof -- Env guard: probes the Bun global to decide whether this file is being run directly.
   typeof Bun !== "undefined" &&
   (Bun.main?.endsWith("ops/setup.ts") || Bun.main?.endsWith("ops/setup.js"));
 

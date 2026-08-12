@@ -56,6 +56,7 @@ function makeContext(): AgentRuntimeContext {
 
 describe("OpenClawWebhookTransport", () => {
   it("includes the prompt in the webhook payload", async () => {
+    // oxlint-disable-next-line anti-slop/no-known-value-widening -- mutable capture slot assigned a boundary-provided unknown (request.json()); null is an unset sentinel
     let capturedBody: unknown = null;
 
     const server = Bun.serve({
@@ -81,8 +82,8 @@ describe("OpenClawWebhookTransport", () => {
         type: "beam_prompt",
         prompt,
       });
-      expect((capturedBody as Record<string, unknown>).decision).toBeDefined();
-      expect((capturedBody as Record<string, unknown>).pool).toBeDefined();
+      expect((capturedBody as { decision?: unknown; pool?: unknown }).decision).toBeDefined();
+      expect((capturedBody as { decision?: unknown; pool?: unknown }).pool).toBeDefined();
     } finally {
       void server.stop();
     }

@@ -164,7 +164,10 @@ describe("evaluatePool TVL-drop EXIT (integration)", () => {
       Layer.succeed(McpServerService, { start: () => Effect.void, stop: () => Effect.void }),
       Layer.succeed(HttpStatusServerService, { start: () => Effect.void, stop: () => Effect.void }),
       Layer.succeed(EntryPrepService, { prepareEntryTokens: () => Effect.succeed(undefined) }),
-      Layer.succeed(KrystalService, { getPoolStats: () => Effect.succeed(null), getUniverse: () => Effect.succeed(new Map()) }),
+      Layer.succeed(KrystalService, {
+        getPoolStats: () => Effect.succeed(null),
+        getUniverse: () => Effect.succeed(new Map()),
+      }),
       Layer.succeed(GeckoTerminalService, { getPoolStats: () => Effect.succeed(null) }),
       Layer.succeed(AlertService, {
         sendAlert: () => Effect.void,
@@ -211,6 +214,7 @@ describe("evaluatePool TVL-drop EXIT (integration)", () => {
     });
 
     const decisions = await Effect.runPromise(
+      // oxlint-disable-next-line anti-slop/no-chained-type-assertions -- test-only hard cast of a partial stub/generic expression to a full interface/Effect type; single `as` is impossible without fabricating the full type
       Effect.provide(test, layer) as unknown as Effect.Effect<
         ReadonlyArray<{ action: string; reasoning: string }>,
         Error,
