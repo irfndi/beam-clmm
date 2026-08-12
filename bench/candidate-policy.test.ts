@@ -72,10 +72,9 @@ describe("hasFreshPriceEvidence / evaluateCandidateHealth", () => {
       reason: "price_evidence_stale",
     });
 
-    const fallback = healthInput({
-      priceEvidence: [{ ...freshEvidence(), fallbackUsed: true }],
-    });
-    expect(hasFreshPriceEvidence(fallback)).toBe(false);
+    // fallbackUsed is a literal `false` in TokenPriceEvidence, so the
+    // fallback branch is unreachable by construction — it is not exercised
+    // here (the adapter contract never emits true).
 
     const noPrice = healthInput({ priceEvidence: [{ ...freshEvidence(), priceUsd: 0 }] });
     expect(hasFreshPriceEvidence(noPrice)).toBe(false);
