@@ -14,7 +14,7 @@
     "typecheck": "tsc --noEmit && bun run --cwd infra typecheck"
   },
   "dependencies": {
-    "effect": "4.0.0-beta.102",
+    "effect": "4.0.0-rc.108",
     "hono": "^4.13.1"
   },
   "devDependencies": {
