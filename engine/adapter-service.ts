@@ -819,7 +819,6 @@ export function buildV4MintCalldata(args: V4MintCalldataArgs): V4MintCalldataRes
     // NATIVE_NOT_SET invariant, clean + gas-free) — a c1.isNative branch
     // would build a leg-swapped mint with msg.value from the token leg and
     // burn gas on-chain. Reverted from an earlier || fix on that evidence.
-    // oxlint-disable-next-line anti-slop/no-conditional-empty-object-spread -- `useNative` must be absent unless the native token is the base leg (SDK rejects a present-but-undefined native leg); the conditional spread is the minimal way to omit it.
     ...(c0.isNative ? { useNative: Ether.onChain(CHAIN_ID) } : {}),
   });
   return {
@@ -1116,7 +1115,6 @@ export const AdapterLive = Layer.effect(AdapterService,
       return walletAddress;
     }
 
-    // oxlint-disable-next-line anti-slop/no-unknown-parameters -- `e` arrives from a viem/RPC catch (Error is unknown at the JS boundary); narrowed via `instanceof`/String below.
     function revertMessage(e: unknown): string {
       const msg = e instanceof Error ? e.message : String(e);
       return msg.slice(0, 400);
@@ -1124,10 +1122,8 @@ export const AdapterLive = Layer.effect(AdapterService,
 
     /** Decode a revert reason (Error(string)) from a viem/RPC error; falls back
      *  to the message text. Used by the pre-broadcast withdraw gate. */
-    // oxlint-disable-next-line anti-slop/no-unknown-parameters -- `e` arrives from a viem/RPC catch (unknown at the JS boundary); decoded per-field below.
     function decodeRevertReason(e: unknown): string | null {
       const err = e as { data?: unknown; shortMessage?: string; message?: string } | undefined;
-      // oxlint-disable-next-line anti-slop/no-runtime-typeof -- `err` is an untyped RPC error object; the `data` string guard is the boundary parser for a 0x08c379a0 revert.
       const data = typeof err?.data === "string" ? err.data : null;
       if (data && data.length >= 10 && data.slice(0, 10).toLowerCase() === "0x08c379a0") {
         try {
@@ -2046,7 +2042,6 @@ export const AdapterLive = Layer.effect(AdapterService,
       const word = activeTick >> 8;
       const bins: BinData[] = [];
       for (const w of [word - 1, word, word + 1]) {
-        // oxlint-disable-next-line anti-slop/no-chained-type-assertions -- a partial ABI-decode tuple can't be a single `as`; the contract return is bound at the publicClient call boundary.
         const populated = (await lens.read.getPopulatedTicksInWord([poolAddress, w])) as unknown as ReadonlyArray<
           readonly [number, bigint, bigint]
         >;

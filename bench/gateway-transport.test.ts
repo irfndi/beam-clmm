@@ -5,7 +5,7 @@ import type { AgentRuntimeContext, AgentRuntimeCheckin } from "../engine/agent-t
 import type { AgentDecision } from "../engine/types.js";
 
 function makeContext(): AgentRuntimeContext {
-  return { /* oxlint-disable-line anti-slop/no-chained-type-assertions */
+  return {
     decision: {
       action: "ENTER",
       poolAddress: "Pool111111111111111111111111111111111111111",
@@ -32,10 +32,10 @@ interface Frame {
   type: string;
   id?: string;
   method?: string;
-  params?: Record<string, unknown>; /* oxlint-disable-line anti-slop/no-unsafe-dictionary-type */
+  params?: Record<string, unknown>;
 }
 
-function sendFrame(ws: { send: (data: string) => void }, frame: unknown): void { /* oxlint-disable-line anti-slop/no-unknown-parameters */
+function sendFrame(ws: { send: (data: string) => void }, frame: unknown): void {
   ws.send(JSON.stringify(frame));
 }
 
@@ -46,9 +46,9 @@ function challenge(nonce: string) {
 describe("GatewayTransport (OpenClaw protocol v4)", () => {
   it("handshakes challenge -> connect -> hello-ok and round-trips a prompt via chat.send", async () => {
     const received: {
-      connect?: Record<string, unknown> | undefined; /* oxlint-disable-line anti-slop/no-unsafe-dictionary-type */
-      chat?: Record<string, unknown> | undefined; /* oxlint-disable-line anti-slop/no-unsafe-dictionary-type */
-    } = {}; /* oxlint-disable-line anti-slop/no-known-value-widening */
+      connect?: Record<string, unknown> | undefined;
+      chat?: Record<string, unknown> | undefined;
+    } = {};
 
     const server = Bun.serve({
       port: 0,
@@ -118,7 +118,7 @@ describe("GatewayTransport (OpenClaw protocol v4)", () => {
 
       // The connect frame speaks protocol v4 as a cli/cli operator with the shared
       // token — the exact combination that preserves scopes on loopback.
-      const connect = received.connect as Record<string, unknown>; /* oxlint-disable-line anti-slop/no-unsafe-dictionary-type */
+      const connect = received.connect as Record<string, unknown>;
       expect(connect?.minProtocol).toBe(4);
       expect(connect?.maxProtocol).toBe(4);
       expect(connect?.role).toBe("operator");
@@ -128,7 +128,7 @@ describe("GatewayTransport (OpenClaw protocol v4)", () => {
 
       // chat.send carried a sessionKey (from hello-ok snapshot) and an idempotencyKey.
       expect(received.chat?.sessionKey).toBe("main");
-      expect(typeof received.chat?.idempotencyKey).toBe("string"); /* oxlint-disable-line anti-slop/no-runtime-typeof */
+      expect(typeof received.chat?.idempotencyKey).toBe("string");
 
       await Effect.runPromise(transport.disconnect());
     } finally {
@@ -137,7 +137,7 @@ describe("GatewayTransport (OpenClaw protocol v4)", () => {
   });
 
   it("delivers a check-in as a system-event request", async () => {
-    const received: { systemEvent?: Record<string, unknown> | undefined } = {}; /* oxlint-disable-line anti-slop/no-known-value-widening, anti-slop/no-unsafe-dictionary-type */
+    const received: { systemEvent?: Record<string, unknown> | undefined } = {};
 
     const server = Bun.serve({
       port: 0,
@@ -187,7 +187,7 @@ describe("GatewayTransport (OpenClaw protocol v4)", () => {
       };
       await Effect.runPromise(transport.sendCheckin(checkin));
 
-      expect(typeof received.systemEvent?.text).toBe("string"); /* oxlint-disable-line anti-slop/no-runtime-typeof */
+      expect(typeof received.systemEvent?.text).toBe("string");
       expect(String(received.systemEvent?.text)).toContain("Beam check-in (periodic)");
 
       await Effect.runPromise(transport.disconnect());
@@ -223,7 +223,7 @@ describe("GatewayTransport (OpenClaw protocol v4)", () => {
         token: "",
         timeoutMs: 5000,
       });
-      let error: unknown = null; /* oxlint-disable-line anti-slop/no-known-value-widening */
+      let error: unknown = null;
       try {
         await Effect.runPromise(transport.sendPrompt("review", makeContext()));
       } catch (err) {
@@ -332,7 +332,7 @@ describe("GatewayTransport (OpenClaw protocol v4)", () => {
     });
 
     const unhandled: unknown[] = [];
-    const onUnhandled = (reason: unknown): void => { /* oxlint-disable-line anti-slop/no-unknown-parameters */
+    const onUnhandled = (reason: unknown): void => {
       unhandled.push(reason);
     };
     process.on("unhandledRejection", onUnhandled);
@@ -343,7 +343,7 @@ describe("GatewayTransport (OpenClaw protocol v4)", () => {
         token: "test-token",
         timeoutMs: 5000,
       });
-      let error: unknown = null; /* oxlint-disable-line anti-slop/no-known-value-widening */
+      let error: unknown = null;
       try {
         await Effect.runPromise(transport.sendPrompt("review", makeContext()));
       } catch (err) {
@@ -393,7 +393,7 @@ describe("GatewayTransport (OpenClaw protocol v4)", () => {
         token: "test-token",
         timeoutMs: 5000,
       });
-      let error: unknown = null; /* oxlint-disable-line anti-slop/no-known-value-widening */
+      let error: unknown = null;
       try {
         await Effect.runPromise(transport.sendPrompt("review", makeContext()));
       } catch (err) {
@@ -444,7 +444,7 @@ describe("GatewayTransport (OpenClaw protocol v4)", () => {
         token: "test-token",
         timeoutMs: 250,
       });
-      let error: unknown = null; /* oxlint-disable-line anti-slop/no-known-value-widening */
+      let error: unknown = null;
       try {
         await Effect.runPromise(transport.sendPrompt("review", makeContext()));
       } catch (err) {
@@ -491,7 +491,7 @@ describe("GatewayTransport (OpenClaw protocol v4)", () => {
         token: "test-token",
         timeoutMs: 5000,
       });
-      let error: unknown = null; /* oxlint-disable-line anti-slop/no-known-value-widening */
+      let error: unknown = null;
       try {
         await Effect.runPromise(transport.connect());
       } catch (err) {

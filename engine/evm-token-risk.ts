@@ -310,7 +310,6 @@ async function getCodeSafe(client: PublicClient, address: Address): Promise<Hex 
       method: "eth_getCode",
       params: [address, "latest"],
     })) as unknown;
-    // oxlint-disable-next-line anti-slop/no-runtime-typeof -- runtime guard on RPC response at the JSON-RPC boundary
     return typeof res === "string" && res.startsWith("0x") ? (res as Hex) : null;
   } catch {
     return null;
@@ -323,7 +322,6 @@ async function getStorageAtSafe(client: PublicClient, address: Address, slot: He
       method: "eth_getStorageAt",
       params: [address, slot, "latest"],
     })) as unknown;
-    // oxlint-disable-next-line anti-slop/no-runtime-typeof -- runtime guard on RPC response at the JSON-RPC boundary
     return typeof res === "string" && res.startsWith("0x") ? (res as Hex) : null;
   } catch {
     return null;
@@ -405,7 +403,6 @@ async function simulateCalls(
     return blockCalls.map((entry) => {
       const raw = entry as { returnData?: unknown; status?: unknown; logs?: unknown };
       return {
-        // oxlint-disable-next-line anti-slop/no-runtime-typeof -- runtime guard on RPC response field at the JSON-RPC boundary
         returnData: typeof raw.returnData === "string" ? (raw.returnData as Hex) : "0x",
         status: raw.status === "0x0" ? "0x0" : "0x1",
         logs: Array.isArray(raw.logs) ? (raw.logs as SimLog[]) : [],
@@ -425,7 +422,6 @@ async function ethCallRaw(
       method: "eth_call",
       params: [tx, "latest"],
     })) as unknown;
-    // oxlint-disable-next-line anti-slop/no-runtime-typeof -- runtime guard on RPC response at the JSON-RPC boundary
     return { ok: true, data: typeof res === "string" ? (res as Hex) : null };
   } catch {
     return { ok: false, data: null };

@@ -33,7 +33,6 @@ import { Effect } from "effect";
 import { createLogger } from "../engine/logger.js";
 import { findRunningEngineProcess, isProcessAlive, readLockfile } from "./lockfile.js";
 
-// oxlint-disable-next-line anti-slop/no-runtime-typeof -- Env guard: probes for the Bun global that only exists under the Bun runtime before deciding to exit.
 if (typeof Bun === "undefined") {
   console.error("The beam update command requires the Bun runtime.");
   process.exit(1);
@@ -314,7 +313,6 @@ function resolveInstallRoot(): string {
   } catch {}
 
   try {
-    // oxlint-disable-next-line anti-slop/no-runtime-typeof -- Env guard: reads Bun.main only under the Bun runtime, falling back to an argv path otherwise.
     const main = typeof Bun !== "undefined" ? Bun.main : (process.argv[1] ?? "");
     if (main) {
       const mainReal = realpathSync(main);

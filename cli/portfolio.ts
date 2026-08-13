@@ -32,7 +32,6 @@ function buildProgram(): Layer.Layer<DbService | AdapterService, Error, never> {
   const dbPath = process.env.SQLITE_DB_PATH ?? getBeamDbPath();
   const dbLayer = DbLive(dbPath);
   const adapterLayer = Layer.provide(AdapterLive, ConfigLive);
-  // oxlint-disable-next-line anti-slop/no-chained-type-assertions -- Partial stub: Layer.mergeAll's Effect-free synthetic layer type cannot express the required Context.Layer<R>.Layer overlap, so the runtime-shaped result is cast to the declared service contract.
   return Layer.mergeAll(dbLayer, adapterLayer) as unknown as Layer.Layer<
     DbService | AdapterService,
     Error,

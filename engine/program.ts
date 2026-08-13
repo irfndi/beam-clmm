@@ -16,7 +16,6 @@ import {
   computeBinVolatilityStddev,
   isHighVolatility,
   recommendBinRangeForVolatility,
-// oxlint-disable-next-line anti-slop/no-shape-in-symbol-names -- `*Shape*` here is the engine's public field/type name (`entryStrategyShape`, `EntryStrategyShape`, `strategyShape`) required by the engine API contract (tests call it by this exact name); it cannot be renamed without breaking that contract
   recommendStrategyShape,
   resolveRangeHalfWidth,
   estimateRecoveryProbability,
@@ -133,7 +132,6 @@ import type {
   AgentProposal,
   AgentProposalMode,
   AgentCycle,
-// oxlint-disable-next-line anti-slop/no-shape-in-symbol-names -- `*Shape*` here is the engine's public field/type name (`entryStrategyShape`, `EntryStrategyShape`, `strategyShape`) required by the engine API contract (tests call it by this exact name); it cannot be renamed without breaking that contract
   EntryStrategyShape,
   PoolMetrics,
   PoolSnapshot,
@@ -252,10 +250,8 @@ const readEngineStatusApiKey = (): string | null => {
     if (!existsSync(credentialsFile)) return null;
     const value = JSON.parse(readFileSync(credentialsFile, "utf-8")) as CredentialsFile;
     if (
-// oxlint-disable-next-line anti-slop/no-runtime-typeof -- external user credentials JSON; the object/value tag is verified at the config-file boundary
       typeof value === "object" &&
       value !== null &&
-      // oxlint-disable-next-line anti-slop/no-runtime-typeof -- external user JSON; the property tag is verified at the config-file boundary.
       typeof value.apiKey === "string"
     ) {
       return value.apiKey;
@@ -1185,7 +1181,6 @@ export function executePaper(
     db: DbApi;
     trackedPositions: Map<string, PositionRecord>;
     strategy: StrategyApi;
-// oxlint-disable-next-line anti-slop/no-shape-in-symbol-names -- `*Shape*` here is the engine's public field/type name (`entryStrategyShape`, `EntryStrategyShape`, `strategyShape`) required by the engine API contract (tests call it by this exact name); it cannot be renamed without breaking that contract
     entryStrategyShape: EntryStrategyShape;
     entryRangeHalfWidth?: number;
   },
@@ -1201,7 +1196,6 @@ export function executePaper(
   signalSnapshotId?: number,
 ): Effect.Effect<{ executed: boolean; error: string | undefined }, never> {
   return Effect.gen(function* () {
-// oxlint-disable-next-line anti-slop/no-shape-in-symbol-names -- `*Shape*` here is the engine's public field/type name (`entryStrategyShape`, `EntryStrategyShape`, `strategyShape`) required by the engine API contract (tests call it by this exact name); it cannot be renamed without breaking that contract
     const { db, trackedPositions, strategy, entryStrategyShape, entryRangeHalfWidth } = deps;
     if (decision.action === "ENTER" && decision.positionSizeUsd) {
       // Legacy parity: re-entering a pool whose live position was paper-exited
@@ -1266,7 +1260,6 @@ export function executePaper(
           metadata: {
             lowerBinId: pos.lowerBinId,
             upperBinId: pos.upperBinId,
-// oxlint-disable-next-line anti-slop/no-shape-in-symbol-names -- `*Shape*` here is the engine's public field/type name (`entryStrategyShape`, `EntryStrategyShape`, `strategyShape`) required by the engine API contract (tests call it by this exact name); it cannot be renamed without breaking that contract
             strategyShape: entryStrategyShape,
           },
           createdAt: Date.now(),
@@ -1486,7 +1479,6 @@ export function executeLive(
     revenueConfigSvc: RevenueConfigApi;
     trackedPositions: Map<string, PositionRecord>;
     nativePriceUsd: number;
-// oxlint-disable-next-line anti-slop/no-shape-in-symbol-names -- `*Shape*` here is the engine's public field/type name (`entryStrategyShape`, `EntryStrategyShape`, `strategyShape`) required by the engine API contract (tests call it by this exact name); it cannot be renamed without breaking that contract
     entryStrategyShape: EntryStrategyShape;
     entryRangeHalfWidth?: number;
     /** Native-ETH ENTER floor (wei). Absent = constants.MIN_NATIVE_FOR_ENTRY_WEI. */
@@ -1526,7 +1518,6 @@ export function executeLive(
       revenueConfigSvc,
       trackedPositions,
       nativePriceUsd,
-// oxlint-disable-next-line anti-slop/no-shape-in-symbol-names -- `*Shape*` here is the engine's public field/type name (`entryStrategyShape`, `EntryStrategyShape`, `strategyShape`) required by the engine API contract (tests call it by this exact name); it cannot be renamed without breaking that contract
       entryStrategyShape,
       entryRangeHalfWidth,
     } = deps;
@@ -1601,7 +1592,6 @@ export function executeLive(
             Effect.catch(() => Effect.succeed(undefined)),
           );
         const effectiveNativePrice =
-// oxlint-disable-next-line anti-slop/no-runtime-typeof -- live native price from the price feed is genuinely dynamic; the number guard is the boundary check
           typeof liveNativePrice === "number" && liveNativePrice > 0
             ? liveNativePrice
             : nativePriceUsd;
@@ -1705,7 +1695,6 @@ export function executeLive(
           floored.lowerBinId,
           floored.upperBinId,
           decision.positionSizeUsd,
-// oxlint-disable-next-line anti-slop/no-shape-in-symbol-names -- `*Shape*` here is the engine's public field/type name (`entryStrategyShape`, `EntryStrategyShape`, `strategyShape`) required by the engine API contract (tests call it by this exact name); it cannot be renamed without breaking that contract
           { strategyShape: entryStrategyShape },
         )
         .pipe(
@@ -1781,7 +1770,6 @@ export function executeLive(
               upperBinId: pos.upperBinId,
               txSignature: enterResult.result.txSignature,
               depositMode: enterResult.result.depositMode,
-// oxlint-disable-next-line anti-slop/no-shape-in-symbol-names -- `*Shape*` here is the engine's public field/type name (`entryStrategyShape`, `EntryStrategyShape`, `strategyShape`) required by the engine API contract (tests call it by this exact name); it cannot be renamed without breaking that contract
               strategyShape: entryStrategyShape,
             },
             createdAt: Date.now(),
@@ -2011,7 +1999,6 @@ export function executeLive(
             };
           }
           const pendingFeeUsd = exitResultData.pendingFeeUsd;
-// oxlint-disable-next-line anti-slop/no-runtime-typeof -- `pendingFeeUsd` arrives from the untyped exit result; the number guard is the boundary check
           if (typeof pendingFeeUsd === "number") {
             yield* db
               .savePositionEvent({
@@ -2101,7 +2088,6 @@ export function executeLive(
           // the claim-path consistency rationale at the credit block below.
           const sweptRewards = exitResultData?.sweptRewards ?? [];
           const pricedSweptRewardUsd = sweptRewards.reduce(
-// oxlint-disable-next-line anti-slop/no-runtime-typeof -- `r.amountUsd` from sweep results (optional/untyped); the numeric guard is the boundary check
             (acc, r) => (typeof r.amountUsd === "number" ? acc + r.amountUsd : acc),
             0,
           );
@@ -2123,7 +2109,6 @@ export function executeLive(
           const pendingFeeUsd = exitResultData?.pendingFeeUsd ?? null;
           const pendingFeeX = Number(exitResultData?.pendingFeeXAtomic ?? "0");
           const pendingFeeY = Number(exitResultData?.pendingFeeYAtomic ?? "0");
-// oxlint-disable-next-line anti-slop/no-runtime-typeof -- `pendingFeeUsd` from untyped exit result; the number guard is the boundary check
           if (typeof pendingFeeUsd === "number") {
             pos.cumulativeFeesClaimedUsd += pendingFeeUsd;
             if ((pendingFeeX > 0 || pendingFeeY > 0) && pos.positionPubKey != null) {
@@ -2169,7 +2154,6 @@ export function executeLive(
           let sweptRewardUsd = 0;
           let unpricedReward = false;
           for (const reward of sweptRewards) {
-// oxlint-disable-next-line anti-slop/no-runtime-typeof -- `reward.amountUsd` from sweep results (optional/untyped); the numeric guard is the boundary check
             if (typeof reward.amountUsd === "number") {
               pos.cumulativeRewardsClaimedUsd += reward.amountUsd;
               sweptRewardUsd += reward.amountUsd;
@@ -2806,7 +2790,6 @@ export const program = Effect.gen(function* () {
   // safety rejection at the pool screen.
   let tokenRiskProber: ReturnType<typeof createTokenRiskProber> | null = null;
   const getTokenRiskProber = () => {
-// oxlint-disable-next-line anti-slop/no-runtime-typeof -- `config.rpcUrl` is runtime config; the string guard gates client construction
     if (tokenRiskProber === null && typeof config.rpcUrl === "string" && config.rpcUrl.length > 0) {
       tokenRiskProber = createTokenRiskProber(
         createPublicClient({ transport: http(config.rpcUrl) }),
@@ -3031,7 +3014,6 @@ export const program = Effect.gen(function* () {
               binUtilization: 0,
               tokenX: rank.pool.tokenX,
               tokenY: rank.pool.tokenY,
-// oxlint-disable-next-line anti-slop/no-conditional-empty-object-spread -- conditional add of an optional field; the empty branch omits the key, which `exactOptionalPropertyTypes` requires (a present-but-undefined prop is rejected)
               ...(rank.pool.createdAtMs === undefined ? {} : { createdAtMs: rank.pool.createdAtMs }),
             }))
           : yield* screener.screenPools(scanOrdinal).pipe(
@@ -3539,7 +3521,6 @@ export const program = Effect.gen(function* () {
           poolTvlUsd: candidate.pool?.tvlUsd,
           countedOpenPositions: ownBook.open,
           countedPoolPositions: ownBook.pool,
-// oxlint-disable-next-line anti-slop/no-conditional-empty-object-spread -- conditional add of an optional field; the empty branch omits the key, which `exactOptionalPropertyTypes` requires (a present-but-undefined prop is rejected)
           ...(config.challengePoolShareCapPct !== undefined ? { challengePoolShareCapPct: config.challengePoolShareCapPct } : {}),
         });
         if (!allocation.approved) {
@@ -3703,11 +3684,9 @@ export const program = Effect.gen(function* () {
             if (agentProposal) {
               const proposalToEvaluate: AgentProposal = {
                 ...agentProposal,
-// oxlint-disable-next-line anti-slop/no-conditional-empty-object-spread -- conditional spread of an optional/backfill field; the empty branch omits the key (a present-but-undefined property would change SDK/serialized behavior)
                 ...(agentProposal.originalAction === undefined
                   ? { originalAction: decision.action }
                   : {}),
-// oxlint-disable-next-line anti-slop/no-conditional-empty-object-spread -- conditional spread of an optional/backfill field; the empty branch omits the key (a present-but-undefined property would change SDK/serialized behavior)
                 ...(agentProposal.originalConfidence === undefined
                   ? { originalConfidence: decision.confidence }
                   : {}),
@@ -3998,10 +3977,8 @@ export const program = Effect.gen(function* () {
           .pipe(Effect.catch(() => Effect.succeed(null)));
 
         // Same entry-shape / range-width resolution the in-slot tail uses.
-// oxlint-disable-next-line anti-slop/no-shape-in-symbol-names -- `*Shape*` here is the engine's public field/type name (`entryStrategyShape`, `EntryStrategyShape`, `strategyShape`) required by the engine API contract (tests call it by this exact name); it cannot be renamed without breaking that contract
         const entryStrategyShape: EntryStrategyShape =
           config.entryStrategyType === "auto"
-// oxlint-disable-next-line anti-slop/no-shape-in-symbol-names -- `*Shape*` here is the engine's public field/type name (`entryStrategyShape`, `EntryStrategyShape`, `strategyShape`) required by the engine API contract (tests call it by this exact name); it cannot be renamed without breaking that contract
             ? recommendStrategyShape({
                 volatilityStddev: candidate.volatilityStddev,
                 highVolThreshold: config.volatilityExitStddev,
@@ -4020,7 +3997,6 @@ export const program = Effect.gen(function* () {
         let executionError: string | undefined = undefined;
         if (config.paperTrading) {
           const paperResult = yield* executePaper(
-// oxlint-disable-next-line anti-slop/no-shape-in-symbol-names -- `*Shape*` here is the engine's public field/type name (`entryStrategyShape`, `EntryStrategyShape`, `strategyShape`) required by the engine API contract (tests call it by this exact name); it cannot be renamed without breaking that contract
             { db, trackedPositions, strategy, entryStrategyShape, entryRangeHalfWidth },
             decision,
             candidate.pool,
@@ -4119,13 +4095,11 @@ export const program = Effect.gen(function* () {
               minNativeForGasWei: config.minNativeForGasWei,
               gasReservePct: config.gasReservePct,
               entryMinRangePct: config.entryMinRangePct,
-// oxlint-disable-next-line anti-slop/no-shape-in-symbol-names -- `*Shape*` here is the engine's public field/type name (`entryStrategyShape`, `EntryStrategyShape`, `strategyShape`) required by the engine API contract (tests call it by this exact name); it cannot be renamed without breaking that contract
               entryStrategyShape,
               entryRangeHalfWidth,
               reconcileRequestedPools,
               memory,
               unpricedExitWarnedPools,
-// oxlint-disable-next-line anti-slop/no-conditional-empty-object-spread -- conditional spread of an optional/backfill field; the empty branch omits the key (a present-but-undefined property would change SDK/serialized behavior)
               ...(autonomousExecution ? { autonomous: autonomousExecution } : {}),
             },
             decision,
@@ -4536,7 +4510,6 @@ export const program = Effect.gen(function* () {
         if (persistedCooldowns !== null) {
           try {
             for (const [pool, until] of Object.entries(JSON.parse(persistedCooldowns))) {
-// oxlint-disable-next-line anti-slop/no-runtime-typeof -- `until` from an external metadata JSON blob; the number guard is the boundary check
               const untilMs = typeof until === "number" ? until : Number(until);
               if (Number.isFinite(untilMs) && untilMs > Date.now()) {
                 challengeLossCooldownUntil.set(pool.toLowerCase(), untilMs);
@@ -4558,7 +4531,6 @@ export const program = Effect.gen(function* () {
         if (persistedFirstSeen !== null) {
           try {
             for (const [pool, seenAt] of Object.entries(JSON.parse(persistedFirstSeen))) {
-// oxlint-disable-next-line anti-slop/no-runtime-typeof -- `seenAt` from an external metadata JSON blob; the number guard is the boundary check
               const seenMs = typeof seenAt === "number" ? seenAt : Number(seenAt);
               if (Number.isFinite(seenMs) && seenMs > 0) {
                 poolFirstSeenAt.set(pool.toLowerCase(), seenMs);
@@ -4614,7 +4586,6 @@ export const program = Effect.gen(function* () {
             Effect.catch(() => Effect.succeed(undefined)),
           );
         const priceOk =
-// oxlint-disable-next-line anti-slop/no-runtime-typeof -- live native price from the price feed; the number guard is the boundary check
           typeof liveNativePrice === "number" &&
           Number.isFinite(liveNativePrice) &&
           liveNativePrice > 0 &&
@@ -4999,7 +4970,6 @@ export const program = Effect.gen(function* () {
           binUtilization: ctx.metrics.binUtilization,
           tvlVelocity: ctx.metrics.tvlVelocity,
         },
-// oxlint-disable-next-line anti-slop/no-conditional-empty-object-spread -- conditional spread of an optional/backfill field; the empty branch omits the key (a present-but-undefined property would change SDK/serialized behavior)
         ...(position ? { position } : {}),
       };
       yield* agent.sendAlert(alert).pipe(Effect.catch(() => Effect.void));
@@ -6776,7 +6746,6 @@ export const program = Effect.gen(function* () {
                 poolAddress,
                 config.paperTrading,
               ).pool,
-// oxlint-disable-next-line anti-slop/no-conditional-empty-object-spread -- conditional add of an optional field; the empty branch omits the key, which `exactOptionalPropertyTypes` requires (a present-but-undefined prop is rejected)
               ...(config.challengePoolShareCapPct !== undefined ? { challengePoolShareCapPct: config.challengePoolShareCapPct } : {}),
             });
             if (!faAllocation.approved) {
@@ -7009,7 +6978,6 @@ export const program = Effect.gen(function* () {
                   poolAddress,
                   config.paperTrading,
                 ).pool,
-// oxlint-disable-next-line anti-slop/no-conditional-empty-object-spread -- conditional add of an optional field; the empty branch omits the key, which `exactOptionalPropertyTypes` requires (a present-but-undefined prop is rejected)
                 ...(config.challengePoolShareCapPct !== undefined ? { challengePoolShareCapPct: config.challengePoolShareCapPct } : {}),
               });
               if (!allocation.approved) {
@@ -7202,10 +7170,8 @@ export const program = Effect.gen(function* () {
       // Resolve the deposit distribution for entries: a concrete configured
       // shape is used as-is; `auto` picks per pool from the recent volatility
       // regime (see recommendStrategyShape). `spot` is the default.
-// oxlint-disable-next-line anti-slop/no-shape-in-symbol-names -- `*Shape*` here is the engine's public field/type name (`entryStrategyShape`, `EntryStrategyShape`, `strategyShape`) required by the engine API contract (tests call it by this exact name); it cannot be renamed without breaking that contract
       const entryStrategyShape: EntryStrategyShape =
         config.entryStrategyType === "auto"
-// oxlint-disable-next-line anti-slop/no-shape-in-symbol-names -- `*Shape*` here is the engine's public field/type name (`entryStrategyShape`, `EntryStrategyShape`, `strategyShape`) required by the engine API contract (tests call it by this exact name); it cannot be renamed without breaking that contract
           ? recommendStrategyShape({
               volatilityStddev,
               highVolThreshold: config.volatilityExitStddev,
@@ -7253,7 +7219,6 @@ export const program = Effect.gen(function* () {
                   .getRecentDecisions(10)
                   .pipe(Effect.catch(() => Effect.succeed([]))),
                 hasOpenPosition,
-// oxlint-disable-next-line anti-slop/no-conditional-empty-object-spread -- conditional spread of an optional/backfill field; the empty branch omits the key (a present-but-undefined property would change SDK/serialized behavior)
                 ...(pos !== undefined ? { position: toAgentPositionState(pos, Date.now()) } : {}),
               })
               .pipe(
@@ -7389,7 +7354,6 @@ export const program = Effect.gen(function* () {
                         .getRecentDecisions(10)
                         .pipe(Effect.catch(() => Effect.succeed([]))),
                       hasOpenPosition,
-// oxlint-disable-next-line anti-slop/no-conditional-empty-object-spread -- conditional spread of an optional/backfill field; the empty branch omits the key (a present-but-undefined property would change SDK/serialized behavior)
                       ...(pos !== undefined
                         ? { position: toAgentPositionState(pos, Date.now()) }
                         : {}),
@@ -7432,11 +7396,9 @@ export const program = Effect.gen(function* () {
               const poolBackoff = proposalBackoff.get(poolAddress);
               const proposalToEvaluate = {
                 ...agentProposal,
-// oxlint-disable-next-line anti-slop/no-conditional-empty-object-spread -- conditional spread of an optional/backfill field; the empty branch omits the key (a present-but-undefined property would change SDK/serialized behavior)
                 ...(agentProposal.originalAction === undefined
                   ? { originalAction: decision.action }
                   : {}),
-// oxlint-disable-next-line anti-slop/no-conditional-empty-object-spread -- conditional spread of an optional/backfill field; the empty branch omits the key (a present-but-undefined property would change SDK/serialized behavior)
                 ...(agentProposal.originalConfidence === undefined
                   ? { originalConfidence: decision.confidence }
                   : {}),
@@ -7717,7 +7679,6 @@ export const program = Effect.gen(function* () {
             severity: "warning",
             message: `Risk gate rejected ${decision.action} on ${pool.tokenXSymbol}/${pool.tokenYSymbol}: ${riskResult.reason}`,
             poolAddress,
-// oxlint-disable-next-line anti-slop/no-conditional-empty-object-spread -- conditional spread of an optional/backfill field; the empty branch omits the key (a present-but-undefined property would change SDK/serialized behavior)
             ...(pos !== undefined ? { positionId: pos.positionId } : {}),
             data: { action: decision.action, reason: riskResult.reason },
           });
@@ -7862,7 +7823,6 @@ export const program = Effect.gen(function* () {
           config.paperModeExitLive;
 
         if (decision.action === "ENTER" && config.entryStrategyType === "auto") {
-// oxlint-disable-next-line anti-slop/no-shape-in-symbol-names -- `*Shape*` here is the engine's public field/type name (`entryStrategyShape`, `EntryStrategyShape`, `strategyShape`) required by the engine API contract (tests call it by this exact name); it cannot be renamed without breaking that contract
           console.info(`[strategy-shape] auto resolved ${entryStrategyShape} for ${poolAddress}`, {
             volatilityStddev,
             netDriftBins,
@@ -7975,15 +7935,12 @@ export const program = Effect.gen(function* () {
               minNativeForGasWei: config.minNativeForGasWei,
               gasReservePct: config.gasReservePct,
               entryMinRangePct: config.entryMinRangePct,
-// oxlint-disable-next-line anti-slop/no-shape-in-symbol-names -- `*Shape*` here is the engine's public field/type name (`entryStrategyShape`, `EntryStrategyShape`, `strategyShape`) required by the engine API contract (tests call it by this exact name); it cannot be renamed without breaking that contract
               entryStrategyShape,
               entryRangeHalfWidth: rangeHalfWidth,
               reconcileRequestedPools,
               memory,
               unpricedExitWarnedPools,
-// oxlint-disable-next-line anti-slop/no-conditional-empty-object-spread -- conditional add of an optional field; the empty branch omits the key, which `exactOptionalPropertyTypes` requires (a present-but-undefined prop is rejected)
               ...(autonomousCandidateId !== undefined ? { candidateId: autonomousCandidateId } : {}),
-// oxlint-disable-next-line anti-slop/no-conditional-empty-object-spread -- conditional spread of an optional/backfill field; the empty branch omits the key (a present-but-undefined property would change SDK/serialized behavior)
               ...(autonomousExecution ? { autonomous: autonomousExecution } : {}),
             },
             decision,
@@ -8004,7 +7961,6 @@ export const program = Effect.gen(function* () {
               db,
               trackedPositions,
               strategy,
-// oxlint-disable-next-line anti-slop/no-shape-in-symbol-names -- `*Shape*` here is the engine's public field/type name (`entryStrategyShape`, `EntryStrategyShape`, `strategyShape`) required by the engine API contract (tests call it by this exact name); it cannot be renamed without breaking that contract
               entryStrategyShape,
               entryRangeHalfWidth: rangeHalfWidth,
             },
@@ -8038,15 +7994,12 @@ export const program = Effect.gen(function* () {
               minNativeForGasWei: config.minNativeForGasWei,
               gasReservePct: config.gasReservePct,
               entryMinRangePct: config.entryMinRangePct,
-// oxlint-disable-next-line anti-slop/no-shape-in-symbol-names -- `*Shape*` here is the engine's public field/type name (`entryStrategyShape`, `EntryStrategyShape`, `strategyShape`) required by the engine API contract (tests call it by this exact name); it cannot be renamed without breaking that contract
               entryStrategyShape,
               entryRangeHalfWidth: rangeHalfWidth,
               reconcileRequestedPools,
               memory,
               unpricedExitWarnedPools,
-// oxlint-disable-next-line anti-slop/no-conditional-empty-object-spread -- conditional add of an optional field; the empty branch omits the key, which `exactOptionalPropertyTypes` requires (a present-but-undefined prop is rejected)
               ...(autonomousCandidateId !== undefined ? { candidateId: autonomousCandidateId } : {}),
-// oxlint-disable-next-line anti-slop/no-conditional-empty-object-spread -- conditional spread of an optional/backfill field; the empty branch omits the key (a present-but-undefined property would change SDK/serialized behavior)
               ...(autonomousExecution ? { autonomous: autonomousExecution } : {}),
             },
             decision,
@@ -8213,7 +8166,6 @@ export const program = Effect.gen(function* () {
             severity: "critical",
             message: `EXIT executed on ${pool.tokenXSymbol}/${pool.tokenYSymbol}: ${decision.reasoning}`,
             poolAddress,
-// oxlint-disable-next-line anti-slop/no-conditional-empty-object-spread -- conditional spread of an optional/backfill field; the empty branch omits the key (a present-but-undefined property would change SDK/serialized behavior)
             ...(pos !== undefined ? { positionId: pos.positionId } : {}),
             data: {
               reasoning: decision.reasoning,

@@ -406,7 +406,6 @@ describe("probeVecAvailability", () => {
       const result = probeVecAvailability();
       const after = readdirSync(tmpDir);
       expect(after).toEqual(before);
-      // oxlint-disable-next-line anti-slop/no-runtime-typeof -- genuinely dynamic probe result; assert it is a boolean
       expect(typeof result.available).toBe("boolean");
     } finally {
       process.chdir(previousCwd);

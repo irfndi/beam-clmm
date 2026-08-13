@@ -53,17 +53,12 @@ export type FetchLike = (input: string | URL | Request, init?: RequestInit) => P
 
 // ─── Response parsing (live-verified semantics) ──────────────────────────────
 
-// oxlint-disable-next-line anti-slop/no-unknown-parameters, anti-slop/no-unsafe-dictionary-type -- value is external Krystal API JSON parsed at I/O boundary
 function isObject(value: unknown): value is Record<string, unknown> {
-  // oxlint-disable-next-line anti-slop/no-runtime-typeof -- external data guard
   return typeof value === "object" && value !== null;
 }
 
-// oxlint-disable-next-line anti-slop/no-unknown-parameters -- value is external Krystal API JSON parsed at I/O boundary
 function readFiniteNumber(value: unknown): number | null {
-  // oxlint-disable-next-line anti-slop/no-runtime-typeof -- external data guard
   if (typeof value === "number") return Number.isFinite(value) ? value : null;
-  // oxlint-disable-next-line anti-slop/no-runtime-typeof -- external data guard
   if (typeof value === "string" && value.trim().length > 0) {
     const parsed = Number(value);
     return Number.isFinite(parsed) ? parsed : null;
@@ -73,7 +68,6 @@ function readFiniteNumber(value: unknown): number | null {
 
 /** Parse one top_pools entry → KrystalPoolStats. Returns null on shape drift
  *  (the caller fails through to gecko/heuristic — never crashes the cycle). */
-// oxlint-disable-next-line anti-slop/no-unknown-parameters -- raw is unparsed external Krystal API entry at I/O boundary
 export function parseKrystalPool(raw: unknown): KrystalPoolStats | null {
   if (!isObject(raw)) return null;
   const stat24h = isObject(raw.stat24h) ? raw.stat24h : {};
@@ -94,9 +88,7 @@ export function parseKrystalPool(raw: unknown): KrystalPoolStats | null {
     lpFee: readFiniteNumber(raw.lpFee) ?? 0,
     dynamicFee: raw.dynamicFee === true,
     protocolFee: readFiniteNumber(raw.protocolFee) ?? 0,
-    // oxlint-disable-next-line anti-slop/no-runtime-typeof -- guard validates external token symbol at I/O boundary
     token0Symbol: typeof token0.symbol === "string" ? token0.symbol : "",
-    // oxlint-disable-next-line anti-slop/no-runtime-typeof -- guard validates external token symbol at I/O boundary
     token1Symbol: typeof token1.symbol === "string" ? token1.symbol : "",
   };
 }
@@ -175,7 +167,6 @@ export async function fetchKrystalUniverse(
     }
     const pools = new Map<string, KrystalPoolStats>();
     for (const entry of result) {
-      // oxlint-disable-next-line anti-slop/no-runtime-typeof -- guard validates external entry at I/O boundary
       if (!isObject(entry) || typeof entry.poolAddress !== "string") continue;
       const stats = parseKrystalPool(entry);
       if (stats === null) continue;
@@ -190,7 +181,6 @@ export async function fetchKrystalUniverse(
       if (entry.protocol === "uniswapv4") {
         const token0 = isObject(entry.token0) ? entry.token0 : null;
         const token1 = isObject(entry.token1) ? entry.token1 : null;
-        // oxlint-disable-next-line anti-slop/no-runtime-typeof -- guard validates external token address at I/O boundary
         if (token0 !== null && token1 !== null && typeof token0.address === "string") {
           const normalize = (addr: string): `0x${string}` =>
             addr.toLowerCase() === "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
@@ -199,7 +189,6 @@ export async function fetchKrystalUniverse(
           const key: V4PoolKey = {
             currency0: normalize(token0.address),
             currency1:
-              // oxlint-disable-next-line anti-slop/no-runtime-typeof -- guard validates external token address at I/O boundary
               typeof token1.address === "string"
                 ? normalize(token1.address)
                 : (NATIVE_MINT as `0x${string}`),

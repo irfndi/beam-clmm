@@ -60,15 +60,11 @@ export interface TokenRiskConfigLike {
 
 // ─── Response parsing (live-verified semantics) ──────────────────────────────
 
-// oxlint-disable-next-line anti-slop/no-unknown-parameters, anti-slop/no-unsafe-dictionary-type -- value is external Jupiter tokens API JSON at I/O boundary
 function isObject(value: unknown): value is Record<string, unknown> {
-  // oxlint-disable-next-line anti-slop/no-runtime-typeof -- external data guard
   return typeof value === "object" && value !== null;
 }
 
-// oxlint-disable-next-line anti-slop/no-unknown-parameters -- value is external Jupiter tokens API JSON at I/O boundary
 function readMint(value: unknown): string | null {
-  // oxlint-disable-next-line anti-slop/no-runtime-typeof -- external data guard
   return typeof value === "string" && value.length > 0 ? value : null;
 }
 
@@ -77,7 +73,6 @@ function readMint(value: unknown): string | null {
  * carries no usable address (schema drift) so it is simply skipped — mints
  * absent from the response stay unknown to the caller (no fabricated entry).
  */
-// oxlint-disable-next-line anti-slop/no-unknown-parameters -- raw is unparsed external Jupiter tokens API entry at I/O boundary
 export function parseTokenRiskEntry(raw: unknown): {
   readonly mint: string;
   readonly signal: TokenRiskSignal;
@@ -93,9 +88,7 @@ export function parseTokenRiskEntry(raw: unknown): {
   return {
     mint,
     signal: {
-      // oxlint-disable-next-line anti-slop/no-runtime-typeof -- external data field guard
       isVerified: typeof raw["isVerified"] === "boolean" ? raw["isVerified"] : null,
-      // oxlint-disable-next-line anti-slop/no-runtime-typeof -- external data field guard
       organicScore: typeof score === "number" && Number.isFinite(score) ? score : null,
       organicScoreLabel: label === "high" || label === "medium" || label === "low" ? label : null,
       isSus: isObject(audit) && audit["isSus"] === true,

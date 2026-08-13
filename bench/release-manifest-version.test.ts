@@ -50,7 +50,6 @@ interface ManifestResult {
   status: number;
   stdout: string;
   stderr: string;
-  // oxlint-disable-next-line anti-slop/no-unsafe-dictionary-type -- manifest is arbitrary parsed JSON; no concrete value type exists in the fixture
   manifest: Record<string, unknown> | null;
   dir: string;
 }
@@ -69,7 +68,6 @@ function runManifest(opts: {
     VERSION: opts.version,
     R2_BASE_URL: R2_BASE,
     OUT_FILE: "manifest.json",
-    // oxlint-disable-next-line anti-slop/no-conditional-empty-object-spread -- conditionally add the optional flag key to the spawned env when set
     ...(opts.requireAllBundles !== undefined
       ? { REQUIRE_ALL_BUNDLES: String(opts.requireAllBundles) }
       : {}),
@@ -85,7 +83,7 @@ function runManifest(opts: {
   const stderr = String(res.stderr ?? "");
   const manifestFile = path.join(dir, "manifest.json");
   const manifest = existsSync(manifestFile)
-    ? // oxlint-disable-next-line anti-slop/no-unsafe-dictionary-type -- parsed manifest.json is heterogeneous JSON from an external file
+    ?
       (JSON.parse(readFileSync(manifestFile, "utf8")) as Record<string, unknown>)
     : null;
   return { status, stdout, stderr, manifest, dir };

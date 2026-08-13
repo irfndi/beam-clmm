@@ -279,7 +279,6 @@ const TRANSIENT_HTTP_STATUS =
 const TRANSIENT_NETWORK =
   /fetch failed|timeout|timed out|timedout|aborted|ECONNRESET|ENOTFOUND|ETIMEDOUT|EAI_AGAIN|socket hang up|connection refused|connection reset|network error|too many requests/i;
 
-// oxlint-disable-next-line anti-slop/no-unknown-parameters -- error is an unparsed caught error; normalized via instanceof/String guard
 export function isTransientSettlementError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
   // Anchored to HTTP-status context — a bare \b\d{3}\b would classify
@@ -288,7 +287,6 @@ export function isTransientSettlementError(error: unknown): boolean {
   return TRANSIENT_HTTP_STATUS.test(message) || TRANSIENT_NETWORK.test(message);
 }
 
-// oxlint-disable-next-line anti-slop/no-unknown-parameters -- error is an unparsed caught error; delegated to isTransientSettlementError
 function retryableJob(job: SettlementJobRecord, now: number, error: unknown): SettlementJobRecord {
   const attempts = job.attempts + 1;
   // Transient failures (rate limits, network blips) never terminalize — the
@@ -310,7 +308,6 @@ function retryableJob(job: SettlementJobRecord, now: number, error: unknown): Se
 function reconciliationJob(
   job: SettlementJobRecord,
   now: number,
-  // oxlint-disable-next-line anti-slop/no-unknown-parameters -- error is an unparsed caught error; normalized via instanceof/String guard
   error: unknown,
 ): SettlementJobRecord {
   return {

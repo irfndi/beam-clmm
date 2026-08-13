@@ -382,7 +382,6 @@ function runOneCycle<E>(
     return { positions, decisions };
   });
   return Effect.runPromise(
-    // oxlint-disable-next-line anti-slop/no-chained-type-assertions -- test-only hard cast of a partial stub/generic expression to a full interface/Effect type; single `as` is impossible without fabricating the full type
     Effect.provide(test, layer) as unknown as Effect.Effect<CycleResult, Error, never>,
   );
 }

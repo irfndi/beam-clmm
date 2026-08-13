@@ -77,17 +77,12 @@ export interface GeckoOhlcvSignals {
 
 export type FetchLike = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
 
-// oxlint-disable-next-line anti-slop/no-unknown-parameters, anti-slop/no-unsafe-dictionary-type -- runtime guard over untrusted GeckoTerminal API JSON; Record<string, unknown> is the open-dictionary contract for it
 function isObject(value: unknown): value is Record<string, unknown> {
-  // oxlint-disable-next-line anti-slop/no-runtime-typeof -- manual null-object guard on unparsed external API payload
   return typeof value === "object" && value !== null;
 }
 
-// oxlint-disable-next-line anti-slop/no-unknown-parameters -- parses unparsed numeric field from external API payload
 function readFiniteNumber(value: unknown): number | null {
-  // oxlint-disable-next-line anti-slop/no-runtime-typeof -- runtime guard on unparsed external number field
   if (typeof value === "number") return Number.isFinite(value) ? value : null;
-  // oxlint-disable-next-line anti-slop/no-runtime-typeof -- runtime guard on unparsed external number-as-string field
   if (typeof value === "string" && value.trim().length > 0) {
     const parsed = Number(value);
     return Number.isFinite(parsed) ? parsed : null;
@@ -101,7 +96,6 @@ function readFiniteNumber(value: unknown): number | null {
  * close are dropped (dead/corrupt candle — a positive close is required to
  * compute log returns and drawdown).
  */
-// oxlint-disable-next-line anti-slop/no-unknown-parameters -- raw is unparsed GeckoTerminal API payload; parsed via isObject/field guards
 export function parseGeckoOhlcv(raw: unknown): ReadonlyArray<GeckoOhlcvBar> {
   if (!isObject(raw)) return [];
   const data = raw["data"];

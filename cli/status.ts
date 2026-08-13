@@ -39,7 +39,7 @@ export type StrandedSettlementClassification =
  * two. Outage → Unavailable (retry later); unresolvable → Unpriceable
  * (permanent; a retry can never succeed). Exported for unit coverage.
  */
-export function decimalsFailureState(err: unknown): StrandedLookupState { // oxlint-disable-line anti-slop/no-unknown-parameters -- receives an inherently unknown thrown value (may be null per tests, or any non-Error); guards with instanceof as its contract.
+export function decimalsFailureState(err: unknown): StrandedLookupState {
   return err instanceof Error && err.message.includes("Cannot resolve decimals")
     ? "unpriceable"
     : "unavailable";
@@ -160,7 +160,6 @@ function buildProgram(): Layer.Layer<
   const auditLayer = Layer.provide(AuditLive, dbLayer);
   const configLayer = ConfigLive;
   const adapterLayer = Layer.provide(AdapterLive, configLayer);
-  // oxlint-disable-next-line anti-slop/no-chained-type-assertions -- Partial stub: Layer.mergeAll's Effect-free result cannot express the required Context.Layer<R>.Layer overlap, so the runtime-shaped value is projected onto the declared service-layer contract.
   return Layer.mergeAll(dbLayer, auditLayer, configLayer, adapterLayer) as unknown as Layer.Layer<
     DbService | AuditService | ConfigService | AdapterService,
     Error,

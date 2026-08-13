@@ -39,7 +39,6 @@ export function installBigintWarningFilter(): void {
 
   console.warn = ((...args: unknown[]): void => {
     const first = args[0];
-    // oxlint-disable-next-line anti-slop/no-runtime-typeof -- runtime guard on arbitrary console.warn first arg around a console monkeypatch
     if (typeof first === "string" && first.includes(BIGINT_BINDINGS_MARKER)) {
       if (!loggedOnce) {
         loggedOnce = true;

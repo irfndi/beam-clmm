@@ -449,7 +449,6 @@ function transportSupportsAlert(
 ): transport is AgentRuntimeTransport & {
   sendAlert: (alert: AgentRuntimeAlert) => Effect.Effect<void, Error>;
 } {
-  // oxlint-disable-next-line anti-slop/no-runtime-typeof -- feature-detects optional transport method presence, not unparsed data
   return typeof transport.sendAlert === "function";
 }
 
@@ -458,7 +457,6 @@ function transportSupportsCheckin(
 ): transport is AgentRuntimeTransport & {
   sendCheckin: (checkin: AgentRuntimeCheckin) => Effect.Effect<void, Error>;
 } {
-  // oxlint-disable-next-line anti-slop/no-runtime-typeof -- feature-detects optional transport method presence, not unparsed data
   return typeof transport.sendCheckin === "function";
 }
 

@@ -26,7 +26,6 @@ export function loadKeystoreSecretKeyHex(): string | null {
     const data = JSON.parse(fs.readFileSync(keystorePath, "utf-8")) as {
       privateKey?: unknown;
     };
-    // oxlint-disable-next-line anti-slop/no-runtime-typeof -- guard validates external keystore JSON at I/O boundary
     if (typeof data.privateKey !== "string") return null;
     const key = data.privateKey.startsWith("0x") ? data.privateKey : `0x${data.privateKey}`;
     return isAddress(key) || /^0x[0-9a-fA-F]{64}$/.test(key) ? key : null;

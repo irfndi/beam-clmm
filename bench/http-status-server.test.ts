@@ -130,7 +130,6 @@ function baseConfig(overrides: Partial<AppConfig> = {}): AppConfig {
   };
 }
 
-// oxlint-disable-next-line anti-slop/no-unsafe-dictionary-type -- test value is genuinely heterogeneous data (raw DB row / wire-format JSON / capture array); no concrete owner exists
 function mockState(snapshot: Record<string, unknown> = {}) {
   return {
     getSnapshot: () => Effect.succeed(snapshot as never),

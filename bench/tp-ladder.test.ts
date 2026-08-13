@@ -112,7 +112,6 @@ describe("serializeTpLadder / parseTpLadder", () => {
 
   it("round-trips a ladder through JSON", () => {
     const raw = serializeTpLadder(ladder)!;
-    // oxlint-disable-next-line anti-slop/no-runtime-typeof -- runtime typeof assertion on a genuinely-dynamic test value / real union narrowing, not a type alias
     expect(typeof raw).toBe("string");
     const parsed = parseTpLadder(raw)!;
     expect(parsed.rungs).toEqual(ladder.rungs);

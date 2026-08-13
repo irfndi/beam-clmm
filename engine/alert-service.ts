@@ -22,10 +22,8 @@ function readBeamApiKey(): string | null {
     const credentialsFile = join(getBeamUserConfigDir(), "credentials.json");
     if (!existsSync(credentialsFile)) return null;
     const value: unknown = JSON.parse(readFileSync(credentialsFile, "utf-8"));
-    // oxlint-disable-next-line anti-slop/no-runtime-typeof -- runtime shape guard on untrusted DEX credentials JSON at the parse boundary
     if (typeof value !== "object" || value === null || !("apiKey" in value)) return null;
     const key = (value as { apiKey: unknown }).apiKey;
-    // oxlint-disable-next-line anti-slop/no-runtime-typeof -- runtime type guard on unparsed credentials field
     return typeof key === "string" && key.length > 0 ? key : null;
   } catch {
     return null;

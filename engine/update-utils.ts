@@ -129,7 +129,6 @@ export function fetchGitHubRelease(
         ? `https://api.github.com/repos/${repo}/releases/latest`
         : `https://api.github.com/repos/${repo}/releases`;
 
-    // oxlint-disable-next-line anti-slop/no-known-value-widening -- mutable headers map; conditional Authorization injection requires an open string-keyed type
     const headers: Record<string, string> = {
       "User-Agent": "beam-clmm",
       Accept: "application/vnd.github.v3+json",
@@ -191,7 +190,6 @@ export function fetchGitHubRelease(
       }
 
       pageCount++;
-      // oxlint-disable-next-line anti-slop/no-known-value-widening -- mutable headers map; conditional Authorization injection requires an open string-keyed type
       const pageHeaders: Record<string, string> = {
         "User-Agent": "beam-clmm",
         Accept: "application/vnd.github.v3+json",

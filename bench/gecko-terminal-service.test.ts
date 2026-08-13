@@ -31,7 +31,7 @@ function pool(overrides: Partial<PoolState> = {}): PoolState {
 // ─── parseGeckoPoolStats ──────────────────────────────────────────────────────
 
 describe("parseGeckoPoolStats", () => {
-  const attrs = (a: Record<string, unknown>): unknown => ({ data: { attributes: a } }); /* oxlint-disable-line anti-slop/no-unsafe-dictionary-type, anti-slop/no-known-value-widening */
+  const attrs = (a: Record<string, unknown>): unknown => ({ data: { attributes: a } });
 
   it("parses a valid payload with string numeric fields and derives fees from baseFeeRate", () => {
     const raw = attrs({

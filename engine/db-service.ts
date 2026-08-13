@@ -30,7 +30,6 @@ import { PersistenceContractError } from "./errors.js";
  * stringify/narrow each column into the concrete owner record type. The
  * dictionary is local to this module and never escapes it.
  */
-// oxlint-disable-next-line anti-slop/no-unsafe-dictionary-type -- SQLite rows are genuinely untyped external data (arbitrary columns) read at the DB boundary; each column is narrowed by the rowTo* mappers below.
 type SqlRawRow = { [key: string]: unknown };
 
 /** Intermediate parse shape for a serialized BinArray bin (JSON round-trip). */
@@ -115,26 +114,21 @@ export interface AuditRecord {
 }
 
 function queryOne<T>(db: Database, sql: string, ...params: unknown[]): T | null {
-  // oxlint-disable-next-line anti-slop/no-chained-type-assertions -- Bun's SQLite `Statement` param bindings (SQLQueryBindings) can't accept a generic `unknown[]` in a single `as`; the unknown bridge is required for the generic query helper.
   return (db.query(sql) as unknown as { get(...p: unknown[]): T | null }).get(...params);
 }
 
 function queryAll<T>(db: Database, sql: string, ...params: unknown[]): T[] {
-  // oxlint-disable-next-line anti-slop/no-chained-type-assertions -- same generic-binding bridge as queryOne (Bun's SQLQueryBindings can't take `unknown[]` in a single `as`).
   return (db.query(sql) as unknown as { all(...p: unknown[]): T[] }).all(...params);
 }
 
 function runOne(db: Database, sql: string, ...params: unknown[]): void {
-  // oxlint-disable-next-line anti-slop/no-chained-type-assertions -- same generic-binding bridge as queryOne (Bun's SQLQueryBindings can't take `unknown[]` in a single `as`).
   (db.run as unknown as (sql: string, ...params: unknown[]) => void)(sql, ...params);
 }
 
-// oxlint-disable-next-line anti-slop/no-unknown-parameters -- `e` comes from a catch clause (Error is unknown at the JS boundary); negated via `instanceof` narrowing.
 function isVecMemoryMissingError(e: unknown): boolean {
   return e instanceof Error && e.message.includes("no such table: vec_memory");
 }
 
-// oxlint-disable-next-line anti-slop/no-unknown-parameters -- accepts an arbitrary value to JSON-stringify at the persistence boundary (any domain type may be stored).
 function serializeJson(value: unknown): string | null {
   try {
     return JSON.stringify(value);
@@ -158,7 +152,6 @@ function deserializeBinArray(json: string): BinArray {
     reserveY: BigInt(String(b.reserveY)),
     liquiditySupply: BigInt(String(b.liquiditySupply)),
   }));
-  // oxlint-disable-next-line anti-slop/no-chained-type-assertions -- structurly different reconstructed BinArray (fields narrowed one-by-one from a JSON round-trip) can't be a single `as`; the parse is performed above per-field.
   return raw as unknown as BinArray;
 }
 
@@ -1405,7 +1398,6 @@ export const DbLive = (dbPath?: string) =>
     }),
   );
 
-// oxlint-disable-next-line anti-slop/no-unknown-parameters -- DB enum column is read untyped; the exhaustive switch/throw IS the boundary parser.
 function parseTokenCandidateState(value: unknown): TokenCandidateState {
   switch (value) {
     case "discovered":
@@ -1424,7 +1416,6 @@ function parseTokenCandidateState(value: unknown): TokenCandidateState {
   }
 }
 
-// oxlint-disable-next-line anti-slop/no-unknown-parameters -- DB enum column is read untyped; the exhaustive switch/throw IS the boundary parser.
 function parseExecutionOperationType(value: unknown): ExecutionOperationType {
   switch (value) {
     case "entry":
@@ -1441,7 +1432,6 @@ function parseExecutionOperationType(value: unknown): ExecutionOperationType {
   }
 }
 
-// oxlint-disable-next-line anti-slop/no-unknown-parameters -- DB enum column is read untyped; the exhaustive switch/throw IS the boundary parser.
 function parseExecutionOperationStatus(value: unknown): ExecutionOperationStatus {
   switch (value) {
     case "planned":
@@ -1460,7 +1450,6 @@ function parseExecutionOperationStatus(value: unknown): ExecutionOperationStatus
   }
 }
 
-// oxlint-disable-next-line anti-slop/no-unknown-parameters -- DB enum column is read untyped; the exhaustive switch/throw IS the boundary parser.
 function parseSettlementJobStatus(value: unknown): SettlementJobStatus {
   switch (value) {
     case "pending":
@@ -1479,7 +1468,6 @@ function parseSettlementJobStatus(value: unknown): SettlementJobStatus {
   }
 }
 
-// oxlint-disable-next-line anti-slop/no-unknown-parameters -- DB enum column is read untyped; the equality check/throw IS the boundary parser.
 function parseSettlementAsset(value: unknown): SettlementAsset {
   if (value === "ETH") return value;
   throw new PersistenceContractError({
@@ -1623,7 +1611,6 @@ function rowToPositionEvent(row: SqlRawRow): PositionEventRecord {
 // known members (legacy NULL, an unexpected literal) is treated as the
 // conservative, fail-closed "heuristic" — never silently upgraded to "datapi",
 // so an unknown provenance keeps the measured-fee-rate gate disabled on replay.
-// oxlint-disable-next-line anti-slop/no-unknown-parameters -- legacy reverse-proxy column read untyped; fail-closed fallback is the boundary contract.
 function parseStatsSource(value: unknown): "datapi" | "geckoterminal" | "heuristic" {
   if (value === "datapi" || value === "geckoterminal" || value === "heuristic") return value;
   return "heuristic";
@@ -1688,7 +1675,6 @@ function rowToFeedback(row: SqlRawRow): FeedbackRow {
     try {
       const parsed = JSON.parse(relatedRaw) as unknown;
       if (Array.isArray(parsed)) {
-        // oxlint-disable-next-line anti-slop/no-runtime-typeof -- JSON.parse'd stored array elements are genuinely `unknown`; the element type-guard is the boundary parser.
         relatedFiles = parsed.filter((x): x is string => typeof x === "string");
       }
     } catch {

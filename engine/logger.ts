@@ -31,7 +31,6 @@ const LEVEL_COLOR = {
 } satisfies Record<LogLevel, string>;
 const RESET = "\x1b[0m";
 
-// oxlint-disable-next-line anti-slop/no-unknown-parameters -- log payload is intentionally arbitrary JSON
 function emit(level: LogLevel, component: string, msg: string, data?: unknown) {
   const entry: LogEntry = data !== undefined
   ? { ts: new Date().toISOString(), level, component, msg, data }
@@ -54,13 +53,9 @@ function emit(level: LogLevel, component: string, msg: string, data?: unknown) {
 
 export function createLogger(component: string) {
   return {
-    // oxlint-disable-next-line anti-slop/no-unknown-parameters -- log payload is intentionally arbitrary JSON
     debug: (msg: string, data?: unknown) => emit("debug", component, msg, data),
-    // oxlint-disable-next-line anti-slop/no-unknown-parameters -- log payload is intentionally arbitrary JSON
     info: (msg: string, data?: unknown) => emit("info", component, msg, data),
-    // oxlint-disable-next-line anti-slop/no-unknown-parameters -- log payload is intentionally arbitrary JSON
     warn: (msg: string, data?: unknown) => emit("warn", component, msg, data),
-    // oxlint-disable-next-line anti-slop/no-unknown-parameters -- log payload is intentionally arbitrary JSON
     error: (msg: string, data?: unknown) => emit("error", component, msg, data),
   };
 }

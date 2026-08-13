@@ -242,7 +242,7 @@ async function runCycles(
     return yield* audit.getRecentDecisions(200);
   });
   return Effect.runPromise(
-    Effect.provide(test, layer) as unknown as Effect.Effect< /* oxlint-disable-line anti-slop/no-chained-type-assertions -- Effect type-bridging stub */
+    Effect.provide(test, layer) as unknown as Effect.Effect<
       ReadonlyArray<DecisionRow>,
       Error,
       never
@@ -288,7 +288,7 @@ describe("phantom EXIT gating (Wave 2)", () => {
       return { decisions, evolutionCount };
     });
     const { decisions, evolutionCount } = await Effect.runPromise(
-      Effect.provide(test, layer) as unknown as Effect.Effect< /* oxlint-disable-line anti-slop/no-chained-type-assertions -- Effect type-bridging stub */
+      Effect.provide(test, layer) as unknown as Effect.Effect<
         { decisions: ReadonlyArray<DecisionRow>; evolutionCount: string | null },
         Error,
         never
@@ -320,7 +320,7 @@ describe("phantom EXIT gating (Wave 2)", () => {
       return yield* audit.getRecentDecisions(50);
     });
     const decisions = await Effect.runPromise(
-      Effect.provide(test, layer) as unknown as Effect.Effect< /* oxlint-disable-line anti-slop/no-chained-type-assertions -- Effect type-bridging stub */
+      Effect.provide(test, layer) as unknown as Effect.Effect<
         ReadonlyArray<DecisionRow>,
         Error,
         never
@@ -353,7 +353,7 @@ describe("phantom EXIT gating (Wave 2)", () => {
       return { decisions, cooldown };
     });
     const { decisions, cooldown } = await Effect.runPromise(
-      Effect.provide(test, layer) as unknown as Effect.Effect< /* oxlint-disable-line anti-slop/no-chained-type-assertions -- Effect type-bridging stub */
+      Effect.provide(test, layer) as unknown as Effect.Effect<
         { decisions: ReadonlyArray<DecisionRow>; cooldown: unknown },
         Error,
         never
@@ -418,14 +418,14 @@ describe("portfolio value math (Wave 2)", () => {
       return yield* audit.getRecentDecisions(50);
     });
     const decisions = await Effect.runPromise(
-      Effect.provide(test, layer) as unknown as Effect.Effect< /* oxlint-disable-line anti-slop/no-chained-type-assertions -- Effect type-bridging stub */
+      Effect.provide(test, layer) as unknown as Effect.Effect<
         ReadonlyArray<DecisionRow>,
         Error,
         never
       >,
     );
 
-    console.log("PNEW:", JSON.stringify(decisions.find((d) => d.poolAddress === POOL_NEW), (_, v) => typeof v === "bigint" ? v.toString() : v)); /* oxlint-disable-line anti-slop/no-runtime-typeof -- bigint replacer over dynamic decision values */
+    console.log("PNEW:", JSON.stringify(decisions.find((d) => d.poolAddress === POOL_NEW), (_, v) => typeof v === "bigint" ? v.toString() : v));
     const enter = decisions.find((d) => d.poolAddress === POOL_NEW && d.action === "ENTER");
     expect(
       enter,
@@ -504,7 +504,7 @@ describe("pool snapshot retention (Wave 2)", () => {
       return { oldRows, recentRows };
     });
     const { oldRows, recentRows } = await Effect.runPromise(
-      Effect.provide(test, layer) as unknown as Effect.Effect< /* oxlint-disable-line anti-slop/no-chained-type-assertions -- Effect type-bridging stub */
+      Effect.provide(test, layer) as unknown as Effect.Effect<
         { oldRows: ReadonlyArray<PoolSnapshot>; recentRows: ReadonlyArray<PoolSnapshot> },
         Error,
         never
@@ -624,7 +624,7 @@ describe("agent position context wiring", () => {
       yield* Effect.raceFirst(program, Effect.sleep(2_000));
     });
     await Effect.runPromise(
-      Effect.provide(test, layer) as unknown as Effect.Effect<unknown, Error, never>, /* oxlint-disable-line anti-slop/no-chained-type-assertions -- Effect type-bridging stub */
+      Effect.provide(test, layer) as unknown as Effect.Effect<unknown, Error, never>,
     );
 
     expect(capturedContext, "sync advisor must be consulted for the EXIT").toBeDefined();

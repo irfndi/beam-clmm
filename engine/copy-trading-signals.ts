@@ -36,13 +36,10 @@ type CopySignalConfig = {
   readonly maxBoost: number;
 };
 
-// oxlint-disable-next-line anti-slop/no-unknown-parameters, anti-slop/no-unsafe-dictionary-type -- runtime guard over untrusted signal-feed JSON; Record<string, unknown> is the open-dictionary contract for it
 function isObject(value: unknown): value is Record<string, unknown> {
-  // oxlint-disable-next-line anti-slop/no-runtime-typeof -- manual null-object guard on unparsed external API payload
   return typeof value === "object" && value !== null;
 }
 
-// oxlint-disable-next-line anti-slop/no-unknown-parameters -- raw is unparsed external signal-feed payload; parsed via array/isObject guards
 export function parseCopySignalPayload(raw: unknown): ReadonlyArray<CopySignalObservation> {
   const values = Array.isArray(raw)
     ? raw
@@ -58,19 +55,15 @@ export function parseCopySignalPayload(raw: unknown): ReadonlyArray<CopySignalOb
     const confidence = value["confidence"];
     const observedAt = value["observedAt"];
     if (
-      // oxlint-disable-next-line anti-slop/no-runtime-typeof -- runtime guard on unparsed external signal field
       typeof wallet !== "string" ||
       !WALLET_PATTERN.test(wallet) ||
-      // oxlint-disable-next-line anti-slop/no-runtime-typeof -- runtime guard on unparsed external signal field
       typeof poolAddress !== "string" ||
       poolAddress.length === 0 ||
       (action !== "ENTER" && action !== "HOLD" && action !== "REBALANCE") ||
-      // oxlint-disable-next-line anti-slop/no-runtime-typeof -- runtime guard on unparsed external signal field
       typeof confidence !== "number" ||
       !Number.isFinite(confidence) ||
       confidence < 0 ||
       confidence > 1 ||
-      // oxlint-disable-next-line anti-slop/no-runtime-typeof -- runtime guard on unparsed external signal field
       typeof observedAt !== "number" ||
       !Number.isFinite(observedAt)
     )
@@ -81,7 +74,6 @@ export function parseCopySignalPayload(raw: unknown): ReadonlyArray<CopySignalOb
       action,
       confidence,
       observedAt,
-      // oxlint-disable-next-line anti-slop/no-conditional-empty-object-spread, anti-slop/no-runtime-typeof -- conditionally add the optional signature only when present (exactOptionalPropertyTypes omits absent keys)
       ...(typeof value["signature"] === "string" ? { signature: value["signature"] } : {}),
     } satisfies CopySignalObservation;
     observations.push(observation);

@@ -15,7 +15,7 @@ const PERMISSION_REQUEST_ID = 9001;
 let awaitingPermissionAck = false;
 let pendingPromptId: number | undefined;
 
-function send(msg: Record<string, unknown>): void { /* oxlint-disable-line anti-slop/no-unsafe-dictionary-type */
+function send(msg: Record<string, unknown>): void {
   process.stdout.write(JSON.stringify(msg) + "\n");
 }
 
@@ -42,9 +42,9 @@ function sendReply(promptId: number | undefined): void {
 const rl = readline.createInterface({ input: process.stdin });
 rl.on("line", (line) => {
   if (!line.trim()) return;
-  let req: { id?: number; method?: string; params?: Record<string, unknown> }; /* oxlint-disable-line anti-slop/no-unsafe-dictionary-type */
+  let req: { id?: number; method?: string; params?: Record<string, unknown> };
   try {
-    req = JSON.parse(line) as { id?: number; method?: string; params?: Record<string, unknown> }; /* oxlint-disable-line anti-slop/no-unsafe-dictionary-type */
+    req = JSON.parse(line) as { id?: number; method?: string; params?: Record<string, unknown> };
   } catch {
     return;
   }
@@ -54,7 +54,7 @@ rl.on("line", (line) => {
   // reply (a response carrying our id and no method). The content is irrelevant;
   // receiving it (rather than timing out) proves the host answers inbound ACP requests.
   if (awaitingPermissionAck) {
-    if (id === PERMISSION_REQUEST_ID && typeof method !== "string") { /* oxlint-disable-line anti-slop/no-runtime-typeof */
+    if (id === PERMISSION_REQUEST_ID && typeof method !== "string") {
       awaitingPermissionAck = false;
       sendReply(pendingPromptId);
     }
@@ -62,7 +62,7 @@ rl.on("line", (line) => {
   }
 
   if (method === "initialize") {
-    if (typeof params?.protocolVersion !== "number") { /* oxlint-disable-line anti-slop/no-runtime-typeof */
+    if (typeof params?.protocolVersion !== "number") {
       send({
         jsonrpc: "2.0",
         id,

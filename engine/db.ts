@@ -173,7 +173,6 @@ export interface VecProbeResult {
   readonly error: string | null;
 }
 
-// oxlint-disable-next-line anti-slop/no-unknown-parameters -- err is an unparsed caught error; normalized via instanceof guard
 function probeErrorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }

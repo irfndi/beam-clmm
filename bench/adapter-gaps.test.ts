@@ -70,7 +70,7 @@ interface RpcEntry {
 }
 
 interface RpcMock {
-  fetch: (input: unknown, init?: { body?: string }) => Promise<Response>; /* oxlint-disable-line anti-slop/no-unknown-parameters */
+  fetch: (input: unknown, init?: { body?: string }) => Promise<Response>;
   sentTxs: SentTx[];
   rpcLog: RpcEntry[];
 }
@@ -109,15 +109,15 @@ function createRpcMock(opts: MockOpts = {}): RpcMock {
   const sentTxs: SentTx[] = [];
   const rpcLog: RpcEntry[] = [];
 
-  function ok(result: unknown, id: number) { /* oxlint-disable-line anti-slop/no-unknown-parameters */
-    if (typeof result === "string" && result.startsWith("0x") && result.length > 2) { /* oxlint-disable-line anti-slop/no-runtime-typeof */
+  function ok(result: unknown, id: number) {
+    if (typeof result === "string" && result.startsWith("0x") && result.length > 2) {
       console.error(`[mock:len] ${(result.length - 2) / 2} bytes: ${result.slice(0, 18)}…`);
     }
     return new Response(JSON.stringify({ jsonrpc: "2.0", id, result }), {
       headers: { "content-type": "application/json" },
     });
   }
-  function err(body: object, id: number) { /* oxlint-disable-line anti-slop/no-object-parameters */
+  function err(body: object, id: number) {
     return new Response(JSON.stringify({ jsonrpc: "2.0", id, error: body }), {
       headers: { "content-type": "application/json" },
     });
@@ -140,7 +140,7 @@ function createRpcMock(opts: MockOpts = {}): RpcMock {
       sentTxs.push({
         to: addr(p.to),
         data: (p.data ?? "0x") as Hex,
-        ...(p.value !== undefined ? { value: p.value } : {}), /* oxlint-disable-line anti-slop/no-conditional-empty-object-spread */
+        ...(p.value !== undefined ? { value: p.value } : {}),
       });
       return ok(`0x${sentTxs.length.toString(16).padStart(64, "0")}`, id);
     }
@@ -155,7 +155,7 @@ function createRpcMock(opts: MockOpts = {}): RpcMock {
       sentTxs.push({
         to,
         data,
-        ...(parsed.value !== undefined ? { value: `0x${parsed.value.toString(16)}` } : {}), /* oxlint-disable-line anti-slop/no-conditional-empty-object-spread */
+        ...(parsed.value !== undefined ? { value: `0x${parsed.value.toString(16)}` } : {}),
       });
       return ok(`0x${sentTxs.length.toString(16).padStart(64, "0")}`, id);
     }
@@ -284,7 +284,7 @@ function createRpcMock(opts: MockOpts = {}): RpcMock {
     return ok("0x", id);
   }
 
-  const fetchImpl = async (_input: unknown, init?: { body?: string }) => { /* oxlint-disable-line anti-slop/no-unknown-parameters */
+  const fetchImpl = async (_input: unknown, init?: { body?: string }) => {
     const body = JSON.parse(init?.body ?? "{}") as { id: number; method: string; params: unknown[] };
     if (body.method === "eth_sendTransaction" || body.method === "eth_call") {
       const p = (body.params[0] ?? {}) as { to?: string };
@@ -306,8 +306,8 @@ function makeProgram(opts?: { exitProofConfig?: { simulateBeforeExit?: boolean }
   });
   const enriched = {
     ...cfg,
-    ...(opts?.exitProofConfig ? { exitProofConfig: opts.exitProofConfig } : {}), /* oxlint-disable-line anti-slop/no-conditional-empty-object-spread */
-    ...(opts?.swapMintConfig ? { swapMintConfig: opts.swapMintConfig } : {}), /* oxlint-disable-line anti-slop/no-conditional-empty-object-spread */
+    ...(opts?.exitProofConfig ? { exitProofConfig: opts.exitProofConfig } : {}),
+    ...(opts?.swapMintConfig ? { swapMintConfig: opts.swapMintConfig } : {}),
   } as AppConfig;
   return Layer.provide(AdapterLive, Layer.succeed(ConfigService, enriched));
 }
@@ -501,7 +501,7 @@ describe("simulateWithdraw fail-closed (exitPosition / rebalancePosition)", () =
         program,
       ),
     );
-    const err = await Effect.runPromise(svc.exitPosition(POOL, "42")).catch((e: unknown) => e); /* oxlint-disable-line anti-slop/no-unknown-parameters */
+    const err = await Effect.runPromise(svc.exitPosition(POOL, "42")).catch((e: unknown) => e);
     expect(String(err)).not.toContain("withdraw dry-run failed");
     expect(String(err)).toContain("NOT_MANAGER");
     expect(m.sentTxs).toHaveLength(0);
@@ -534,7 +534,6 @@ describe("convertClaimedFees (real conversion)", () => {
     const inner = (args[0] as readonly `0x${string}`[])[0]!;
     expect(inner.slice(2, 10)).toBe(exactInputSingleV2Selector);
     const innerDecoded = decodeFunctionData({ abi: exactInputSingleAbi, data: inner });
-    // oxlint-disable-next-line anti-slop/no-chained-type-assertions -- force decoded args tuple to count them; no deadline field present
     expect((innerDecoded.args[0] as unknown as unknown[]).length).toBe(7);
 
     // ordering: eth_call dry-run of the swap precedes its broadcast

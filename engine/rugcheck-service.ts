@@ -81,17 +81,12 @@ export interface RugCheckReport {
   readonly dangerRiskCount: number;
 }
 
-// oxlint-disable-next-line anti-slop/no-unknown-parameters, anti-slop/no-unsafe-dictionary-type -- value is external RugCheck API JSON at I/O boundary
 function isObject(value: unknown): value is Record<string, unknown> {
-  // oxlint-disable-next-line anti-slop/no-runtime-typeof -- external data guard
   return typeof value === "object" && value !== null;
 }
 
-// oxlint-disable-next-line anti-slop/no-unknown-parameters -- value is external RugCheck API JSON at I/O boundary
 function readFiniteNumber(value: unknown): number | null {
-  // oxlint-disable-next-line anti-slop/no-runtime-typeof -- external data guard
   if (typeof value === "number") return Number.isFinite(value) ? value : null;
-  // oxlint-disable-next-line anti-slop/no-runtime-typeof -- external data guard
   if (typeof value === "string" && value.trim().length > 0) {
     const parsed = Number(value);
     return Number.isFinite(parsed) ? parsed : null;
@@ -104,17 +99,14 @@ function readFiniteNumber(value: unknown): number | null {
  * usable report object. Individual fields degrade to null / empty lists — the
  * caller's gate decides which absences are fail-closed vs fail-open.
  */
-// oxlint-disable-next-line anti-slop/no-unknown-parameters -- raw is unparsed external RugCheck report at I/O boundary
 export function parseRugCheckReport(raw: unknown): RugCheckReport | null {
   if (!isObject(raw)) return null;
-  // oxlint-disable-next-line anti-slop/no-runtime-typeof -- external field guard
   const mint = typeof raw["mint"] === "string" ? raw["mint"] : "";
   if (mint.length === 0) return null;
 
-  // oxlint-disable-next-line anti-slop/no-unsafe-dictionary-type -- external report payload accessed per-field at I/O boundary
   const token = isObject(raw["token"]) ? (raw["token"] as Record<string, unknown>) : null;
   const tokenMeta = isObject(raw["tokenMeta"])
-    ? (raw["tokenMeta"] as Record<string, unknown>) // oxlint-disable-line anti-slop/no-unsafe-dictionary-type -- external report payload accessed per-field at I/O boundary
+    ? (raw["tokenMeta"] as Record<string, unknown>)
     : null;
 
   const risks: RugCheckRisk[] = [];
@@ -122,13 +114,9 @@ export function parseRugCheckReport(raw: unknown): RugCheckReport | null {
     for (const risk of raw["risks"]) {
       if (!isObject(risk)) continue;
       risks.push({
-        // oxlint-disable-next-line anti-slop/no-runtime-typeof -- external field guard
         name: typeof risk["name"] === "string" ? risk["name"] : "unknown risk",
-        // oxlint-disable-next-line anti-slop/no-runtime-typeof -- external field guard
         value: typeof risk["value"] === "string" ? risk["value"] : null,
-        // oxlint-disable-next-line anti-slop/no-runtime-typeof -- external field guard
         description: typeof risk["description"] === "string" ? risk["description"] : null,
-        // oxlint-disable-next-line anti-slop/no-runtime-typeof -- external field guard
         level: typeof risk["level"] === "string" ? risk["level"] : null,
       });
     }
@@ -139,17 +127,14 @@ export function parseRugCheckReport(raw: unknown): RugCheckReport | null {
   if (Array.isArray(rawTopHolders)) {
     for (const holder of rawTopHolders) {
       if (!isObject(holder)) continue;
-      // oxlint-disable-next-line anti-slop/no-runtime-typeof -- external field guard
       const address = typeof holder["address"] === "string" ? holder["address"] : "";
       if (address.length === 0) continue;
       const pct = readFiniteNumber(holder["pct"]);
       if (pct === null) continue;
       topHolders.push({
         address,
-        // oxlint-disable-next-line anti-slop/no-runtime-typeof -- external field guard
         owner: typeof holder["owner"] === "string" ? holder["owner"] : null,
         pct,
-        // oxlint-disable-next-line anti-slop/no-runtime-typeof -- external field guard
         insider: typeof holder["insider"] === "boolean" ? holder["insider"] : null,
       });
     }
@@ -163,20 +148,18 @@ export function parseRugCheckReport(raw: unknown): RugCheckReport | null {
     rugged: raw["rugged"] === true,
     mintAuthority:
       token !== null &&
-      // oxlint-disable-next-line anti-slop/no-runtime-typeof -- external field guard
       typeof token["mintAuthority"] === "string" &&
       token["mintAuthority"].length > 0
         ? token["mintAuthority"]
         : null,
     freezeAuthority:
       token !== null &&
-      // oxlint-disable-next-line anti-slop/no-runtime-typeof -- external field guard
       typeof token["freezeAuthority"] === "string" &&
       token["freezeAuthority"].length > 0
         ? token["freezeAuthority"]
         : null,
     tokenMetaMutable:
-      tokenMeta !== null && typeof tokenMeta["mutable"] === "boolean" ? tokenMeta["mutable"] : null, // oxlint-disable-line anti-slop/no-runtime-typeof -- external field guard
+      tokenMeta !== null && typeof tokenMeta["mutable"] === "boolean" ? tokenMeta["mutable"] : null,
     totalHolders: readFiniteNumber(raw["totalHolders"]),
     topHolders,
     risks,

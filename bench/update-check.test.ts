@@ -182,7 +182,6 @@ describe("checkForAutoUpdate", () => {
   });
 
   it("does nothing when no newer version available", async () => {
-    // oxlint-disable-next-line anti-slop/no-chained-type-assertions -- test-only hard cast of a partial stub/generic expression to a full interface/Effect type; single `as` is impossible without fabricating the full type
     globalThis.fetch = vi.fn().mockResolvedValue({
       ok: true,
       status: 200,
@@ -211,7 +210,6 @@ describe("checkForAutoUpdate", () => {
   });
 
   it("forces shutdown when threshold exceeded and force enabled", async () => {
-    // oxlint-disable-next-line anti-slop/no-chained-type-assertions -- test-only hard cast of a partial stub/generic expression to a full interface/Effect type; single `as` is impossible without fabricating the full type
     globalThis.fetch = vi.fn().mockResolvedValue({
       ok: true,
       status: 200,
@@ -245,7 +243,6 @@ describe("checkForAutoUpdate", () => {
   });
 
   it("does not force shutdown when disabled", async () => {
-    // oxlint-disable-next-line anti-slop/no-chained-type-assertions -- test-only hard cast of a partial stub/generic expression to a full interface/Effect type; single `as` is impossible without fabricating the full type
     globalThis.fetch = vi.fn().mockResolvedValue({
       ok: true,
       status: 200,
@@ -279,7 +276,6 @@ describe("checkForAutoUpdate", () => {
   });
 
   it("survives network errors gracefully", async () => {
-    // oxlint-disable-next-line anti-slop/no-chained-type-assertions -- test-only hard cast of a partial stub/generic expression to a full interface/Effect type; single `as` is impossible without fabricating the full type
     globalThis.fetch = vi
       .fn()
       .mockRejectedValue(new Error("network timeout")) as unknown as typeof fetch;
@@ -299,7 +295,6 @@ describe("checkForAutoUpdate", () => {
   });
 
   it("warns when 1 day until forced shutdown", async () => {
-    // oxlint-disable-next-line anti-slop/no-chained-type-assertions -- test-only hard cast of a partial stub/generic expression to a full interface/Effect type; single `as` is impossible without fabricating the full type
     globalThis.fetch = vi.fn().mockResolvedValue({
       ok: true,
       status: 200,
@@ -334,7 +329,6 @@ describe("checkForAutoUpdate", () => {
   });
 
   it("warns when 2 days until forced shutdown", async () => {
-    // oxlint-disable-next-line anti-slop/no-chained-type-assertions -- test-only hard cast of a partial stub/generic expression to a full interface/Effect type; single `as` is impossible without fabricating the full type
     globalThis.fetch = vi.fn().mockResolvedValue({
       ok: true,
       status: 200,

@@ -4,7 +4,6 @@ import { getCurrentVersion } from "../engine/version.js";
 describe("version", () => {
   it("returns a non-empty string", () => {
     const version = getCurrentVersion();
-    // oxlint-disable-next-line anti-slop/no-runtime-typeof -- runtime type assertion on test value; version is a string by contract
     expect(typeof version).toBe("string");
     expect(version.length).toBeGreaterThan(0);
   });

@@ -64,7 +64,6 @@ function submitCloudFeedback(
     if (res.status === 401 || res.status === 403) return { authFailure: true as const };
     if (!res.ok) return null;
     const json = (yield* Effect.tryPromise(() => res.json())) as { id?: unknown; duplicate?: unknown };
-    // oxlint-disable-next-line anti-slop/no-runtime-typeof -- runtime guard on unparsed HTTP response field
     if (typeof json.id !== "string") return null;
     return { id: json.id, duplicate: json.duplicate === true };
   }).pipe(Effect.catch(() => Effect.succeed(null)));
@@ -102,10 +101,8 @@ function buildContext(): FeedbackContext {
     beamVersion: getCurrentVersion(),
     installMethod: detectInstallMethod(),
     platform: `${process.platform}-${process.arch}`,
-    // oxlint-disable-next-line anti-slop/no-runtime-typeof -- env guard distinguishing Bun vs node runtime
     runtime: typeof Bun !== "undefined" ? `bun ${Bun.version}` : `node ${process.version}`,
   };
-  // oxlint-disable-next-line anti-slop/no-runtime-typeof -- env guard distinguishing Bun vs node runtime
   if (typeof Bun === "undefined") Object.assign(ctx, { nodeVersion: process.version });
   return ctx;
 }
@@ -142,7 +139,6 @@ function readBeamApiKey(): Effect.Effect<string | null, never> {
       const value = JSON.parse(readFileSync(credentialsFile, "utf-8")) as {
         apiKey?: unknown;
       };
-      // oxlint-disable-next-line anti-slop/no-runtime-typeof -- runtime guard on unparsed credentials JSON field
       return typeof value.apiKey === "string" && value.apiKey.length > 0 ? value.apiKey : null;
     },
     catch: (cause) => (cause instanceof Error ? cause : new Error(String(cause))),
@@ -315,7 +311,6 @@ export const FeedbackLive = Layer.effect(
         logger.warn(`Cloud feedback unavailable; feedback stored locally: ${feedback.summary}`);
         return { kind: "local_only" as const, localId };
       }).pipe(
-        // oxlint-disable-next-line anti-slop/no-unknown-parameters -- caught external submission error; normalized via instanceof/String guard
         Effect.catch((err: unknown) => {
           const message = err instanceof Error ? err.message : String(err);
           logger.error(`Feedback submission failed: ${message}`);

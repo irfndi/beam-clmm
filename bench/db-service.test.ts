@@ -292,7 +292,6 @@ describe("DbService — setMetadataBatch (Gemini review)", () => {
         const result = yield* db
           .setMetadataBatch([
             { key: "first", value: "would_persist_if_no_rollback" },
-            // oxlint-disable-next-line anti-slop/no-chained-type-assertions -- deliberately inject a non-string key to trigger the atomicity failure
             { key: Symbol("bad") as unknown as string, value: "triggers_failure" },
             { key: "third", value: "never_reached" },
           ])

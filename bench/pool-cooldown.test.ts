@@ -8,10 +8,8 @@ function makeLayer() {
   return DbLive(":memory:");
 }
 
-// oxlint-disable-next-line anti-slop/no-unknown-parameters -- helper accepts a genuinely-dynamic test value (layer/body/error/fetch mock) with no static contract
 function run<T, E, R>(effect: Effect.Effect<T, E, R>, layer: unknown): T {
   return Effect.runSync(
-    // oxlint-disable-next-line anti-slop/no-unknown-parameters -- helper accepts a genuinely-dynamic test value (layer/body/error/fetch mock) with no static contract
     (Effect.provide as (e: Effect.Effect<T, E, R>, l: unknown) => Effect.Effect<T, E, never>)(
       effect,
       layer,

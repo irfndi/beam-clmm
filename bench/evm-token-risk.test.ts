@@ -165,7 +165,7 @@ interface FakePool {
   revertReason: string;
 }
 
-function applyOverride(token: FakeERC20, override: unknown): Map<string, Hex> { /* oxlint-disable-line anti-slop/no-unknown-parameters */
+function applyOverride(token: FakeERC20, override: unknown): Map<string, Hex> {
   const scratch = new Map(token.storage);
   const entry = (override as Record<string, { state?: Record<Hex, Hex>; stateDiff?: Record<Hex, Hex> }> | undefined)?.[
     token.address.toLowerCase()
@@ -183,7 +183,7 @@ function makeRpcMock(tokens: FakeERC20[], pool?: FakePool) {
   let rpcCalls = 0;
   const simulateParams: unknown[] = [];
 
-  function tokenCall(tx: { from?: Address; to: Address; data: Hex }, override: unknown) { /* oxlint-disable-line anti-slop/no-unknown-parameters */
+  function tokenCall(tx: { from?: Address; to: Address; data: Hex }, override: unknown) {
     const token = byAddress.get(tx.to.toLowerCase());
     if (!token) return revertCall("unknown target");
     const scratch = applyOverride(token, override);
@@ -280,8 +280,8 @@ function makeRpcMock(tokens: FakeERC20[], pool?: FakePool) {
   }
 
   const fetchImpl = async (_url: string | URL, init?: RequestInit): Promise<Response> => {
-    const body = typeof init?.body === "string" ? JSON.parse(init.body) : null; /* oxlint-disable-line anti-slop/no-runtime-typeof */
-    if (!body || typeof body.method !== "string") { /* oxlint-disable-line anti-slop/no-runtime-typeof */
+    const body = typeof init?.body === "string" ? JSON.parse(init.body) : null;
+    if (!body || typeof body.method !== "string") {
       return new Response(JSON.stringify({ jsonrpc: "2.0", id: body?.id ?? 0, error: { code: -32600, message: "invalid request" } }), {
         status: 200,
         headers: { "content-type": "application/json" },
@@ -294,7 +294,6 @@ function makeRpcMock(tokens: FakeERC20[], pool?: FakePool) {
     });
   };
 
-    // oxlint-disable-next-line anti-slop/no-chained-type-assertions -- cast mock fetch impl into global fetch shape
   return { fetchImpl: fetchImpl as unknown as typeof fetch, rpcCalls: () => rpcCalls, simulateParams };
 }
 
@@ -538,7 +537,7 @@ describe("evm-token-risk decision paths (mocked RPC)", () => {
     const stateEntries = sims.flatMap((params) =>
       params
         .filter((p): p is { blockStateCalls: Array<{ stateOverrides: Record<string, { state?: Record<string, string>; stateDiff?: unknown }> }> } =>
-          typeof p === "object" && p !== null && "blockStateCalls" in p, /* oxlint-disable-line anti-slop/no-runtime-typeof */
+          typeof p === "object" && p !== null && "blockStateCalls" in p,
         )
         .flatMap((p) => p.blockStateCalls.flatMap((b) => Object.entries(b.stateOverrides ?? {}))),
     );

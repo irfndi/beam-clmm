@@ -259,7 +259,6 @@ async function main(argv: ReadonlyArray<string>): Promise<void> {
 }
 
 const isDirect =
-  // oxlint-disable-next-line anti-slop/no-runtime-typeof -- Env guard: probes the Bun global to decide whether this file is being run directly.
   typeof Bun !== "undefined" &&
   (Bun.main?.endsWith("ops/backfill-dexpaprika.ts") ||
     Bun.main?.endsWith("ops/backfill-dexpaprika.js"));

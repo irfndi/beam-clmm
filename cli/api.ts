@@ -32,7 +32,6 @@ interface ApiRequestOptions {
 
 export async function beamApiPost<T = unknown>(
   path: string,
-  // oxlint-disable-next-line anti-slop/no-unsafe-dictionary-type -- Generic API client: the request body is arbitrary JSON payloads sent to a third-party HTTP boundary; the schema varies per endpoint, so the value type is intentionally open.
   body: Record<string, unknown>,
   options: ApiRequestOptions = {},
 ): Promise<ApiResponse<T>> {

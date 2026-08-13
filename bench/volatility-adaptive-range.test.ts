@@ -5,7 +5,6 @@ import {
   baselineHalfWidthForBinStep,
   resolveRangeHalfWidth,
   recommendBinRangeForVolatility,
-  // oxlint-disable-next-line anti-slop/no-shape-in-symbol-names -- engine export name; aliased to recommendStrategy so call sites drop "shape"
   recommendStrategyShape as recommendStrategy,
   ADAPTIVE_RANGE_REFERENCE_STDDEV,
   ADAPTIVE_RANGE_MIN_MULTIPLIER,
@@ -322,7 +321,6 @@ describe("executePaper entry range threading (Wave 9)", () => {
       recommendBinRange: recommendBinRangeSpy,
       passesPreFilter: () => true,
     };
-// oxlint-disable-next-line anti-slop/no-chained-type-assertions -- test-only hard cast of a partial stub/generic expression to a full interface/Effect type; single `as` is impossible without fabricating the full type
     const db = {
       savePosition: () => Effect.void,
       savePositionEvent: () => Effect.void,
@@ -331,7 +329,6 @@ describe("executePaper entry range threading (Wave 9)", () => {
 
     const result = Effect.runSync(
       executePaper(
-// oxlint-disable-next-line anti-slop/no-shape-in-symbol-names -- `entryStrategyShape` is a real engine field name required by the engine API; cannot be renamed without breaking the contract
         { db, trackedPositions, strategy, entryStrategyShape: "spot", entryRangeHalfWidth: 40 },
         {
           action: "ENTER",

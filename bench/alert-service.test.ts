@@ -33,19 +33,16 @@ function makeAlertLayer(dbPath: string, overrides: Partial<AppConfig> = {}) {
 
 interface CapturedPost {
   url: string;
-  // oxlint-disable-next-line anti-slop/no-unsafe-dictionary-type -- raw heterogeneous JSON captured from fetch response body
   body: Record<string, unknown>;
   authorization: string | null;
 }
 
 function capturePosts(status = 200) {
   const posts: CapturedPost[] = [];
-  // oxlint-disable-next-line anti-slop/no-unknown-parameters -- fetch mock callback params are the global fetch signature
   const restore = mockFetch((url: unknown, init: { body?: string; headers?: unknown } = {}) => {
     const headers = new Headers(init.headers as Record<string, string> | undefined);
     posts.push({
       url: String(url),
-      // oxlint-disable-next-line anti-slop/no-unsafe-dictionary-type -- raw heterogeneous JSON parsing at the I/O boundary
       body: JSON.parse(init.body ?? "{}") as Record<string, unknown>,
       authorization: headers.get("Authorization"),
     });

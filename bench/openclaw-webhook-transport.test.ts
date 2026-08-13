@@ -56,7 +56,6 @@ function makeContext(): AgentRuntimeContext {
 
 describe("OpenClawWebhookTransport", () => {
   it("includes the prompt in the webhook payload", async () => {
-    // oxlint-disable-next-line anti-slop/no-known-value-widening -- mutable capture slot assigned a boundary-provided unknown (request.json()); null is an unset sentinel
     let capturedBody: unknown = null;
 
     const server = Bun.serve({

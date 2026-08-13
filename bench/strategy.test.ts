@@ -1,5 +1,4 @@
 import { describe, it, expect } from "vitest";
-// oxlint-disable-next-line anti-slop/no-shape-in-symbol-names -- engine export name; aliased to recommendStrategy so call sites drop "shape"
 import { DLMMStrategy, recommendStrategyShape as recommendStrategy } from "../engine/strategy-service.js";
 import type { PoolState, BinArray } from "../engine/types.js";
 

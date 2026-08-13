@@ -230,7 +230,7 @@ describe("feedback service — cloud fallback", () => {
   it("submits to the D1-backed cloud endpoint", async () => {
     enableCredentials();
     mockFetch(
-      vi.fn(async (url: string | URL | Request) => { /* oxlint-disable-line anti-slop/no-chained-type-assertions -- mock fetch fixture */
+      vi.fn(async (url: string | URL | Request) => {
         const u = String(url as string | URL);
         if (u.includes("/v1/feedback")) {
           return new Response(JSON.stringify({ id: "cloud-test-id" }), { status: 200 });
@@ -255,7 +255,7 @@ describe("feedback service — cloud fallback", () => {
   it("falls back to local storage when the cloud endpoint fails", async () => {
     enableCredentials();
     mockFetch(
-      (async () => new Response("service unavailable", { status: 500 })) as unknown as typeof fetch, /* oxlint-disable-line anti-slop/no-chained-type-assertions -- mock fetch fixture */
+      (async () => new Response("service unavailable", { status: 500 })) as unknown as typeof fetch,
     );
 
     const layer = buildLayer("");
@@ -309,7 +309,7 @@ describe("feedback service — D1 cloud submissions", () => {
   it("stores a new feedback item in the cloud", async () => {
     enableCredentials();
     mockFetch(
-      vi.fn(async (url: string | URL | Request) => /* oxlint-disable-line anti-slop/no-chained-type-assertions -- mock fetch fixture */
+      vi.fn(async (url: string | URL | Request) =>
         String(url as string | URL).includes("/v1/feedback")
           ? new Response(JSON.stringify({ id: "cloud-new" }), { status: 200 })
           : new Response("unexpected", { status: 500 }),
@@ -334,7 +334,7 @@ describe("feedback service — D1 cloud submissions", () => {
   it("preserves the D1 duplicate marker", async () => {
     enableCredentials();
     mockFetch(
-      (async () => /* oxlint-disable-line anti-slop/no-chained-type-assertions -- mock fetch fixture */
+      (async () =>
         new Response(JSON.stringify({ id: "cloud-existing", duplicate: true }), {
           status: 200,
         })) as unknown as typeof fetch,
@@ -358,7 +358,7 @@ describe("feedback service — D1 cloud submissions", () => {
   it("falls back to local storage when D1 returns an error", async () => {
     enableCredentials();
     mockFetch(
-      (async () => new Response("server error", { status: 500 })) as unknown as typeof fetch, /* oxlint-disable-line anti-slop/no-chained-type-assertions -- mock fetch fixture */
+      (async () => new Response("server error", { status: 500 })) as unknown as typeof fetch,
     );
 
     const layer = buildLayer("");
@@ -379,7 +379,7 @@ describe("feedback service — rate limiting", () => {
   it("rejects when exceeding per-hour limit (5)", async () => {
     enableCredentials();
     mockFetch(
-      (async () => /* oxlint-disable-line anti-slop/no-chained-type-assertions -- mock fetch fixture */
+      (async () =>
         new Response(JSON.stringify({ id: "cloud-rate" }), {
           status: 200,
         })) as unknown as typeof fetch,
@@ -409,7 +409,7 @@ describe("feedback service — rate limiting", () => {
   it("rejects when minimum interval (60s) not elapsed since last feedback", async () => {
     enableCredentials();
     mockFetch(
-      (async () => /* oxlint-disable-line anti-slop/no-chained-type-assertions -- mock fetch fixture */
+      (async () =>
         new Response(JSON.stringify({ id: "cloud-interval" }), {
           status: 200,
         })) as unknown as typeof fetch,
@@ -435,7 +435,7 @@ describe("feedback service — local dedup cooldown", () => {
   it("returns duplicate for the same hash within 24h (after one successful submit)", async () => {
     enableCredentials();
     mockFetch(
-      (async () => /* oxlint-disable-line anti-slop/no-chained-type-assertions -- mock fetch fixture */
+      (async () =>
         new Response(JSON.stringify({ id: "cloud-dedup" }), {
           status: 200,
         })) as unknown as typeof fetch,
@@ -473,7 +473,7 @@ describe("feedback service — getByHash", () => {
     const { createHash } = await import("crypto");
     enableCredentials();
     mockFetch(
-      (async () => /* oxlint-disable-line anti-slop/no-chained-type-assertions -- mock fetch fixture */
+      (async () =>
         new Response(JSON.stringify({ id: "cloud-hash" }), {
           status: 200,
         })) as unknown as typeof fetch,
@@ -501,7 +501,7 @@ describe("feedback service — details round-trip", () => {
   it("preserves empty-string details as '' (not null) on read-back", async () => {
     enableCredentials();
     mockFetch(
-      (async () => /* oxlint-disable-line anti-slop/no-chained-type-assertions -- mock fetch fixture */
+      (async () =>
         new Response(JSON.stringify({ id: "cloud-empty-details" }), {
           status: 200,
         })) as unknown as typeof fetch,
@@ -526,7 +526,7 @@ describe("feedback service — details round-trip", () => {
   it("preserves null details as null when details is omitted", async () => {
     enableCredentials();
     mockFetch(
-      (async () => /* oxlint-disable-line anti-slop/no-chained-type-assertions -- mock fetch fixture */
+      (async () =>
         new Response(JSON.stringify({ id: "cloud-null-details" }), {
           status: 200,
         })) as unknown as typeof fetch,

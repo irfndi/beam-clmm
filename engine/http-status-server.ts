@@ -104,7 +104,6 @@ export class HttpStatusServer {
     const effect = Effect.gen({ self: this }, function* () {
       const proposals: AgentProposal[] = [];
       for (const [index, item] of items.entries()) {
-        // oxlint-disable-next-line anti-slop/no-runtime-typeof -- runtime guard on unparsed HTTP request-body item at the parse boundary
         if (item === null || typeof item !== "object") {
           return new Response("Invalid proposal body", { status: 400 });
         }
@@ -277,7 +276,6 @@ export class HttpStatusServer {
 
     if (
       parsedBody === null ||
-      // oxlint-disable-next-line anti-slop/no-runtime-typeof -- runtime guard on unparsed HTTP request-body at the parse boundary
       typeof parsedBody !== "object" ||
       !Array.isArray((parsedBody as { proposalIds?: unknown }).proposalIds)
     ) {
@@ -286,7 +284,6 @@ export class HttpStatusServer {
 
     const proposalIds = (parsedBody as { proposalIds: unknown }).proposalIds;
     if (!Array.isArray(proposalIds) || proposalIds.some((id) =>
-      // oxlint-disable-next-line anti-slop/no-runtime-typeof -- runtime guard on unparsed HTTP request-body element
       typeof id !== "string",
     )) {
       return new Response("proposalIds must be an array of strings", { status: 400 });

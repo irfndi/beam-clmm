@@ -14,7 +14,6 @@ import type { AppConfig } from "../engine/config-service.js";
 
 /** AppConfig-shaped base carrying every DB-tunable declared field (so the typo guard sees a realistic resolved config). */
 function baseConfig(): AppConfig {
-  // oxlint-disable-next-line anti-slop/no-chained-type-assertions -- partial AppConfig stub: only DB-tunable fields are set
   return {
     minPoolTvlUsd: 50_000,
     volumeAuthThreshold: 0.7,

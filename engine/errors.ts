@@ -70,12 +70,10 @@ export class PersistenceContractError extends Data.TaggedError("PersistenceContr
 // wrapper and hides the real failure (e.g. "Gateway 1008: ..."). Walk the `.cause`
 // chain to the deepest non-empty Error message; fall back to `String(err)` when the
 // chain holds no Error with a message. A `seen` set guards self-referential causes.
-// oxlint-disable-next-line anti-slop/no-unknown-parameters -- err is an unparsed thrown error; walked structurally down its cause chain
 export function underlyingErrorMessage(err: unknown): string {
   let deepest: string | null = null;
   let current: unknown = err;
   const seen = new Set<unknown>();
-  // oxlint-disable-next-line anti-slop/no-runtime-typeof -- runtime guard on unparsed error value while traversing cause chain
   while (current !== null && typeof current === "object" && !seen.has(current)) {
     seen.add(current);
     if (current instanceof Error && current.message.length > 0) {

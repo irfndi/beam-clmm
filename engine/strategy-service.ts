@@ -3,7 +3,6 @@ import { TickMath } from "@uniswap/v3-sdk";
 import { StrategyService, type StrategyApi } from "./services.js";
 import type {
   BinArray,
-  // oxlint-disable-next-line anti-slop/no-shape-in-symbol-names -- public type, renaming ripples to out-of-scope program.ts/tests
   EntryStrategyShape,
   PoolMetrics,
   PoolState,
@@ -462,12 +461,10 @@ export function resolveRangeHalfWidth(args: {
  * - Calm / mean-reverting (default, including no history yet) → `curve`,
  *   concentrated around the active bin for maximum fee capture.
  */
-// oxlint-disable-next-line anti-slop/no-shape-in-symbol-names -- public API fn, renaming ripples to out-of-scope program.ts/tests
 export function recommendStrategyShape(args: {
   readonly volatilityStddev: number;
   readonly highVolThreshold: number;
   readonly netDriftBins: number;
-// oxlint-disable-next-line anti-slop/no-shape-in-symbol-names -- public return type EntryStrategyShape, renaming ripples to out-of-scope files
 }): EntryStrategyShape {
   const trendDominates = Math.abs(args.netDriftBins) >= Math.max(3, 2 * args.volatilityStddev);
   if (trendDominates) return "bidask";

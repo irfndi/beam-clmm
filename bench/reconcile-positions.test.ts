@@ -6,7 +6,6 @@ import { reconcilePositions } from "../engine/program.js";
 import type { AdapterApi, MemoryApi } from "../engine/services.js";
 import type { PositionRecord } from "../engine/db-service.js";
 
-// oxlint-disable-next-line anti-slop/no-unknown-parameters -- helper accepts a genuinely-dynamic test value (layer/body/error/fetch mock) with no static contract
 function run<T, E, R>(effect: Effect.Effect<T, E, R>, layer: unknown): T {
   return Effect.runSync((Effect.provide as any)(effect, layer));
 }

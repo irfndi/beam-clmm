@@ -86,7 +86,6 @@ const pkg = JSON.parse(fs.readFileSync(path.join(repoRoot, "package.json"), "utf
   }>;
   // The value comes from parsed package.json — a runtime typeof is the
   // parse-at-boundary contract for an optional string field.
-  // oxlint-disable-next-line anti-slop/no-runtime-typeof -- boundary guard on parsed package.json
   if (typeof pkg.version === "string" && pkg.version) minCliVersion = pkg.version;
 } catch {
   // fall back to "0.0.0" if package.json is unreadable
@@ -95,7 +94,6 @@ const pkg = JSON.parse(fs.readFileSync(path.join(repoRoot, "package.json"), "utf
 const manifest = {
   version,
   channel,
-  // oxlint-disable-next-line anti-slop/no-conditional-empty-object-spread -- omit the key from the serialized JSON when commit is absent (a present-undefined key would change the output)
   ...(commit ? { commit } : {}),
   tarball_url: tarballUrl,
   sha256_url: `${tarballUrl}.sha256`,

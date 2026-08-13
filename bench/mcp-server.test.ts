@@ -150,22 +150,18 @@ function mockAgentState(overrides: Partial<AgentStateApi> = {}): AgentStateApi {
 
 function sendRequest(
   server: McpServer,
-  // oxlint-disable-next-line anti-slop/no-unsafe-dictionary-type -- test value is genuinely heterogeneous data (raw DB row / wire-format JSON / capture array); no concrete owner exists
   request: Record<string, unknown>,
-  // oxlint-disable-next-line anti-slop/no-unsafe-dictionary-type -- test value is genuinely heterogeneous data (raw DB row / wire-format JSON / capture array); no concrete owner exists
 ): Promise<Record<string, unknown>> {
   return Effect.runPromise(
     Effect.gen(function* () {
       yield* server.start();
       try {
-        // oxlint-disable-next-line anti-slop/no-unsafe-dictionary-type -- test value is genuinely heterogeneous data (raw DB row / wire-format JSON / capture array); no concrete owner exists
         return yield* Effect.tryPromise<Record<string, unknown>>(
           () =>
             new Promise((resolve, reject) => {
               const originalWrite = process.stdout.write.bind(process.stdout);
               let buffer = "";
               process.stdout.write = ((chunk: string | Uint8Array, ..._args: unknown[]) => {
-                // oxlint-disable-next-line anti-slop/no-runtime-typeof -- runtime typeof assertion on a genuinely-dynamic test value / real union narrowing, not a type alias
                 buffer += typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8");
                 const lines = buffer.split("\n");
                 buffer = lines.pop() ?? "";
@@ -492,7 +488,6 @@ describe("McpServer", () => {
     });
   };
 
-  // oxlint-disable-next-line anti-slop/no-unsafe-dictionary-type -- test value is genuinely heterogeneous data (raw DB row / wire-format JSON / capture array); no concrete owner exists
   const callApprove = (server: McpServer, id: number, args: Record<string, unknown>) =>
     sendRequest(server, {
       jsonrpc: "2.0",

@@ -3,45 +3,33 @@ import { createLogger } from "./logger.js";
 
 const logger = createLogger("adapter-retry");
 
-// oxlint-disable-next-line anti-slop/no-unknown-parameters, anti-slop/no-unsafe-dictionary-type -- runtime guard over untrusted external error objects at the RPC boundary; Record<string, unknown> is the open-dictionary contract for them
 function isObject(err: unknown): err is Record<string, unknown> {
-  // oxlint-disable-next-line anti-slop/no-runtime-typeof -- manual null-object guard on unparsed external error payloads
   return typeof err === "object" && err !== null;
 }
 
-// oxlint-disable-next-line anti-slop/no-unknown-parameters -- manual field guard on untrusted RPC error payload at the boundary
 function hasCode(err: unknown): err is { readonly code: number } {
-  // oxlint-disable-next-line anti-slop/no-runtime-typeof -- runtime field narrowing while parsing unparsed error payload
   return isObject(err) && "code" in err && typeof err.code === "number";
 }
 
-// oxlint-disable-next-line anti-slop/no-unknown-parameters -- manual field guard on untrusted RPC error payload at the boundary
 function hasMessage(err: unknown): err is { readonly message: string } {
-  // oxlint-disable-next-line anti-slop/no-runtime-typeof -- runtime field narrowing while parsing unparsed error payload
   return isObject(err) && "message" in err && typeof err.message === "string";
 }
 
 const RETRY_AFTER_MAX_MS = 300_000;
 
-// oxlint-disable-next-line anti-slop/no-unknown-parameters -- err is an unparsed external error (Axios/undici/viem shape); guarded via isObject below
 export function retryAfterMs(err: unknown): number | undefined {
   if (!isObject(err)) return undefined;
   const headers = err["headers"];
   const response = err["response"];
   const responseHeaders = isObject(response) ? response["headers"] : undefined;
-  // oxlint-disable-next-line anti-slop/no-unknown-parameters -- header value is unparsed external data; narrowed via guards below
   const getHeader = (value: unknown): string | null => {
     if (!isObject(value)) return null;
-    // oxlint-disable-next-line anti-slop/no-runtime-typeof -- runtime guard on unparsed HTTP header object
     if (typeof value["get"] === "function") {
       const result = (value["get"] as (name: string) => unknown)("retry-after");
-      // oxlint-disable-next-line anti-slop/no-runtime-typeof -- runtime guard on unparsed header value
       if (typeof result === "string") return result;
     }
     const direct = value["retry-after"] ?? value["Retry-After"];
-    // oxlint-disable-next-line anti-slop/no-runtime-typeof -- runtime guard on unparsed header value
     if (typeof direct === "string") return direct;
-    // oxlint-disable-next-line anti-slop/no-runtime-typeof -- runtime guard on unparsed header value
     if (typeof direct === "number") return String(direct);
     return null;
   };
@@ -62,7 +50,6 @@ const retryLogState = new Map<string, { lastLoggedAt: number; suppressed: number
 const RETRY_LOG_INTERVAL_MS = 10_000;
 const RETRY_LOG_MAX_ENTRIES = 512;
 
-// oxlint-disable-next-line anti-slop/no-unknown-parameters -- err is unparsed external error; stringified/guarded below
 function errorMessage(err: unknown): string {
   if (hasMessage(err)) return err.message;
   if (isObject(err)) {
@@ -75,7 +62,6 @@ function errorMessage(err: unknown): string {
   return String(err);
 }
 
-// oxlint-disable-next-line anti-slop/no-unknown-parameters -- err is unparsed external error; delegated to errorMessage guard
 export function safeErrorMessage(err: unknown): string {
   return errorMessage(err)
     .replace(/([?&](?:api[-_]?key|token|authorization)=)[^&\s]+/gi, "$1***")
@@ -89,7 +75,6 @@ export function safeErrorMessage(err: unknown): string {
     .replace(/(https?:\/\/)[^/@\s]+@/gi, "$1***@");
 }
 
-// oxlint-disable-next-line anti-slop/no-unknown-parameters -- err is unparsed external error; keyed via safeErrorMessage
 function logRetry(err: unknown, message: string): void {
   const now = Date.now();
   const key = safeErrorMessage(err);
@@ -108,7 +93,6 @@ function logRetry(err: unknown, message: string): void {
   logger.warn(message, logFields);
 }
 
-// oxlint-disable-next-line anti-slop/no-unknown-parameters -- err is unparsed external error; checked via type guards
 export function isRetriableError(err: unknown): boolean {
   if (hasCode(err) && (err.code === 429 || err.code === -32005)) return true;
   if (hasMessage(err)) {
@@ -121,7 +105,6 @@ export function isRetriableError(err: unknown): boolean {
   return false;
 }
 
-// oxlint-disable-next-line anti-slop/no-unknown-parameters -- err is unparsed external error; checked via type guards
 function isRateLimitError(err: unknown): boolean {
   if (hasCode(err) && (err.code === 429 || err.code === -32005)) return true;
   if (hasMessage(err)) {

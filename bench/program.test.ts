@@ -35,7 +35,6 @@ import {
   type RevenueConfigApi,
 } from "../engine/services.js";
 
-// oxlint-disable-next-line anti-slop/no-unknown-parameters -- helper accepts a genuinely-dynamic test value (layer/body/error/fetch mock) with no static contract
 async function run<T, E, R>(effect: Effect.Effect<T, E, R>, layer: unknown): Promise<T> {
   // v4 layer building is async (memoized provides) — runSync is no longer valid.
   return Effect.runPromise((Effect.provide as any)(effect, layer, { local: true }));
@@ -300,7 +299,6 @@ describe("executeLive", () => {
           revenueConfigSvc: makeRevenueConfigSvc(),
           trackedPositions,
           nativePriceUsd: 150,
-// oxlint-disable-next-line anti-slop/no-shape-in-symbol-names -- `entryStrategyShape` is a real engine field name required by the engine API; cannot be renamed without breaking the contract
           entryStrategyShape: "spot",
         },
         {
@@ -371,7 +369,6 @@ describe("executeLive", () => {
           revenueConfigSvc: makeRevenueConfigSvc(),
           trackedPositions,
           nativePriceUsd: 150,
-// oxlint-disable-next-line anti-slop/no-shape-in-symbol-names -- `entryStrategyShape` is a real engine field name required by the engine API; cannot be renamed without breaking the contract
           entryStrategyShape: "spot",
           entryMinRangePct: 1.0,
         },
@@ -423,7 +420,6 @@ describe("executePaper paper/live parity", () => {
       passesPreFilter: () => true,
     };
     // Only savePosition/savePositionEvent are touched by a paper ENTER.
-// oxlint-disable-next-line anti-slop/no-chained-type-assertions -- test-only hard cast of a partial stub/generic expression to a full interface/Effect type; single `as` is impossible without fabricating the full type
     const db = {
       savePosition: () => Effect.void,
       savePositionEvent: () => Effect.void,
@@ -432,7 +428,6 @@ describe("executePaper paper/live parity", () => {
 
     const result = Effect.runSync(
       executePaper(
-// oxlint-disable-next-line anti-slop/no-shape-in-symbol-names -- `entryStrategyShape` is a real engine field name required by the engine API; cannot be renamed without breaking the contract
         { db, trackedPositions, strategy, entryStrategyShape: "spot", entryRangeHalfWidth: 34 },
         {
           action: "ENTER",
