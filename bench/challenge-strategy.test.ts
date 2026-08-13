@@ -3,6 +3,7 @@ import {
   challengePoolScore,
   challengeRangeFromVolatility,
   challengeRotationSignal,
+  challengeYieldBelowExitThreshold,
   avgFeeYieldPct,
 } from "../engine/challenge-strategy.js";
 import { makePool } from "./helpers.js";
@@ -125,6 +126,32 @@ describe("challengeRotationSignal", () => {
   it("exits on yield decay between 50-70% (the old halve band)", () => {
     const pool = { ...base(), fees24hUsd: 1_200 }; // 24%/day vs 40%/day avg (60% < 70%)
     expect(challengeRotationSignal(pool, 40).action).toBe("exit");
+  });
+});
+
+describe("challengeYieldBelowExitThreshold", () => {
+  const pool = () =>
+    makePool({
+      tvlUsd: 5_000,
+      volume24hUsd: 200_000,
+      fees24hUsd: 1_200,
+      drawdown24h: 0,
+      statsSource: "krystal" as const,
+    });
+
+  it("flags a pool whose yield is below 70% of the trailing average", () => {
+    // 24%/d (1200/5000*100) vs 40%/d avg -> 60% < 70% -> blocked.
+    expect(challengeYieldBelowExitThreshold(pool(), 40)).toBe(true);
+  });
+
+  it("does not flag a pool whose yield is above the exit threshold", () => {
+    // 30%/d vs 40%/d avg -> 75% >= 70% -> allowed.
+    expect(challengeYieldBelowExitThreshold({ ...pool(), fees24hUsd: 1_500 }, 40)).toBe(false);
+  });
+
+  it("fails open when the trailing average is unknown or non-positive", () => {
+    expect(challengeYieldBelowExitThreshold(pool(), null)).toBe(false);
+    expect(challengeYieldBelowExitThreshold(pool(), 0)).toBe(false);
   });
 });
 

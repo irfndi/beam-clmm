@@ -109,6 +109,7 @@ import {
   challengePoolScore,
   challengeRangeFromVolatility,
   challengeRotationSignal,
+  challengeYieldBelowExitThreshold,
   avgFeeYieldPct,
 } from "./challenge-strategy.js";
 import { applyMinRangePct } from "./range-floor.js";
@@ -5596,11 +5597,15 @@ export const program = Effect.gen(function* () {
       // Challenge drawdown gate: the measured 24h drawdown (Krystal) is the
       // dominant risk term on meme harvest pools — a held position on a
       // crashing pool must exit in THIS cycle, not wait for the trailing stop.
+      const challengeAvgYieldPerDayPct =
+        config.challengeMode === true && pool.statsSource === "krystal"
+          ? avgFeeYieldPct(previousSnapshots)
+          : null;
       const challengeRotation =
         config.challengeMode === true && pool.statsSource === "krystal"
           ? challengeRotationSignal(
               pool,
-              avgFeeYieldPct(previousSnapshots),
+              challengeAvgYieldPerDayPct,
               config.challengeDrawdownExitPct ?? 5,
             )
           : null;
@@ -6952,6 +6957,12 @@ export const program = Effect.gen(function* () {
             pool.tvlUsd > config.minPoolTvlUsd * 2 &&
             (config.challengeMode !== true ||
               challengePoolScore(pool).score >= (config.challengeMinScore ?? 4)) &&
+            // Yield-decay hysteresis: never (re-)enter a pool whose current
+            // yield is already below the rotation exit threshold (70% of the
+            // trailing average) — it would be rotated out next cycle, the
+            // 1-minute exit→enter churn observed on the live book.
+            (config.challengeMode !== true ||
+              !challengeYieldBelowExitThreshold(pool, challengeAvgYieldPerDayPct)) &&
             // Fee persistence (rule 2): measured fees must recur across the
             // window — one-off spike days must not qualify a pool.
             (config.challengeMode !== true || persistenceDecision.persistent) &&

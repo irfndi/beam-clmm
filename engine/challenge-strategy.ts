@@ -116,6 +116,13 @@ export function challengeRangeFromVolatility(
 
 export type ChallengeRotationAction = "hold" | "exit";
 
+/** Yield-decay rotation exit: exit when current yield < this fraction of the
+ *  trailing average (the looser of the two decay tiers). Shared by the exit
+ *  signal and the entry-gate hysteresis so the two can never drift apart. */
+export const YIELD_DECAY_EXIT_FRACTION = 0.7;
+/** Yield-collapse rotation exit: the tighter tier (volume rotated away). */
+export const YIELD_COLLAPSE_EXIT_FRACTION = 0.5;
+
 /** Computed tick range for a challenge-mode position sized from volatility. */
 interface ChallengeRange {
   readonly lowerBinId: number;
@@ -149,14 +156,31 @@ export function challengeRotationSignal(
   if (avgYieldPerDayPct !== null && avgYieldPerDayPct > 0) {
     const tvl = pool.tvlUsd;
     const yieldPct = tvl > 0 ? (pool.fees24hUsd / tvl) * 100 : 0;
-    if (yieldPct < avgYieldPerDayPct * 0.5) {
+    if (yieldPct < avgYieldPerDayPct * YIELD_COLLAPSE_EXIT_FRACTION) {
       return { action: "exit", reason: `yield ${yieldPct.toFixed(2)}%/d < 50% of ${avgYieldPerDayPct.toFixed(2)}%/d avg` };
     }
-    if (yieldPct < avgYieldPerDayPct * 0.7) {
+    if (yieldPct < avgYieldPerDayPct * YIELD_DECAY_EXIT_FRACTION) {
       return { action: "exit", reason: `yield ${yieldPct.toFixed(2)}%/d < 70% of ${avgYieldPerDayPct.toFixed(2)}%/d avg` };
     }
   }
   return { action: "hold", reason: "in range" };
+}
+
+/**
+ * Entry-gate hysteresis: true when the pool's current yield sits below the
+ * rotation exit threshold (70% of the trailing average). The ENTER gate
+ * rejects such pools so a pool that would be immediately rotated out is never
+ * (re-)entered — the source of the observed 1-minute exit→enter churn.
+ * Fail-open (false) when the trailing average is unknown.
+ */
+export function challengeYieldBelowExitThreshold(
+  pool: PoolState,
+  avgYieldPerDayPct: number | null,
+): boolean {
+  if (avgYieldPerDayPct === null || avgYieldPerDayPct <= 0) return false;
+  const tvl = pool.tvlUsd;
+  const yieldPct = tvl > 0 ? (pool.fees24hUsd / tvl) * 100 : 0;
+  return yieldPct < avgYieldPerDayPct * YIELD_DECAY_EXIT_FRACTION;
 }
 
 /** Rolling per-pool 7d average fee yield from snapshot history. */
