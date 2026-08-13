@@ -1268,7 +1268,13 @@ export function executePaper(
         .pipe(Effect.catch(() => Effect.void));
     } else if (decision.action === "EXIT") {
       const pos = resolveTargetPosition(trackedPositions, decision);
-      if (pos?.positionPubKey) {
+      // A dust-cleanup EXIT is exempt from the live-position guard: the
+      // position is already worthless (an externally-closed residual), so
+      // paper mode should clear it from tracking and free its slot even
+      // though it still carries an on-chain pubkey. Otherwise a live position
+      // must not be "exited" without a real on-chain close.
+      const isDustCleanup = decision.reasoning.includes("[dust-cleanup]");
+      if (pos?.positionPubKey && !isDustCleanup) {
         // Live position — paper trading must not "exit" it without an on-chain tx.
         // Skip and warn so the user can switch to live mode to actually close it.
         console.warn(

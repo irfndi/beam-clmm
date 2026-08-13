@@ -1860,6 +1860,51 @@ describe("program — multiple positions per pool", () => {
     expect(dustExits.length).toBeGreaterThanOrEqual(1);
   }, 15_000);
 
+  it("dust-cleans a residual that still carries a live pubkey (frees the slot)", async () => {
+    // A dust residual with an on-chain pubkey (externally closed) must still be
+    // paper-exited so it frees its pool slot — the live-position guard would
+    // otherwise skip the EXIT forever and the $0 row would block new entries.
+    const dustLive = makePos({
+      positionId: "seeded-dust-live",
+      positionPubKey: "seeded-dust-live-pubkey",
+      depositedUsd: 0.26,
+      currentValueUsd: 0.26,
+      entryPriceUsd: 150,
+      entryAmountXUsd: 0.13,
+      entryAmountYUsd: 0.13,
+    });
+
+    const layer = makeProgramLayer({
+      adapter: makeProgramAdapter({ [POOL]: makePool({ address: POOL }) }),
+      gecko: { getPoolStats: () => Effect.succeed(makeGeckoStats()) },
+      configOverrides: {
+        watchlistPools: [POOL],
+        maxPositionsPerPool: 1,
+        maxOpenPositions: 5,
+        scanIntervalMs: 600_000,
+      },
+    });
+
+    const test = Effect.gen(function* () {
+      const db = yield* DbService;
+      yield* db.savePosition(dustLive);
+      yield* Effect.raceFirst(program, Effect.sleep(1_500));
+      const active = yield* db.getAllPositions();
+      const closed = yield* db.getClosedPositions();
+      return { active, closed };
+    });
+    const { active, closed } = await Effect.runPromise(
+      Effect.provide(test, layer) as unknown as Effect.Effect<
+        { active: ReadonlyArray<PositionRecord>; closed: ReadonlyArray<PositionRecord> },
+        Error,
+        never
+      >,
+    );
+
+    expect(active.map((p) => p.positionId)).toEqual([]);
+    expect(closed.map((p) => p.positionId)).toEqual(["seeded-dust-live"]);
+  }, 15_000);
+
   it("honors a genuine 0 on-chain mark instead of falling back to the HODL estimate", async () => {
     // The value loop must use an explicit null check (`realMark !== null`),
     // not `??`: a 0 mark from getPositionValueUsd is REAL data (a genuinely
