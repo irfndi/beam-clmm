@@ -973,10 +973,15 @@ const loadConfig = Effect.gen(function* () {
   );
 
   // ─── F5: Multi-pool allocation ──────────────────────────────────────────────
+  // 15% per-pool concentration cap (was 40%). Observed paper book: the 11
+  // positions above ~$1500 (≈15% of the ~$10k book) were net −$383, dominated
+  // by one $1,036 gap-down (35% of a $2,918 position); the 101 positions
+  // ≤$1500 were net +$32. A 15% cap bounds a single pool's tail risk without
+  // disabling the scaling cadence (the cap scales with portfolio value).
   const maxPerPoolAllocationPct = yield* validatedNumber(
     "MAX_PER_POOL_ALLOCATION_PCT",
     0,
-    0.4,
+    0.15,
     1.0,
   );
   const maxOpenPositions = yield* validatedNumber(
