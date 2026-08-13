@@ -2941,6 +2941,10 @@ export const program = Effect.gen(function* () {
   // TRAILING_STOP_CONFIRM_CYCLES cycles, so a single noisy snapshot read
   // (unstable tracked-peak / value) cannot trigger EXIT churn. Session-local.
   const trailingStopBreachCount = new Map<string, number>();
+  // Hard stop-loss phantom-EXIT guard: the entry-based stop-loss (in-range
+  // capital floor) shares the trailing stop's #153 confirm-cycles debounce so
+  // a single noisy snapshot read cannot churn a position out. Session-local.
+  const stopLossBreachCount = new Map<string, number>();
 
   // ─── Market-scan state (universe-driven trading, no manual watchlist) ────
   // The ranked universe snapshot from the last gate refresh, the addresses of
@@ -5916,6 +5920,36 @@ export const program = Effect.gen(function* () {
             `Fee/IL ratio ${feeIlRatio.toFixed(2)} below 0.5 on ${pool.tokenXSymbol}/${pool.tokenYSymbol} — EXIT`,
             { pool, metrics, position: pos },
           );
+        }
+
+        // Hard stop-loss (in-range capital floor): entry-based and independent
+        // of the trailing stop's peak. The trailing stop only protects peak
+        // profits, so an in-range adverse move needs its own deterministic
+        // EXIT. Fires for any position with a real deposit whose mark has
+        // fallen below entry − STOP_LOSS_PCT, regardless of out-of-range state.
+        // Shares the trailing stop's #153 confirm-cycles debounce so a single
+        // noisy snapshot read cannot churn a position out.
+        if (!decision && pos.depositedUsd > 0) {
+          const lossPct = (pos.currentValueUsd - pos.depositedUsd) / pos.depositedUsd;
+          const breached = lossPct < -config.stopLossPct;
+          const breaches = breached ? (stopLossBreachCount.get(pos.positionId) ?? 0) + 1 : 0;
+          if (breached) stopLossBreachCount.set(pos.positionId, breaches);
+          else stopLossBreachCount.delete(pos.positionId);
+          if (breached && breaches >= config.trailingStopConfirmCycles) {
+            decision = {
+              action: "EXIT",
+              poolAddress,
+              positionId: pos.positionId,
+              confidence: 1,
+              reasoning: `Stop-loss: position loss ${(Math.abs(lossPct) * 100).toFixed(1)}% exceeds ${(config.stopLossPct * 100).toFixed(0)}% (${breaches}/${config.trailingStopConfirmCycles} cycles) — capital protection exit`,
+            };
+            yield* sendAgentAlert(
+              "critical",
+              "stop_loss",
+              `Stop-loss triggered on ${pool.tokenXSymbol}/${pool.tokenYSymbol}: position loss ${(Math.abs(lossPct) * 100).toFixed(1)}% ($${(pos.currentValueUsd - pos.depositedUsd).toFixed(2)}) exceeds ${(config.stopLossPct * 100).toFixed(0)}% (confirmed ${breaches} cycles)`,
+              { pool, metrics, position: pos },
+            );
+          }
         }
 
         // Trailing exit (profit protection)

@@ -46,6 +46,7 @@ const base = {
   tvlDropExitPct: 0.3,
   maxOpenPositions: 3,
   trailingStopBreaches: 0,
+  stopLossBreaches: 0,
 } as const;
 
 const heldPosition = {
@@ -75,7 +76,7 @@ describe("evaluateReplayPool", () => {
       openPositions: [],
       position: {
         ...heldPosition,
-        currentValueUsd: 800,
+        currentValueUsd: 875,
       },
     });
 
@@ -85,7 +86,7 @@ describe("evaluateReplayPool", () => {
   });
 
   it("confirms the #153 trailing-stop breach across consecutive cycles", () => {
-    const breached = { ...heldPosition, currentValueUsd: 800 };
+    const breached = { ...heldPosition, currentValueUsd: 875 };
     const first = evaluateReplayPool({
       ...base,
       trailingStopConfirmCycles: 2,
@@ -105,6 +106,83 @@ describe("evaluateReplayPool", () => {
     });
     expect(second.decision.action).toBe("EXIT");
     expect(second.trailingStopBreachCount).toBe(2);
+  });
+
+  it("exits on the hard stop-loss when an in-range position falls below entry minus stopLossPct", () => {
+    // deposited 1000, peak == mark 800 → no trailing-stop drawdown, but the
+    // entry-based loss is -20% < -15% (risk.stopLossPct), so stop-loss fires.
+    const result = evaluateReplayPool({
+      ...base,
+      position: {
+        ...heldPosition,
+        depositedUsd: 1_000,
+        highestValueUsd: 800,
+        currentValueUsd: 800,
+      },
+      openPositions: [
+        {
+          ...heldPosition,
+          depositedUsd: 1_000,
+          highestValueUsd: 800,
+          currentValueUsd: 800,
+        },
+      ],
+    });
+
+    expect(result.decision.action).toBe("EXIT");
+    expect(result.decision.reasoning).toContain("Stop-loss");
+  });
+
+  it("does not fire the hard stop-loss when the loss is within stopLossPct", () => {
+    // -12% loss is within the 15% stop-loss; peak == mark means the 10%
+    // trailing-stop drawdown is not breached either, so the position holds.
+    const result = evaluateReplayPool({
+      ...base,
+      position: {
+        ...heldPosition,
+        depositedUsd: 1_000,
+        highestValueUsd: 880,
+        currentValueUsd: 880,
+      },
+      openPositions: [
+        {
+          ...heldPosition,
+          depositedUsd: 1_000,
+          highestValueUsd: 880,
+          currentValueUsd: 880,
+        },
+      ],
+    });
+
+    expect(result.decision.action).toBe("HOLD");
+  });
+
+  it("confirms the hard stop-loss breach across consecutive cycles (#153 parity)", () => {
+    const breached = {
+      ...heldPosition,
+      depositedUsd: 1_000,
+      highestValueUsd: 800,
+      currentValueUsd: 800,
+    };
+    const first = evaluateReplayPool({
+      ...base,
+      trailingStopConfirmCycles: 2,
+      stopLossBreaches: 0,
+      position: breached,
+      openPositions: [breached],
+    });
+    expect(first.decision.action).toBe("HOLD");
+    expect(first.stopLossBreachCount).toBe(1);
+
+    const second = evaluateReplayPool({
+      ...base,
+      trailingStopConfirmCycles: 2,
+      stopLossBreaches: 1,
+      position: breached,
+      openPositions: [breached],
+    });
+    expect(second.decision.action).toBe("EXIT");
+    expect(second.stopLossBreachCount).toBe(2);
   });
 
   it("never fires the EXIT chain without a position — a crashing-TVL pool still gets the ENTER gate", () => {
@@ -201,7 +279,7 @@ describe("evaluateReplayPool", () => {
   it("matches the engine decision for a recorded trailing-stop snapshot", () => {
     const position = {
       ...heldPosition,
-      currentValueUsd: 800,
+      currentValueUsd: 875,
     };
     const replay = evaluateReplayPool({
       ...base,

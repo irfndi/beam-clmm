@@ -6,7 +6,8 @@
  * Parity scope (mirrors program.ts exactly):
  *   - EXIT chain, in live order: challenge-rotation drawdown (Krystal 24h
  *     drawdown), dust cleanup, TVL-drop, volume-authenticity, Fee/IL < 0.5,
- *     and the trailing stop (with the #153 consecutive-cycle confirm debounce).
+ *     the hard stop-loss (entry-based, in-range), and the trailing stop
+ *     (with the #153 consecutive-cycle confirm debounce).
  *   - HOLD: live per-position confidence (fee/IL > minFeeIlRatio + no recent
  *     warnings → min(0.6 + feeIlRatio·0.05, 0.9); otherwise the pool-default
  *     HOLD at confidence 0.5).
@@ -98,6 +99,8 @@ export interface ReplayEvaluationInput {
   readonly signalWeights?: SignalWeights;
   /** Consecutive prior cycles the trailing stop was breached (loop state). */
   readonly trailingStopBreaches: number;
+  /** Consecutive prior cycles the hard stop-loss was breached (loop state). */
+  readonly stopLossBreaches: number;
 
   // ── Challenge-mode parity (all inert unless challengeMode === true) ─────
   readonly challengeMode?: boolean;
@@ -124,6 +127,8 @@ export interface ReplayEvaluation {
   readonly adjustedSizeUsd: number;
   /** New consecutive-trailing-breach count — the caller carries it forward. */
   readonly trailingStopBreachCount: number;
+  /** New consecutive-stop-loss-breach count — the caller carries it forward. */
+  readonly stopLossBreachCount: number;
 }
 
 const toRiskPosition = (position: ReplayPosition): Position => ({
@@ -169,6 +174,7 @@ export function evaluateReplayPool(input: ReplayEvaluationInput): ReplayEvaluati
   // #153 debounce: the count only advances inside the trailing-stop block
   // (live tracks per-position breach state in evaluatePool, pre-risk-tail).
   let trailingBreaches = 0;
+  let stopLossBreaches = 0;
 
   // ── Phase 1: EXIT evaluation ──────────────────────────────────────────────
   // Challenge drawdown gate (live first branch): Krystal-measured 24h drawdown
@@ -236,6 +242,25 @@ export function evaluateReplayPool(input: ReplayEvaluationInput): ReplayEvaluati
       confidence: 0.75,
       reasoning: `Fee/IL ratio ${feeIlRatio.toFixed(2)} below 0.5`,
     };
+  }
+
+  // Hard stop-loss (in-range capital floor): entry-based EXIT mirrored from
+  // live — fires regardless of out-of-range state when the mark falls below
+  // entry − risk.stopLossPct. Shares the trailing stop's #153 confirm-cycles
+  // debounce (a single noisy snapshot read cannot churn a position out).
+  if (!decision && position && position.depositedUsd > 0) {
+    const lossPct =
+      (position.currentValueUsd - position.depositedUsd) / position.depositedUsd;
+    const breached = lossPct < -input.risk.stopLossPct;
+    stopLossBreaches = breached ? input.stopLossBreaches + 1 : 0;
+    if (breached && stopLossBreaches >= input.trailingStopConfirmCycles) {
+      decision = {
+        action: "EXIT",
+        poolAddress,
+        confidence: 1,
+        reasoning: `Stop-loss: position loss ${(Math.abs(lossPct) * 100).toFixed(1)}% exceeds ${(input.risk.stopLossPct * 100).toFixed(0)}% (${stopLossBreaches}/${input.trailingStopConfirmCycles} cycles) — capital protection exit`,
+      };
+    }
   }
 
   // Trailing exit (profit protection) — the #153 confirm-cycles debounce
@@ -390,5 +415,6 @@ export function evaluateReplayPool(input: ReplayEvaluationInput): ReplayEvaluati
         ? finalDecision.positionSizeUsd
         : 0),
     trailingStopBreachCount: trailingBreaches,
+    stopLossBreachCount: stopLossBreaches,
   };
 }

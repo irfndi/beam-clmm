@@ -221,6 +221,7 @@ export function runBacktestFromTicks(
   // trailing-stop confirm-cycles debounce and the challenge hard-floor /
   // loss-cooldown gates carry state across cycles.
   let trailingStopBreaches = 0;
+  let stopLossBreaches = 0;
   let challengePeakEquityUsd = initialValue;
 
   const strategyReturns: number[] = [0];
@@ -304,12 +305,14 @@ export function runBacktestFromTicks(
       tvlDropExitPct: 0.3,
       maxOpenPositions: 3,
       trailingStopBreaches,
+      stopLossBreaches,
       challengeMode: false,
     });
     // Advance the #153 breach counter BEFORE the risk gate: live counts
     // breaches in evaluatePool, so a risk-rejected HOLD tick must still
     // accumulate toward the confirm-cycles EXIT.
     trailingStopBreaches = replay.trailingStopBreachCount;
+    stopLossBreaches = replay.stopLossBreachCount;
     if (!replay.riskApproved) {
       previousTvl = tick.pool.tvlUsd;
       strategyReturns.push(0);
@@ -320,11 +323,13 @@ export function runBacktestFromTicks(
       positionSizeUsd = replay.adjustedSizeUsd;
       positionPeakUsd = positionSizeUsd;
       trailingStopBreaches = 0;
+      stopLossBreaches = 0;
     } else if (replay.decision.action === "EXIT") {
       hasPosition = false;
       positionSizeUsd = 0;
       positionPeakUsd = 0;
       trailingStopBreaches = 0;
+      stopLossBreaches = 0;
     } else if (hasPosition) {
       positionPeakUsd = Math.max(positionPeakUsd, replayPosition?.currentValueUsd ?? 0);
     }
