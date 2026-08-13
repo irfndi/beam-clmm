@@ -185,6 +185,48 @@ describe("evaluateReplayPool", () => {
     expect(second.stopLossBreachCount).toBe(2);
   });
 
+  it("respects the exact stop-loss boundary: −15.0% holds, −15.1% exits", () => {
+    const atBoundary = evaluateReplayPool({
+      ...base,
+      position: {
+        ...heldPosition,
+        depositedUsd: 1_000,
+        highestValueUsd: 850,
+        currentValueUsd: 850,
+      },
+      openPositions: [
+        {
+          ...heldPosition,
+          depositedUsd: 1_000,
+          highestValueUsd: 850,
+          currentValueUsd: 850,
+        },
+      ],
+    });
+    // Exactly −15% is not strictly below −15% (and no trailing-stop drawdown).
+    expect(atBoundary.decision.action).toBe("HOLD");
+
+    const pastBoundary = evaluateReplayPool({
+      ...base,
+      position: {
+        ...heldPosition,
+        depositedUsd: 1_000,
+        highestValueUsd: 849,
+        currentValueUsd: 849,
+      },
+      openPositions: [
+        {
+          ...heldPosition,
+          depositedUsd: 1_000,
+          highestValueUsd: 849,
+          currentValueUsd: 849,
+        },
+      ],
+    });
+    expect(pastBoundary.decision.action).toBe("EXIT");
+    expect(pastBoundary.decision.reasoning).toContain("Stop-loss");
+  });
+
   it("never fires the EXIT chain without a position — a crashing-TVL pool still gets the ENTER gate", () => {
     // Live's EXIT chain runs per-position; with no position the pool goes
     // straight to the ENTER mega-gate (which does not check tvlVelocity).
