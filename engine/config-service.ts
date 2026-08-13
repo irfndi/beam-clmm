@@ -334,6 +334,11 @@ export interface AppConfig {
   readonly oorCooldownMs: number;
   readonly repeatOorCooldownMs: number;
   readonly maxOorCooldownExits: number;
+  /** Re-entry cooldown after a challenge-rotation exit (drawdown or yield
+   *  decay). Breaks the 1-minute exit→re-enter churn the noisy yield-decay
+   *  signal caused (95/103 same-pool re-entries within 1h on the observed
+   *  book). Default 900000 (15 min). */
+  readonly rotationCooldownMs: number;
 
   // ─── Fee-density-driven low-yield exit cooldowns ────────────────────────────
   /**
@@ -1095,6 +1100,11 @@ const loadConfig = Effect.gen(function* () {
     12 * 60 * 60 * 1000,
   );
   const maxOorCooldownExits = yield* validatedNumber("MAX_OOR_COOLDOWN_EXITS", 1, 3);
+  const rotationCooldownMs = yield* validatedNumber(
+    "ROTATION_COOLDOWN_MS",
+    0,
+    15 * 60 * 1000,
+  );
 
   // ─── Fee-density-driven low-yield exit cooldowns ────────────────────────────
   const feeDensityCooldowns = yield* Config.boolean("FEE_DENSITY_COOLDOWNS").pipe(
@@ -1731,6 +1741,7 @@ const loadConfig = Effect.gen(function* () {
     oorCooldownMs,
     repeatOorCooldownMs,
     maxOorCooldownExits,
+    rotationCooldownMs,
     feeDensityCooldowns,
     feeDensityCooldownMinMs,
     feeDensityHighPct,

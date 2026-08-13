@@ -102,6 +102,7 @@ function baseConfig(overrides: Partial<AppConfig> = {}): AppConfig {
     oorCooldownMs: 4 * 60 * 60 * 1000,
     repeatOorCooldownMs: 12 * 60 * 60 * 1000,
     maxOorCooldownExits: 3,
+    rotationCooldownMs: 15 * 60 * 1000,
     feeDensityCooldowns: true,
     feeDensityCooldownMinMs: 60 * 60 * 1000,
     feeDensityHighPct: 0.005,

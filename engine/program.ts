@@ -6028,6 +6028,7 @@ export const program = Effect.gen(function* () {
           const isLowYieldExit =
             exitDecision.reasoning.includes("Fee/IL ratio") ||
             exitDecision.reasoning.includes("Volume authenticity");
+          const isRotationExit = exitDecision.reasoning.includes("[challenge-rotation]");
 
           if (isOorExit) {
             const newOorCount = existingOorCount + 1;
@@ -6079,6 +6080,23 @@ export const program = Effect.gen(function* () {
               poolAddress,
               cooldownUntil,
               reason: `Low yield exit`,
+              consecutiveOorExits: 0,
+            };
+          } else if (isRotationExit) {
+            // Challenge-rotation exits (drawdown or yield decay) previously set
+            // no cooldown, so the noisy yield-decay signal churned the same pool
+            // out and back in within ~1 minute (95/103 same-pool re-entries
+            // inside 1h on the observed book). A short rotation cooldown breaks
+            // that flip-flop while keeping the compounding rotation cadence.
+            const cooldownDuration = config.rotationCooldownMs;
+            const cooldownUntil = Date.now() + cooldownDuration;
+            console.info(
+              `[cooldown] Pool ${poolAddress} on cooldown for ${(cooldownDuration / 60_000).toFixed(0)}m — challenge rotation exit`,
+            );
+            return {
+              poolAddress,
+              cooldownUntil,
+              reason: "Challenge rotation exit",
               consecutiveOorExits: 0,
             };
           }

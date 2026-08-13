@@ -248,6 +248,7 @@ export const DB_CONFIG_KEYS: ReadonlyArray<DbConfigSpec> = [
     min: 1,
   },
   { envKey: "OOR_COOLDOWN_MS", kind: "number", field: "oorCooldownMs", min: 0 },
+  { envKey: "ROTATION_COOLDOWN_MS", kind: "number", field: "rotationCooldownMs", min: 0 },
   {
     envKey: "OOR_GRACE_PERIOD_CYCLES",
     kind: "number",

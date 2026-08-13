@@ -21,13 +21,14 @@
  * get the static duration and thin pools the larger "minimum".
  */
 
-export type ExitCooldownTrigger = "oor" | "low-yield";
+export type ExitCooldownTrigger = "oor" | "low-yield" | "rotation";
 
 /** The subset of AppConfig the cooldown math reads. */
 export interface ExitCooldownConfig {
   readonly oorCooldownMs: number;
   readonly repeatOorCooldownMs: number;
   readonly maxOorCooldownExits: number;
+  readonly rotationCooldownMs: number;
   readonly feeDensityCooldowns: boolean;
   readonly feeDensityCooldownMinMs: number;
   readonly feeDensityHighPct: number;
@@ -89,5 +90,7 @@ export function computeCooldownForExit(request: ExitCooldownRequest): number {
         : config.oorCooldownMs;
     case "low-yield":
       return computeLowYieldCooldownMs(config, feeDensityPerDay);
+    case "rotation":
+      return config.rotationCooldownMs;
   }
 }

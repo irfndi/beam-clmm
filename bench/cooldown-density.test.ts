@@ -7,6 +7,7 @@ const config: ExitCooldownConfig = {
   oorCooldownMs: 4 * HOUR,
   repeatOorCooldownMs: 12 * HOUR,
   maxOorCooldownExits: 3,
+  rotationCooldownMs: 15 * 60 * 1000,
   feeDensityCooldowns: true,
   feeDensityCooldownMinMs: 1 * HOUR,
   feeDensityHighPct: 0.005,
@@ -23,6 +24,19 @@ function lowYield(feeDensityPerDay: number | null, overrides: Partial<ExitCooldo
 }
 
 describe("cooldown duration math", () => {
+  describe("rotation trigger (challenge anti-churn)", () => {
+    it("returns the rotation cooldown duration", () => {
+      expect(
+        computeCooldownForExit({
+          trigger: "rotation",
+          consecutiveOorExits: 0,
+          config,
+          feeDensityPerDay: null,
+        }),
+      ).toBe(15 * 60 * 1000);
+    });
+  });
+
   describe("oor trigger (legacy escalation)", () => {
     it("uses the base duration before the escalation threshold", () => {
       // existing 0 → new count 1 < 3
