@@ -1008,6 +1008,20 @@ const MIGRATIONS: ReadonlyArray<Migration> = [
       `);
     },
   },
+  {
+    version: 25,
+    name: "pool_snapshots_drawdown24h",
+    up(db) {
+      // Persist the Krystal 24h drawdown so a replayed snapshot carries the
+      // live rotation's drawdown exit signal (the backtest otherwise must
+      // reconstruct it from price history, which under-fires). Additive +
+      // guarded: legacy rows stay NULL and the backtest falls back to the
+      // price-history reconstruction for them.
+      if (hasTable(db, "pool_snapshots") && !hasColumn(db, "pool_snapshots", "drawdown24h")) {
+        db.exec("ALTER TABLE pool_snapshots ADD COLUMN drawdown24h REAL");
+      }
+    },
+  },
 ];
 
 function runMigrations(db: Database) {

@@ -35,6 +35,26 @@ const FAIL_CLOSED_CONFIG: RevenueConfig = {
   feeWalletAddress: "",
 };
 
+/**
+ * Enforce the fee-wallet invariant: a platform fee can only be collected when
+ * a valid destination wallet is configured. An empty wallet zeroes the fee and
+ * disables revenue share — collecting to address "" would be lost (or revert).
+ * Applied to every resolved config (default, API, DB cache, and fail-closed)
+ * so a stale/misconfigured server config can never take an uncollectible fee.
+ */
+function sanitizeRevenueConfig(config: RevenueConfig): RevenueConfig {
+  const wallet = config.feeWalletAddress.trim();
+  if (wallet.length === 0) {
+    return {
+      ...config,
+      platformFeeRate: 0,
+      revenueShareEnabled: false,
+      revenueShareOperatorPct: 0,
+    };
+  }
+  return config;
+}
+
 interface CachedConfig {
   readonly config: RevenueConfig;
   readonly expiresAt: number;
@@ -206,8 +226,10 @@ export const RevenueConfigServiceLive: Layer.Layer<
     const paperTrading = config.paperTrading;
 
     return {
-      getConfig: (): Effect.Effect<RevenueConfig, never> => resolveConfig(db, paperTrading),
-      refreshConfig: (): Effect.Effect<RevenueConfig, never> => forceRefresh(db, paperTrading),
+      getConfig: (): Effect.Effect<RevenueConfig, never> =>
+        resolveConfig(db, paperTrading).pipe(Effect.map(sanitizeRevenueConfig)),
+      refreshConfig: (): Effect.Effect<RevenueConfig, never> =>
+        forceRefresh(db, paperTrading).pipe(Effect.map(sanitizeRevenueConfig)),
     };
   }),
 );

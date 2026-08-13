@@ -5119,6 +5119,7 @@ export const program = Effect.gen(function* () {
           currentPrice: pool.currentPrice,
           binStep: pool.binStep,
           statsSource: pool.statsSource,
+          drawdown24h: pool.drawdown24h ?? null,
           tokenXSymbol: pool.tokenXSymbol,
           tokenYSymbol: pool.tokenYSymbol,
           binArray:

@@ -647,8 +647,8 @@ export const DbLive = (dbPath?: string) =>
               `INSERT OR REPLACE INTO pool_snapshots (
               pool_address, timestamp, active_bin_id, tvl_usd, volume_24h_usd,
               fees_24h_usd, apr, current_price, bin_step,
-              token_x_symbol, token_y_symbol, bin_array_json, stats_source
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+              token_x_symbol, token_y_symbol, bin_array_json, stats_source, drawdown24h
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
               snapshot.poolAddress,
               snapshot.timestamp,
               snapshot.activeBinId,
@@ -662,6 +662,7 @@ export const DbLive = (dbPath?: string) =>
               snapshot.tokenYSymbol,
               serializeBinArray(snapshot.binArray),
               snapshot.statsSource ?? "heuristic",
+              snapshot.drawdown24h ?? null,
             );
           }),
 
@@ -1631,6 +1632,9 @@ function rowToSnapshot(row: SqlRawRow): PoolSnapshot {
     tokenYSymbol: String((row.token_y_symbol ?? "") as unknown),
     binArray: deserializeBinArray(String(row.bin_array_json)),
     statsSource: parseStatsSource(row.stats_source),
+    drawdown24h: row.drawdown24h === null || row.drawdown24h === undefined
+      ? null
+      : Number(row.drawdown24h),
   };
 }
 

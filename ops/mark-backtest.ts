@@ -30,6 +30,7 @@ interface Snapshot {
   fees24hUsd: number;
   tvlUsd: number;
   activeBinId: number;
+  drawdown24h: number | null;
 }
 
 interface Position {
@@ -160,7 +161,7 @@ export function simulatePool(snaps: readonly Snapshot[], cfg: Config): PoolResul
     const s = snaps[i]!;
     const yieldPct = s.tvlUsd > 0 ? (s.fees24hUsd / s.tvlUsd) * 100 : 0;
     const avgYield = trailingAvgYield(snaps, i);
-    const dd = drawdown24h(snaps, i);
+    const dd = s.drawdown24h ?? drawdown24h(snaps, i);
 
     if (position === null) {
       // ── ENTER gate ──
@@ -275,13 +276,25 @@ const pools = db
 const endMs = Date.now();
 const startMs = endMs - args.days * 24 * 3_600_000;
 
+const hasDrawdownColumn = (() => {
+  try {
+    const cols = db.query("PRAGMA table_info(pool_snapshots)").all() as Array<{ name: string }>;
+    return cols.some((c) => c.name === "drawdown24h");
+  } catch {
+    return false;
+  }
+})();
+
 function loadSnapshots(pool: string): Snapshot[] {
-  return db
-    .query(
-      `SELECT timestamp, current_price, fees_24h_usd, tvl_usd, active_bin_id
+  const select = hasDrawdownColumn
+    ? `SELECT timestamp, current_price, fees_24h_usd, tvl_usd, active_bin_id, drawdown24h
        FROM pool_snapshots WHERE pool_address=? AND timestamp>=? AND timestamp<=?
-       ORDER BY timestamp`,
-    )
+       ORDER BY timestamp`
+    : `SELECT timestamp, current_price, fees_24h_usd, tvl_usd, active_bin_id, NULL AS drawdown24h
+       FROM pool_snapshots WHERE pool_address=? AND timestamp>=? AND timestamp<=?
+       ORDER BY timestamp`;
+  return db
+    .query(select)
     .all(pool, startMs, endMs)
     .map((r) => {
       const x = r as {
@@ -290,6 +303,7 @@ function loadSnapshots(pool: string): Snapshot[] {
         fees_24h_usd: number;
         tvl_usd: number;
         active_bin_id: number;
+        drawdown24h: number | null;
       };
       return {
         timestamp: x.timestamp,
@@ -297,6 +311,7 @@ function loadSnapshots(pool: string): Snapshot[] {
         fees24hUsd: x.fees_24h_usd,
         tvlUsd: x.tvl_usd,
         activeBinId: x.active_bin_id,
+        drawdown24h: x.drawdown24h,
       };
     });
 }

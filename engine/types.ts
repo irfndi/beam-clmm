@@ -211,6 +211,13 @@ export interface PoolSnapshot {
    * was never recorded is treated as fabricated (`heuristic`), NOT datapi.
    */
   statsSource?: "datapi" | "krystal" | "geckoterminal" | "heuristic" | undefined;
+  /**
+   * Krystal 24h drawdown (negative = down), persisted at capture time so a
+   * backtest can replay the live rotation's drawdown exit without
+   * reconstructing it from price history. Optional/legacy: older snapshots
+   * predate the column and carry null.
+   */
+  drawdown24h?: number | null | undefined;
 }
 
 export interface PoolMetrics {
