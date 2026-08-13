@@ -10,6 +10,11 @@
     "esModuleInterop": true,
     "skipLibCheck": true,
     "resolveJsonModule": true,
+    // tools/oxlint/* (the anti-slop plugin) imports sibling modules with
+    // explicit `.ts` extensions (oxc module resolution); the plugin is now part
+    // of the root typecheck include below. noEmit is set above, which is the
+    // precondition allowImportingTsExtensions requires.
+    "allowImportingTsExtensions": true,
     // Restricts ambient @types/* auto-inclusion to bun-types on purpose (Bun's
     // runtime already provides node globals). Any new @types/* dependency MUST
     // be listed here manually or its globals will be silently ignored.
@@ -22,6 +27,6 @@
     "noUnusedParameters": true,
     "forceConsistentCasingInFileNames": true
   },
-  "include": ["engine/**/*", "ops/**/*", "types/**/*", "bench/**/*", "cli/**/*", "scripts/**/*", "*.config.ts"],
+  "include": ["engine/**/*", "ops/**/*", "types/**/*", "bench/**/*", "cli/**/*", "scripts/**/*", "tools/**/*", "*.config.ts"],
   "exclude": ["node_modules", "dist"]
 }
