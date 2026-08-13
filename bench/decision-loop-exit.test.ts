@@ -637,3 +637,98 @@ describe("agent position context wiring", () => {
     expect(capturedContext?.position?.hoursHeld).toBeGreaterThanOrEqual(0);
   }, 15_000);
 });
+
+// ─── Wave 21: in-range hard stop-loss ────────────────────────────────────────
+
+describe("in-range hard stop-loss (Wave 21)", () => {
+  const POOL = "PoolStopLoss11111111111111111111111111111111111";
+
+  it("fires a stop-loss EXIT in the live loop when the mark falls below entry minus STOP_LOSS_PCT", async () => {
+    const adapter = makeAdapter(
+      { [POOL]: makePool({ address: POOL }) },
+      {
+        // Real on-chain mark is $800 vs a $1,000 deposit → −20% < −15%.
+        getPositionValueUsd: () => Effect.succeed(800),
+      },
+    );
+    const layer = makeTestLayer({
+      adapter,
+      configOverrides: {
+        watchlistPools: [POOL],
+        trailingStopConfirmCycles: 1, // single-cycle fire for this assertion
+      },
+    });
+
+    const test = Effect.gen(function* () {
+      const db = yield* DbService;
+      yield* db.savePosition(
+        makePosition({
+          poolAddress: POOL,
+          positionPubKey: "stop-loss-pos",
+          depositedUsd: 1_000,
+          currentValueUsd: 1_000,
+        }),
+      );
+      yield* Effect.raceFirst(program, Effect.sleep(2_000));
+      const audit = yield* AuditService;
+      return yield* audit.getRecentDecisions(50);
+    });
+    const decisions = await Effect.runPromise(
+      Effect.provide(test, layer) as unknown as Effect.Effect<
+        ReadonlyArray<DecisionRow>,
+        Error,
+        never
+      >,
+    );
+
+    const stopLossExit = decisions.find(
+      (d) => d.poolAddress === POOL && d.action === "EXIT" && d.reasoning.includes("Stop-loss"),
+    );
+    expect(stopLossExit, "the live loop must produce a Stop-loss EXIT").toBeDefined();
+    expect(stopLossExit!.riskResult.approved).toBe(true);
+  }, 15_000);
+
+  it("does NOT fire the stop-loss on a single cycle when confirm cycles > 1 (#153 parity)", async () => {
+    const adapter = makeAdapter(
+      { [POOL]: makePool({ address: POOL }) },
+      { getPositionValueUsd: () => Effect.succeed(800) },
+    );
+    const layer = makeTestLayer({
+      adapter,
+      configOverrides: {
+        watchlistPools: [POOL],
+        trailingStopConfirmCycles: 2, // breach must persist across 2 cycles
+      },
+    });
+
+    const test = Effect.gen(function* () {
+      const db = yield* DbService;
+      yield* db.savePosition(
+        makePosition({
+          poolAddress: POOL,
+          positionPubKey: "stop-loss-pos",
+          depositedUsd: 1_000,
+          currentValueUsd: 1_000,
+        }),
+      );
+      yield* Effect.raceFirst(program, Effect.sleep(2_000));
+      const audit = yield* AuditService;
+      return yield* audit.getRecentDecisions(50);
+    });
+    const decisions = await Effect.runPromise(
+      Effect.provide(test, layer) as unknown as Effect.Effect<
+        ReadonlyArray<DecisionRow>,
+        Error,
+        never
+      >,
+    );
+
+    const stopLossExits = decisions.filter(
+      (d) => d.poolAddress === POOL && d.action === "EXIT" && d.reasoning.includes("Stop-loss"),
+    );
+    expect(
+      stopLossExits,
+      "a single-cycle stop-loss breach must not EXIT (debounce)",
+    ).toHaveLength(0);
+  }, 15_000);
+});
