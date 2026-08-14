@@ -2866,6 +2866,20 @@ export const program = Effect.gen(function* () {
           return { address, score: score.score, tier: score.tier };
         })
         .filter((entry) => entry.tier !== "none")
+        // With LIVE_ENTRY_NATIVE_LEG_ONLY the wallet can only fund native/WETH
+        // pools, so pre-filter the BOOK (not just the ENTER gate) to
+        // native-paired entries — otherwise the top-K is dominated by
+        // TOKEN/USDG pairs and the agent sits idle even when fundable pools
+        // exist lower in the ranking. Symbol-based (Krystal stats carry no
+        // addresses); the on-chain ENTER gate remains the final authority.
+        .filter((entry) => {
+          if (!(config.liveEntryNativeLegOnly === true && !config.paperTrading)) return true;
+          const stats = universe.get(entry.address);
+          if (stats === undefined) return false;
+          const s0 = stats.token0Symbol.toLowerCase();
+          const s1 = stats.token1Symbol.toLowerCase();
+          return s0 === "eth" || s0 === "weth" || s1 === "eth" || s1 === "weth";
+        })
         .sort((a, b) => b.score - a.score)
         .slice(0, config.challengeBookSize ?? 10);
       harvestBookPools.clear();
