@@ -355,6 +355,31 @@ describe("failure resilience", () => {
     void r.dispose();
   });
 
+  it("never sends a batch larger than batchSize even with a re-queued backlog", async () => {
+    // Regression: flushEffect once spliced the ENTIRE pending buffer into one
+    // request. With a failing ingest endpoint the backlog grew to hundreds of
+    // reports, every flush re-sent all of them, and the server's hard batch cap
+    // answered 400 forever — a permanent re-queue loop. Each flush must take at
+    // most `batchSize` so a backlog drains in server-safe chunks.
+    const sent: number[] = [];
+    vi.mocked(globalThis.fetch).mockImplementation((_url, init) => {
+      const body = JSON.parse((init?.body as string) ?? "{}");
+      sent.push(Array.isArray(body.reports) ? body.reports.length : 0);
+      return Promise.resolve(new Response(null, { status: 400 }));
+    });
+
+    const r = makeReporter({ batchSize: 3 });
+    for (let i = 0; i < 10; i++) r.report(new Error(`e${i}`));
+    await new Promise((res) => setTimeout(res, 30));
+    await r.flushAsync();
+
+    expect(sent.length).toBeGreaterThan(0);
+    expect(sent.every((n) => n <= 3)).toBe(true);
+    // Every 400 re-queues its own batch, so nothing is dropped.
+    expect(r.getPending()).toHaveLength(10);
+    void r.dispose();
+  });
+
   it("buffers reports with explicit endpoint", () => {
     const r = createErrorReporter({
       enabled: true,

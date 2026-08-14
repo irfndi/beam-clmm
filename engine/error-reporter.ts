@@ -66,7 +66,7 @@ export interface BatchPayload {
 
 // ─── Defaults ────────────────────────────────────────────────────────────────
 
-const DEFAULT_ERROR_ENDPOINT = "https://beam-api.irfndi.workers.dev/v1/errors/batch";
+const DEFAULT_ERROR_ENDPOINT = "https://beam-api.pryx.dev/v1/errors/batch";
 const DEFAULT_FLUSH_INTERVAL_MS = 60_000;
 const DEFAULT_BATCH_SIZE = 5;
 const MAX_PENDING_BUFFER = 1000;
@@ -248,7 +248,12 @@ export class ErrorReporter {
       return Effect.void;
     }
 
-    const batch = this.pending.splice(0, this.pending.length);
+    // Cap each flush at `batchSize` — the ingest endpoint rejects batches over
+    // a hard limit (50), so sending the entire pending buffer at once (which can
+    // grow unbounded while a batch is stuck re-queued) guarantees a permanent
+    // 400 → re-queue loop. Splicing only `batchSize` lets the buffer drain and
+    // keeps every request under the server cap.
+    const batch = this.pending.splice(0, this.batchSize);
     const endpoint = this.endpoint;
 
     return Effect.gen({ self: this }, function* () {
