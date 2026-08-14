@@ -4639,6 +4639,14 @@ export const program = Effect.gen(function* () {
       entrySolBudgetLamports = 0n;
       entryNativePriceUsd = 0;
       if (adapter.hasWallet() && !config.paperTrading && solFundedEntryMode) {
+        // Recover WETH parked by a failed live ENTER (wrap-then-dry-run-abort:
+        // the mint dry-run reverts pre-broadcast, but the wrap already spent
+        // native ETH → WETH). Unwrap it back so the wallet-reserve budget can
+        // fund the next attempt instead of idling with the capital split.
+        // Fail-open: a recover failure leaves the budget as-is (fail closed).
+        if (adapter.unwrapWethToNative !== undefined) {
+          yield* adapter.unwrapWethToNative().pipe(Effect.catch(() => Effect.void));
+        }
         const nativeSol = yield* adapter.getNativeBalance().pipe(
           Effect.map((lamports) => ({ ok: true as const, lamports })),
           Effect.catch(() => Effect.succeed({ ok: false as const, lamports: 0n })),

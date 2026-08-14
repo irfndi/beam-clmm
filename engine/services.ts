@@ -459,6 +459,12 @@ export interface AdapterApi {
     minNativeThresholdWei?: bigint,
     swapAmountUSDC?: number,
   ) => Effect.Effect<void, never>;
+  /** Unwrap the wallet's full WETH balance back to native ETH (1:1). Used to
+   *  recover WETH parked by a failed live ENTER (wrap-then-dry-run-abort) so
+   *  the wallet-reserve budget can fund the next attempt. No-op when the
+   *  wallet holds no WETH. Returns wei unwrapped. Optional: mocks that omit
+   *  it stay compiling. */
+  readonly unwrapWethToNative?: () => Effect.Effect<bigint, never>;
   readonly getTokenBalance: (mintAddress: string) => Effect.Effect<bigint, Error>;
   readonly getTokenPrices: (
     mints: ReadonlyArray<string>,

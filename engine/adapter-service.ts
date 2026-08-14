@@ -3259,7 +3259,34 @@ export const AdapterLive = Layer.effect(AdapterService,
         }),
       reportFeeCollection: () => Effect.void,
       // Original semantics: fail-open (never errors) — logs and continues.
-      swapUSDCForNative: (minNativeThreshold, swapAmountStable) =>
+      unwrapWethToNative: () =>
+        Effect.tryPromise({
+          try: async () => {
+            if (!walletAddress) return 0n;
+            const wethBal = await getBalance(WETH9, walletAddress);
+            if (wethBal <= 0n) return 0n;
+            const { txSignature } = await sendTx({
+              to: WETH9,
+              data: encodeFunctionData({
+                abi: weth9Abi,
+                functionName: "withdraw",
+                args: [wethBal],
+              }),
+            });
+            logger.info("unwrapWethToNative", {
+              txSignature,
+              amountWei: wethBal.toString(),
+            });
+            return wethBal;
+          },
+          catch: (e) => {
+            logger.warn("unwrapWethToNative failed (fail-open)", {
+              error: underlyingErrorMessage(e),
+            });
+            return 0n;
+          },
+        }).pipe(Effect.catch(() => Effect.succeed(0n))),
+            swapUSDCForNative: (minNativeThreshold, swapAmountStable) =>
         Effect.tryPromise({
           try: async () => {
             if (!walletAddress) {
