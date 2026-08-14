@@ -4603,12 +4603,14 @@ export const program = Effect.gen(function* () {
       // SOL budget for SOL-funded entries. One read, reused by every ENTER
       // gate this cycle; a failed read leaves the budget UNKNOWN and the gate
       // skips entries fail-closed (never commit SOL the engine cannot confirm).
-      // The USD→lamports estimate keys off the LIVE NATIVE price (conservatively
-      // floored at config.nativePriceUsd): entry-prep sizes swaps at live prices,
-      // so a stale-high SOL_PRICE_USD would under-reserve and let entries past
-      // the gate fail in prep instead of being skipped. A failed live price
-      // read fails closed with the balance read (price-cache hit when the
-      // cycle-top wallet snapshot already priced SOL).
+      // The USD→lamports estimate keys off the LIVE NATIVE price read fresh
+      // every cycle (the static NATIVE_PRICE_USD config was a Solana-era $150
+      // fallback that floored the real ~$1880 ETH price and over-reserved
+      // every entry ~12x, silently skipping all live ENTERs on a small
+      // wallet). Live-first: the feed is the freshest price available and
+      // entry-prep sizes swaps at live prices; a failed live price read fails
+      // closed with the balance read (price-cache hit when the cycle-top
+      // wallet snapshot already priced SOL).
       entrySolBudgetLamports = 0n;
       entryNativePriceUsd = 0;
       if (adapter.hasWallet() && !config.paperTrading && solFundedEntryMode) {
@@ -4625,16 +4627,14 @@ export const program = Effect.gen(function* () {
         const priceOk =
           typeof liveNativePrice === "number" &&
           Number.isFinite(liveNativePrice) &&
-          liveNativePrice > 0 &&
-          // config.nativePriceUsd is validated with min 0 (0 = unset); a zero
-          // config price would zero the USD→lamports reservation below and
-          // let entries past the gate that consume the full position size.
-          config.nativePriceUsd > 0;
+          liveNativePrice > 0;
         if (nativeSol.ok && priceOk) {
           entrySolBudgetLamports = freeEntrySolLamports(nativeSol.lamports);
-          // min(config, live) is the conservative direction: a lower price
-          // prices the same USD entry at MORE lamports (over-estimate is safe).
-          entryNativePriceUsd = Math.min(config.nativePriceUsd, liveNativePrice);
+          // Live-first dynamic price: the feed is refreshed every cycle, so no
+          // stale config ceiling applies. Over-reservation is still safe — the
+          // entry-failure backoff handles any residual price drift — and a
+          // failed/absent live read fails closed above (budget unknown).
+          entryNativePriceUsd = liveNativePrice;
           entrySolBudgetKnown = true;
         } else {
           entrySolBudgetKnown = false;

@@ -918,7 +918,14 @@ const loadConfig = Effect.gen(function* () {
 
   // ─── F1: Gas-aware rebalancing ──────────────────────────────────────────────
   const rebalanceGasCostNative = yield* validatedNumber("REBALANCE_GAS_COST_NATIVE", 0, 0.01);
-  const nativePriceUsd = yield* validatedNumber("NATIVE_PRICE_USD", 0, 150, 10_000);
+  // NATIVE_PRICE_USD is the native gas token (ETH on Robinhood Chain) price in
+  // USD. The fallback was ported verbatim from the Solana-era SOL price ($150)
+  // and underpriced ETH ~12x, which made the Issue #170 wallet-reserve gate
+  // (min(config, live)) reserve far too much ETH and skip every live ENTER on
+  // a small wallet. Floor at a realistic ETH price; the live price read (when
+  // it succeeds) overrides via min(config, live) for the conservative
+  // direction. 0 disables the price and fails the wallet-reserve gate closed.
+  const nativePriceUsd = yield* validatedNumber("NATIVE_PRICE_USD", 0, 1800, 10_000);
   const gasAwareMinDaysOfFeesPaidAhead = yield* validatedNumber(
     "GAS_AWARE_MIN_DAYS_OF_FEES_PAID_AHEAD",
     0,
