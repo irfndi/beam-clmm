@@ -1,6 +1,7 @@
 import { Database } from "bun:sqlite";
 import fs from "fs";
 import { createLogger } from "./logger.js";
+import { setupCustomSQLite } from "./db.js";
 import type { AppConfig } from "./config-service.js";
 
 /**
@@ -425,6 +426,10 @@ export function applyDbConfigOverrides(
  */
 export function readDbConfigOverrides(dbPath: string): ReadonlyMap<string, string> {
   if (!dbPath || dbPath === ":memory:" || !fs.existsSync(dbPath)) return new Map<string, string>();
+  // Bun's bundled SQLite loads on first Database open and then forbids
+  // setCustomSQLite; configure an extension-capable SQLite first so the
+  // process-wide selection is committed before this plain connection opens.
+  setupCustomSQLite();
   try {
     const db = new Database(dbPath);
     try {

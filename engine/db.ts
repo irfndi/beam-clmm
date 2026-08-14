@@ -25,9 +25,8 @@ export function vecRemediationHint(platform: string = process.platform): string 
   return "Install an extension-capable SQLite (compiled with loadable-extension support) and restart; verify BEAM_VEC0_PATH and run `beam doctor`.";
 }
 
-function setupCustomSQLite() {
+export function setupCustomSQLite() {
   if (customSQLiteConfigured) return;
-
   if (process.platform === "darwin") {
     // Bun's bundled SQLite cannot load extensions; sqlite-vec needs a system
     // libsqlite3 built with extension loading. The eager dlopen in
