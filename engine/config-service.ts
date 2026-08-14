@@ -331,6 +331,11 @@ export interface AppConfig {
    *  `ENTRY_SIZE_TVL_FRACTION`; default 0.005 (0.5 %). CHALLENGE_MODE raises it
    *  to 0.05 (5 %) for the compounding challenge. Absent = default. */
   readonly entrySizeTvlFraction?: number;
+  /** Minimum entry size worth submitting (USD). Env `ENTRY_SIZE_FLOOR_USD`;
+   *  default 10. Small canary wallets need a lower admissible floor — half of
+   *  an $18.6 wallet is $9.30, under the $10 hard floor, so nothing deploys.
+   *  Absent = default. */
+  readonly entrySizeFloorUsd?: number;
 
   // ─── F6: Paper-trading validation period ────────────────────────────────────
   /** Require N days of paper trading before allowing live ENTER. */
@@ -1096,6 +1101,12 @@ const loadConfig = Effect.gen(function* () {
     challengeMode ? 0.05 : ENTRY_SIZE_TVL_FRACTION,
     1,
   );
+  const entrySizeFloorUsd = yield* validatedNumber(
+    "ENTRY_SIZE_FLOOR_USD",
+    0,
+    ENTRY_SIZE_FLOOR_USD,
+    100,
+  );
 
   // ─── Idle-capital auto-redeploy (opt-in) ─────────────────────────────────
   const idleRedeployEnabled = yield* Config.boolean("IDLE_REDEPLOY_ENABLED").pipe(
@@ -1740,6 +1751,7 @@ const loadConfig = Effect.gen(function* () {
     maxPositionsPerPool,
     maxEntrySizeUsd,
     entrySizeTvlFraction,
+    entrySizeFloorUsd,
     entryMinRangePct,
     gasReservePct,
     harvestMinNetUsd,

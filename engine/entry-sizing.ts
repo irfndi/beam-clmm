@@ -22,6 +22,11 @@ export interface EntrySizeInput {
    *  (0.005). Config override: ENTRY_SIZE_TVL_FRACTION (env), CHALLENGE_MODE
    *  raises the fallback to 0.05. */
   readonly tvlFractionUsd?: number | undefined;
+  /** Minimum entry size worth submitting; defaults to ENTRY_SIZE_FLOOR_USD
+   *  ($10). Config override: ENTRY_SIZE_FLOOR_USD (env) — the $10 hard floor
+   *  blocks every entry on a small canary wallet (half of $18.6 = $9.30 < $10),
+   *  so small wallets need a lower admissible floor. */
+  readonly floorUsd?: number | undefined;
 }
 
 /**
@@ -40,7 +45,7 @@ export function computeEntrySizeUsd(input: EntrySizeInput): number {
     input.tvlUsd * (input.tvlFractionUsd ?? ENTRY_SIZE_TVL_FRACTION),
     input.maxSizeUsd ?? ENTRY_SIZE_CAP_USD,
   );
-  return Math.max(maxPositionSize, ENTRY_SIZE_FLOOR_USD);
+  return Math.max(maxPositionSize, input.floorUsd ?? ENTRY_SIZE_FLOOR_USD);
 }
 
 export interface IdleRedeploySizeInput {

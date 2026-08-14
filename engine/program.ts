@@ -6663,6 +6663,7 @@ export const program = Effect.gen(function* () {
                 tvlUsd: pool.tvlUsd,
                 maxSizeUsd: config.maxEntrySizeUsd,
                 tvlFractionUsd: config.entrySizeTvlFraction,
+                floorUsd: config.entrySizeFloorUsd,
               }),
               volatilityStddev,
               netDriftBins,
@@ -6847,6 +6848,7 @@ export const program = Effect.gen(function* () {
               tvlUsd: pool.tvlUsd,
               maxSizeUsd: config.maxEntrySizeUsd,
               tvlFractionUsd: config.entrySizeTvlFraction,
+              floorUsd: config.entrySizeFloorUsd,
             });
             const faAllocation = evaluatePerPoolAllocation({
               proposedDepositUsd: faProposedSizeUsd,
@@ -7136,6 +7138,7 @@ export const program = Effect.gen(function* () {
                 tvlUsd: pool.tvlUsd,
                 maxSizeUsd: config.maxEntrySizeUsd,
                 tvlFractionUsd: config.entrySizeTvlFraction,
+                floorUsd: config.entrySizeFloorUsd,
               });
 
               // F5: per-pool allocation cap — aggregate across the pool's
