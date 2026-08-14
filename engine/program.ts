@@ -2865,7 +2865,15 @@ export const program = Effect.gen(function* () {
           });
           return { address, score: score.score, tier: score.tier };
         })
-        .filter((entry) => entry.tier !== "none")
+        // Score floor, config-driven: the hardcoded tier "none" gate
+        // (score < 4) excluded every liquid native pool on Robinhood Chain —
+        // the chain's live native-paired pools have real but modest yield,
+        // while the score≥4 shells are dead (zero on-chain liquidity, stale
+        // measured fees). CHALLENGE_MIN_SCORE lowers the floor for the
+        // canary; the ENTER gate still requires liquidity + funding +
+        // measured-fee authenticity, so a lower floor widens the net without
+        // weakening the per-pool gates. Default 4 = legacy tier behavior.
+        .filter((entry) => entry.score >= (config.challengeMinScore ?? 4))
         // With LIVE_ENTRY_NATIVE_LEG_ONLY the wallet can only fund native/WETH
         // pools, so pre-filter the BOOK (not just the ENTER gate) to
         // native-paired entries — otherwise the top-K is dominated by
