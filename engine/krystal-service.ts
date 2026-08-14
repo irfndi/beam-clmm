@@ -47,6 +47,11 @@ export interface KrystalPoolStats {
   readonly protocolFee: number;
   readonly token0Symbol: string;
   readonly token1Symbol: string;
+  /** Normalized leg addresses (0xeeee… native → address(0), lowercase).
+   *  Symbols on Robinhood Chain are unreliable ("TOKEN"/"TOKEN"), so the
+   *  harvest-book native-pair filter keys off these. */
+  readonly token0Address: string;
+  readonly token1Address: string;
 }
 
 export type FetchLike = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
@@ -90,7 +95,24 @@ export function parseKrystalPool(raw: unknown): KrystalPoolStats | null {
     protocolFee: readFiniteNumber(raw.protocolFee) ?? 0,
     token0Symbol: typeof token0.symbol === "string" ? token0.symbol : "",
     token1Symbol: typeof token1.symbol === "string" ? token1.symbol : "",
+    token0Address:
+      typeof token0.address === "string"
+        ? normalizeNativeAddress(token0.address)
+        : "",
+    token1Address:
+      typeof token1.address === "string"
+        ? normalizeNativeAddress(token1.address)
+        : "",
   };
+}
+
+/** Normalize a leg address for comparisons: Krystal renders native ETH as
+ *  0xeeee…; the engine's isNative checks address(0). Lowercased. */
+function normalizeNativeAddress(address: string): string {
+  const lower = address.toLowerCase();
+  return lower === "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+    ? NATIVE_MINT
+    : lower;
 }
 
 // ─── Pool enrichment (source-aware) ──────────────────────────────────────────

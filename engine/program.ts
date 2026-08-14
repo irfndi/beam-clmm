@@ -2870,15 +2870,18 @@ export const program = Effect.gen(function* () {
         // pools, so pre-filter the BOOK (not just the ENTER gate) to
         // native-paired entries — otherwise the top-K is dominated by
         // TOKEN/USDG pairs and the agent sits idle even when fundable pools
-        // exist lower in the ranking. Symbol-based (Krystal stats carry no
-        // addresses); the on-chain ENTER gate remains the final authority.
+        // exist lower in the ranking. Address-based: Krystal symbols on this
+        // chain are unreliable ("TOKEN"/"TOKEN"), but the stats carry
+        // normalized leg addresses (0xeeee native → address(0), WETH as its
+        // contract). The on-chain ENTER gate remains the final authority.
         .filter((entry) => {
           if (!(config.liveEntryNativeLegOnly === true && !config.paperTrading)) return true;
           const stats = universe.get(entry.address);
           if (stats === undefined) return false;
-          const s0 = stats.token0Symbol.toLowerCase();
-          const s1 = stats.token1Symbol.toLowerCase();
-          return s0 === "eth" || s0 === "weth" || s1 === "eth" || s1 === "weth";
+          const nativeLike = (m: string): boolean =>
+            m.toLowerCase() === NATIVE_MINT.toLowerCase() ||
+            m.toLowerCase() === WETH9.toLowerCase();
+          return nativeLike(stats.token0Address) || nativeLike(stats.token1Address);
         })
         .sort((a, b) => b.score - a.score)
         .slice(0, config.challengeBookSize ?? 10);
