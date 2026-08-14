@@ -24,6 +24,9 @@ export function evaluateRisk(
   decision: AgentDecision,
   ctx: RiskContext,
 ): RiskResult {
+  // Config-driven minimum entry size for the dust gate (small canary wallets
+  // can lower the $10 default via ENTRY_SIZE_FLOOR_USD).
+  const minEntrySizeUsd = ctx.minEntrySizeUsd ?? ENTRY_SIZE_FLOOR_USD;
   // 1. EXIT always approved — capital protection must not be gated on
   // confidence: a high CONFIDENCE_THRESHOLD would otherwise block
   // capital-protection exits.
@@ -112,12 +115,12 @@ export function evaluateRisk(
     // Absolute floor first: any ENTER below the minimum entry size is dust
     // (covers agent proposals and any future sizing path, not just the
     // headroom clamp below).
-    if (decision.positionSizeUsd < ENTRY_SIZE_FLOOR_USD) {
+    if (decision.positionSizeUsd < minEntrySizeUsd) {
       return {
         approved: false,
         reason:
           `Entry size $${decision.positionSizeUsd.toFixed(2)} is below the ` +
-          `$${ENTRY_SIZE_FLOOR_USD.toFixed(0)} minimum entry size`,
+          `$${minEntrySizeUsd.toFixed(0)} minimum entry size`,
       };
     }
     const capPct = riskConfig.maxPerPoolAllocationPct;
@@ -150,12 +153,12 @@ export function evaluateRisk(
       // (and previously produced $0.26 residual positions that churned the
       // trailing stop and occupied per-pool slots). Reject instead of
       // approving a sub-floor clamp.
-      if (adjustedSizeUsd < ENTRY_SIZE_FLOOR_USD) {
+      if (adjustedSizeUsd < minEntrySizeUsd) {
         return {
           approved: false,
           reason:
             `Remaining per-pool headroom $${adjustedSizeUsd.toFixed(2)} is below the ` +
-            `$${ENTRY_SIZE_FLOOR_USD.toFixed(0)} minimum entry size — skipping dust entry`,
+            `$${minEntrySizeUsd.toFixed(0)} minimum entry size — skipping dust entry`,
         };
       }
       return {

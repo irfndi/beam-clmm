@@ -705,6 +705,10 @@ export interface RiskContext {
    * positions.
    */
   readonly positionId?: string | undefined;
+  /** Minimum entry size (USD) for the dust gate; defaults to the $10
+   *  ENTRY_SIZE_FLOOR_USD. Threaded from the runtime config so a small
+   *  canary wallet can set a lower admissible floor. */
+  readonly minEntrySizeUsd?: number | undefined;
 }
 
 export interface RiskResult {

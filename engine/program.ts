@@ -7826,6 +7826,7 @@ export const program = Effect.gen(function* () {
           poolAddress,
           activeBinId: pool.activeBinId,
           positionId: decision.positionId,
+          minEntrySizeUsd: config.entrySizeFloorUsd,
         };
         // Issue #148: the wallet safety pause is informational in shadow mode
         // (no-send by design) — it must never block a decision there.
