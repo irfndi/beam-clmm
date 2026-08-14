@@ -135,6 +135,14 @@ export interface PoolState {
   currentPrice: number;
   timestamp: number;
   /**
+   * On-chain pool liquidity (wei units; raw uint128 from the pool contract /
+   * v4 PoolManager). Exposed for the ENTER gate's dead-pool check: a pool
+   * with zero liquidity is a shell — the mint SDK invariant throws
+   * ZERO_LIQUIDITY at execute time, wasting a live attempt. Undefined when
+   * the read did not populate it (fallback/unresolved pools).
+   */
+  liquidity?: bigint | undefined;
+  /**
    * Where tvl/volume/fees came from, in resolution order:
    * "datapi" > "krystal" > "geckoterminal" > "heuristic". "datapi" = real
    * Meteora Data API values (legacy, chain-specific); "krystal" = MEASURED

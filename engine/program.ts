@@ -6966,6 +6966,60 @@ export const program = Effect.gen(function* () {
                     )
                 : { ok: false, reason: "verifyExitRoute not implemented", proceedsUsd: null }
               : { ok: true, reason: "not required", proceedsUsd: null };
+          // Live funding gates (canary/live). Two pre-broadcast facts kill a
+          // live ENTER on this codebase and armed the execution-failure pause
+          // for a whole cycle while the agent learned them the hard way:
+          //  1. A pool with zero on-chain liquidity is a dead shell — the v3
+          //     mint SDK invariant throws ZERO_LIQUIDITY at execute time.
+          //  2. A non-native pool (e.g. TOKEN/USDG) is unfundable from an
+          //     ETH-only wallet — the adapter can only swap ETH into missing
+          //     legs for native/WETH-paired pools; everything else fails
+          //     "wallet can fund neither leg" with zero transactions sent.
+          // Gate both BEFORE the score/alloc/token-risk work so the cycle
+          // never burns a live attempt on a pool it cannot fund. These
+          // rejections are audited, not failures (no safety-pause credit).
+          const wethLeg =
+            pool.tokenX?.toLowerCase() === WETH9.toLowerCase() ||
+            pool.tokenY?.toLowerCase() === WETH9.toLowerCase();
+          const nativeLegOnly = config.liveEntryNativeLegOnly === true && !config.paperTrading;
+          if (!enterGateRejected && pool.liquidity !== undefined && pool.liquidity <= 0n) {
+            yield* audit
+              .recordDecision({
+                timestamp: Date.now(),
+                cycleId,
+                poolAddress,
+                action: "ENTER",
+                confidence: 0,
+                reasoning: `[liquidity] zero on-chain liquidity — dead pool`,
+                metrics,
+                riskResult: { approved: false, reason: "[liquidity] zero on-chain liquidity" },
+                executed: false,
+                paperTrading: config.paperTrading,
+              })
+              .pipe(Effect.catch(() => Effect.void));
+            enterGateRejected = true;
+          } else if (!enterGateRejected && nativeLegOnly && !hasNativeSolLeg(pool) && !wethLeg) {
+            yield* audit
+              .recordDecision({
+                timestamp: Date.now(),
+                cycleId,
+                poolAddress,
+                action: "ENTER",
+                confidence: 0,
+                reasoning:
+                  `[funding] non-native pool excluded (LIVE_ENTRY_NATIVE_LEG_ONLY) — ` +
+                  `wallet funds entries from native ETH only`,
+                metrics,
+                riskResult: {
+                  approved: false,
+                  reason: "[funding] non-native pool excluded (LIVE_ENTRY_NATIVE_LEG_ONLY)",
+                },
+                executed: false,
+                paperTrading: config.paperTrading,
+              })
+              .pipe(Effect.catch(() => Effect.void));
+            enterGateRejected = true;
+          }
           if (
             !enterGateRejected &&
             (metrics.feeIlRatioKnown ? feeIlRatio > evolvedThresholds.minFeeIlRatio * 1.5 : true) &&

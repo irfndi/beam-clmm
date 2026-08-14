@@ -432,6 +432,14 @@ describe("ConfigService CHALLENGE_MODE presets", () => {
     vi.stubEnv("CHALLENGE_MODE", "true");
     vi.stubEnv("MIN_POOL_TVL_USD", "25000");
     vi.stubEnv("MAX_ENTRY_SIZE_USD", "3000");
+    // Bun auto-loads the project .env, which sets MAX_OPEN_POSITIONS=2 for
+    // the canary deployment — stub the remaining preset keys so this test is
+    // env-independent (same pattern as the preset test above).
+    vi.stubEnv("MAX_OPEN_POSITIONS", undefined);
+    vi.stubEnv("MAX_POSITIONS_PER_POOL", undefined);
+    vi.stubEnv("FEE_CLAIM_INTERVAL_MS", undefined);
+    vi.stubEnv("ENTRY_SIZE_TVL_FRACTION", undefined);
+    vi.stubEnv("MIN_FEE_IL_RATIO", undefined);
     const cfg = await loadConfig();
     expect(cfg.minPoolTvlUsd).toBe(25_000);
     expect(cfg.maxOpenPositions).toBe(4); // preset still applies elsewhere

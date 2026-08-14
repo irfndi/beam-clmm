@@ -2025,6 +2025,7 @@ export const AdapterLive = Layer.effect(AdapterService,
         activeBinId: tick,
         binStep: Number(tickSpacing),
         currentPrice: tickToPrice(tick),
+        liquidity,
         timestamp: Date.now(),
         statsSource: "heuristic" as const,
       };
@@ -2378,7 +2379,7 @@ export const AdapterLive = Layer.effect(AdapterService,
               }
               const stateView = v4StateView();
               const poolIdHex = poolAddress.toLowerCase() as `0x${string}`;
-              const [slot0] = await Promise.all([
+              const [slot0, liquidity] = await Promise.all([
                 stateView.read.getSlot0([poolIdHex]),
                 stateView.read.getLiquidity([poolIdHex]),
               ]);
@@ -2396,6 +2397,7 @@ export const AdapterLive = Layer.effect(AdapterService,
                 activeBinId: tick,
                 binStep: key.tickSpacing,
                 currentPrice: tickToPrice(tick),
+                liquidity,
                 timestamp: Date.now(),
                 statsSource: "heuristic" as const,
               };

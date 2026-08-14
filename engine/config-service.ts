@@ -236,6 +236,14 @@ export interface AppConfig {
   readonly jupiterTokenRiskEnabled?: boolean;
   /** Minutes a Jupiter token-risk signal is cached before refresh. Default 30. */
   readonly jupiterTokenRiskCacheTtlMin?: number;
+  /** Live (canary/live) ENTERs only on pools with a native-ETH/WETH leg.
+   *  The adapter funds entries from native ETH: native-leg pools via an
+   *  ETH→leg swap, WETH-paired v3 pools via wrap. Non-native pools (e.g.
+   *  TOKEN/USDG) need the operator to hold one leg (USDG) or every live
+   *  ENTER fails "wallet can fund neither leg" pre-broadcast and arms the
+   *  execution-failure pause. Default false (operator-funded stablecoin
+   *  legs allowed); set true on an ETH-only canary wallet. */
+  readonly liveEntryNativeLegOnly?: boolean;
 
   /** Master switch for the GeckoTerminal secondary pool-stats source (tried when
    *  the Meteora Data API is down). Default true; absent = gecko active. The
@@ -887,6 +895,9 @@ const loadConfig = Effect.gen(function* () {
 
   const jupiterTokenRiskEnabled = yield* Config.boolean("JUPITER_TOKEN_RISK_ENABLED").pipe(
     Effect.orElseSucceed(() => true),
+  );
+  const liveEntryNativeLegOnly = yield* Config.boolean("LIVE_ENTRY_NATIVE_LEG_ONLY").pipe(
+    Effect.orElseSucceed(() => false),
   );
   const jupiterTokenRiskCacheTtlMin = yield* validatedNumber(
     "JUPITER_TOKEN_RISK_CACHE_TTL_MIN",
@@ -1699,6 +1710,7 @@ const loadConfig = Effect.gen(function* () {
     dustExitUsd,
     jupiterTokenRiskEnabled,
     jupiterTokenRiskCacheTtlMin,
+    liveEntryNativeLegOnly,
     geckoTerminalEnabled,
     krystalEnabled,
     krystalApiUrl,
