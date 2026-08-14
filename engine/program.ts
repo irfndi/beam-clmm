@@ -1756,8 +1756,14 @@ export function executeLive(
           positionId: enterResult.result.positionPubKey,
           poolAddress: decision.poolAddress,
           positionPubKey: enterResult.result.positionPubKey,
-          depositedUsd: decision.positionSizeUsd,
-          currentValueUsd: decision.positionSizeUsd,
+          // Basis = ACTUAL deployed legs, not the USD target: v3 pool math
+          // pulls both legs from the liquidity, so a $10.12 target can
+          // deploy ~$5 (the pool's computed amounts, capped by the desired
+          // min leg). Comparing the target against the deployed value read a
+          // phantom ~50% loss and tripped the stop-loss on a healthy
+          // position (WETH/LEMON, 2026-08-14).
+          depositedUsd: enterResult.result.amountXUsd + enterResult.result.amountYUsd,
+          currentValueUsd: enterResult.result.amountXUsd + enterResult.result.amountYUsd,
           tokenXSymbol: pool.tokenXSymbol,
           tokenYSymbol: pool.tokenYSymbol,
           activeBinId: pool.activeBinId,

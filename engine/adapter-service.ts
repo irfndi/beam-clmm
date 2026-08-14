@@ -1961,6 +1961,12 @@ export const AdapterLive = Layer.effect(AdapterService,
      * callers treat 0 as "unpriceable"). GeckoTerminal on Robinhood Chain is
      * a follow-up; pool-derived prices are real on-chain values.
      */
+    /** Raw liquidity floor for a v3 pool to be a trusted price source
+     *  (wei units). Dead/dust pools read garbage prices for meme tokens —
+     *  the LEMON/USDG pool had liquidity 0 yet priced LEMON 100x off the
+     *  liquid WETH route. */
+    const MIN_POOL_LIQUIDITY_FOR_PRICE = 1_000_000_000_000n;
+
     async function priceUsd(mint: string): Promise<number> {
       if (mint.toLowerCase() === STABLECOIN_MINT.toLowerCase()) return 1;
       // Native ETH is WETH-paired in v3 pools.
@@ -1968,34 +1974,66 @@ export const AdapterLive = Layer.effect(AdapterService,
       return priceUsdViaV3Pool(mint);
     }
 
-    /** Price of `mint` in USDG via the most liquid v3 pool. The on-chain
-     *  sqrt price is the RAW token1/token0 ratio (decimals-sensitive); scale
-     *  by 10^(decimals(mint) - 6) so the result is USDG per mint (USDG=1). */
+    /** Price of `mint` in USDG via the most liquid v3 pool, liquidity-aware.
+     *  Walks BOTH the WETH-paired and USDG-paired pools (WETH first) and takes
+     *  the highest-liquidity one; pools with zero/dust liquidity are skipped.
+     *  The old code priced off the first fee-tier mint/USDG pool with no
+     *  liquidity check: dead meme-token pools (e.g. LEMON/USDG at liquidity 0)
+     *  read prices 100x+ off the liquid WETH route (LEMON: $0.0007 off the
+     *  dead pool vs $0.0013 off WETH/LEMON), which mis-valued positions and
+     *  tripped the stop-loss on a healthy position. WETH-paired prices are
+     *  converted to USDG via the WETH/USDG pool. The on-chain sqrt price is
+     *  the RAW token1/token0 ratio (wei units); scale by
+     *  10^(decimals(mint) - decimals(base)) to get base per mint. */
     async function priceUsdViaV3Pool(mint: string): Promise<number> {
       const factory = v3Factory();
       const mintAddr = getAddress(mint).toLowerCase();
+      // WETH route first: v3 pools on Robinhood Chain are WETH-paired and
+      // liquid; USDG pairs for meme tokens are often dead/abandoned.
+      const wethUsd = mint !== WETH9 ? await priceUsdViaV3Pool(WETH9) : 0;
+      const candidates: Array<{ pool: Address; base: string }> = [];
       for (const fee of [3000, 500, 10_000]) {
+        for (const base of [WETH9, STABLECOIN_MINT]) {
+          try {
+            const pool = await factory.read.getPool([
+              getAddress(mint),
+              getAddress(base),
+              fee,
+            ]);
+            if (pool !== "0x0000000000000000000000000000000000000000") {
+              candidates.push({ pool, base });
+            }
+          } catch {
+            // fall through
+          }
+        }
+      }
+      let best: { priceUsd: number; liquidity: bigint } | null = null;
+      for (const cand of candidates) {
         try {
-          const pool = await factory.read.getPool([
-            getAddress(mint),
-            getAddress(STABLECOIN_MINT),
-            fee,
-          ]);
-          if (pool === "0x0000000000000000000000000000000000000000") continue;
-          const poolContract = v3Pool(pool);
-          const [token0, slot0] = await Promise.all([
+          const poolContract = v3Pool(cand.pool);
+          const [token0, slot0, liquidity] = await Promise.all([
             poolContract.read.token0(),
             poolContract.read.slot0(),
+            poolContract.read.liquidity(),
           ]);
-          const rawPrice = sqrtPriceX96ToPrice(slot0[0]); // token1/token0 raw
+          if (liquidity <= MIN_POOL_LIQUIDITY_FOR_PRICE) continue;
+          const rawPrice = sqrtPriceX96ToPrice(slot0[0]); // token1/token0 wei ratio
           const decimals = await getDecimals(mint);
-          const scale = 10 ** (decimals - 6);
-          return token0.toLowerCase() === mintAddr ? rawPrice * scale : scale / rawPrice;
+          const baseDecimals = cand.base === WETH9 ? 18 : 6;
+          const scale = 10 ** (decimals - baseDecimals);
+          const priceInBase =
+            token0.toLowerCase() === mintAddr ? rawPrice * scale : 1 / (rawPrice * scale);
+          const priceUsd =
+            cand.base === WETH9 ? priceInBase * wethUsd : priceInBase;
+          if (priceUsd > 0 && (best === null || liquidity > best.liquidity)) {
+            best = { priceUsd, liquidity };
+          }
         } catch {
           continue;
         }
       }
-      return 0;
+      return best?.priceUsd ?? 0;
     }
 
     /** One v3 pool read → engine PoolState (statsSource heuristic until a
@@ -2340,6 +2378,38 @@ export const AdapterLive = Layer.effect(AdapterService,
           ]);
           holdings.set(NATIVE_MINT, { amountAtomic: n, decimals: 18 });
           holdings.set(STABLECOIN_MINT, { amountAtomic: s, decimals: 6 });
+          // Also include every distinct token this engine trades (the v4 pool
+          // registry currencies + WETH9): a stray LP leg left in the wallet
+          // (swap overshoot, partial collect, failed entry) is otherwise
+          // invisible to the orphan-settlement sweep and the wallet snapshot.
+          // Concretely: the WETH/LEMON entry left 7,376 LEMON in the wallet
+          // after the stop-loss collect; getWalletHoldings reported only
+          // ETH+USDG, so the sweep never sold it and the snapshot showed
+          // $9.65 against a ~$19.7 real balance (2026-08-14). Batched in
+          // parallel, bounded by the registry; only non-zero balances stored.
+          const mints = new Set<string>([WETH9.toLowerCase()]);
+          for (const key of Object.values(V4_POOL_REGISTRY)) {
+            mints.add(key.currency0.toLowerCase());
+            mints.add(key.currency1.toLowerCase());
+          }
+          const reads = await Promise.all(
+            [...mints].map(async (mint) => {
+              try {
+                const [bal, decimals] = await Promise.all([
+                  getBalance(mint, walletAddress),
+                  getDecimals(mint).catch(() => 0),
+                ]);
+                return { mint, bal, decimals } as const;
+              } catch {
+                return null;
+              }
+            }),
+          );
+          for (const r of reads) {
+            if (r !== null && r.bal > 0n) {
+              holdings.set(r.mint, { amountAtomic: r.bal, decimals: r.decimals });
+            }
+          }
         });
         return holdings;
       }),
