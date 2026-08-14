@@ -10,6 +10,8 @@ import {
   hasSyncProposalTransport,
   isProposalStale,
   decisionChangesExecutableBehavior,
+  estimateLiveRebalanceBenefit,
+  estimatePaperRebalanceBenefit,
   recordAppliedProposalRiskApproval,
   recordAppliedProposalRiskDenial,
   shouldHoldForSupervisedApproval,
@@ -1133,5 +1135,60 @@ describe("buildPositionSnapshots", () => {
 
   it("returns an empty array when no positions are tracked", () => {
     expect(buildPositionSnapshots([])).toEqual([]);
+  });
+});
+
+describe("rebalance benefit estimates", () => {
+  it("paper benefit uses the $0.5 nominal cost", () => {
+    const r = estimatePaperRebalanceBenefit({
+      fees24hUsd: 100,
+      newLowerBinId: 0,
+      newUpperBinId: 100,
+    });
+    expect(r.estimatedFeesUsd).toBeCloseTo(100);
+    expect(r.estimatedCostUsd).toBeCloseTo(0.5);
+    expect(r.netBenefitUsd).toBeCloseTo(99.5);
+    expect(r.source).toBe("pool-heuristic");
+  });
+
+  it("live benefit subtracts the real rebalance gas cost", () => {
+    const r = estimateLiveRebalanceBenefit({
+      fees24hUsd: 100,
+      newLowerBinId: 0,
+      newUpperBinId: 100,
+      rebalanceGasCostUsd: 2.5,
+    });
+    expect(r.estimatedFeesUsd).toBeCloseTo(100);
+    expect(r.estimatedCostUsd).toBeCloseTo(2.5);
+    expect(r.netBenefitUsd).toBeCloseTo(97.5);
+    expect(r.source).toBe("pool-heuristic");
+  });
+
+  it("live benefit clamps negative gas cost to zero", () => {
+    const r = estimateLiveRebalanceBenefit({
+      fees24hUsd: 10,
+      newLowerBinId: 0,
+      newUpperBinId: 50,
+      rebalanceGasCostUsd: -1,
+    });
+    expect(r.estimatedCostUsd).toBe(0);
+    expect(r.netBenefitUsd).toBeCloseTo(5);
+  });
+
+  it("scales fee capture by range width and floors at 100 bins", () => {
+    const wide = estimateLiveRebalanceBenefit({
+      fees24hUsd: 100,
+      newLowerBinId: 0,
+      newUpperBinId: 200,
+      rebalanceGasCostUsd: 0,
+    });
+    const capped = estimateLiveRebalanceBenefit({
+      fees24hUsd: 100,
+      newLowerBinId: 0,
+      newUpperBinId: 50,
+      rebalanceGasCostUsd: 0,
+    });
+    expect(wide.estimatedFeesUsd).toBeCloseTo(100); // ratio capped at 1.0
+    expect(capped.estimatedFeesUsd).toBeCloseTo(50); // 50/100 = 0.5
   });
 });

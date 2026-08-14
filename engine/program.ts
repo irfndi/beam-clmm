@@ -694,8 +694,7 @@ export interface RebalanceBenefitEstimate {
 /**
  * Paper-mode rebalance benefit. There is no on-chain position to simulate in
  * paper mode, so the gate uses a pool-level fee-share heuristic; it shapes
- * simulated decisions only and never moves capital. Live mode instead runs
- * the SDK's atomic-rebalance simulation (see adapter.simulateRebalance).
+ * simulated decisions only and never moves capital.
  */
 export function estimatePaperRebalanceBenefit(args: {
   fees24hUsd: number;
@@ -706,6 +705,33 @@ export function estimatePaperRebalanceBenefit(args: {
   const feeCaptureRatio = Math.min(rangeWidth / 100, 1.0);
   const estimatedFeesUsd = args.fees24hUsd * feeCaptureRatio;
   const estimatedCostUsd = 0.5; // nominal simulated tx cost — paper pays no real gas/rent
+  return {
+    estimatedFeesUsd,
+    estimatedCostUsd,
+    netBenefitUsd: estimatedFeesUsd - estimatedCostUsd,
+    source: "pool-heuristic",
+  };
+}
+
+/**
+ * Live-mode rebalance benefit. Until a real on-chain atomic-rebalance
+ * simulation is implemented (`adapter.simulateRebalance` is reserved for it),
+ * live mode uses the same pool-level fee-share heuristic as paper mode but
+ * with the real rebalance gas cost instead of the paper $0.5 placeholder.
+ * Forward-looking only: fees a new range would capture over 24h minus the
+ * cost of the rebalance. Claimable fees already owed are deliberately
+ * excluded — they are collected on any exit and must not drive range churn.
+ */
+export function estimateLiveRebalanceBenefit(args: {
+  fees24hUsd: number;
+  newLowerBinId: number;
+  newUpperBinId: number;
+  rebalanceGasCostUsd: number;
+}): RebalanceBenefitEstimate {
+  const rangeWidth = Math.max(args.newUpperBinId - args.newLowerBinId, 0);
+  const feeCaptureRatio = Math.min(rangeWidth / 100, 1.0);
+  const estimatedFeesUsd = args.fees24hUsd * feeCaptureRatio;
+  const estimatedCostUsd = Math.max(args.rebalanceGasCostUsd, 0);
   return {
     estimatedFeesUsd,
     estimatedCostUsd,
@@ -6275,9 +6301,10 @@ export const program = Effect.gen(function* () {
             recommended.upperBinId,
             config.entryMinRangePct ?? 0.2,
           );
-          // Simulation-first: live mode runs the SDK's atomic-rebalance
-          // simulation against the real position; on any simulation/transport
-          // failure the gate fails closed (no rebalance this cycle).
+          // Simulation-first: paper mode uses the pool-level heuristic. Live
+          // mode uses the same heuristic with the real rebalance gas cost
+          // until a real on-chain atomic-rebalance simulation is implemented
+          // (reserved as adapter.simulateRebalance).
           const sim = config.paperTrading
             ? estimatePaperRebalanceBenefit({
                 fees24hUsd: pool.fees24hUsd,
@@ -6285,27 +6312,12 @@ export const program = Effect.gen(function* () {
                 newUpperBinId: flooredRecommended.upperBinId,
               })
             : pos.positionPubKey
-              ? yield* adapter
-                  .simulateRebalance(
-                    poolAddress,
-                    pos.positionPubKey,
-                    flooredRecommended.lowerBinId,
-                    flooredRecommended.upperBinId,
-                  )
-                  .pipe(
-                    Effect.catch((err) =>
-                      Effect.sync(() => {
-                        logger.warn(
-                          "Rebalance simulation failed — holding position (fail-closed)",
-                          {
-                            pool: poolAddress,
-                            error: err instanceof Error ? err.message : String(err),
-                          },
-                        );
-                        return null;
-                      }),
-                    ),
-                  )
+              ? estimateLiveRebalanceBenefit({
+                  fees24hUsd: pool.fees24hUsd,
+                  newLowerBinId: flooredRecommended.lowerBinId,
+                  newUpperBinId: flooredRecommended.upperBinId,
+                  rebalanceGasCostUsd: config.rebalanceGasCostNative * config.nativePriceUsd,
+                })
               : null;
 
           if (sim === null) {

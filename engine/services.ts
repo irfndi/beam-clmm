@@ -197,12 +197,11 @@ export interface AdapterApi {
   ) => Effect.Effect<number | null, never>;
   /**
    * Estimate the benefit of rebalancing `positionPubKey` into a new range.
-   * Live mode runs the Meteora SDK's atomic-rebalance simulation against the
-   * real on-chain position: `estimatedFeesUsd` is the position's real
-   * claimable fees and `estimatedCostUsd` is the quoted bin-array/bitmap
-   * rent for the target range. Paper mode has no on-chain position to
-   * simulate, so it reports a pool-level heuristic (`source:
-   * "pool-heuristic"`) that only shapes simulated decisions.
+   * Reserved for a real on-chain atomic-rebalance simulation; the EVM port
+   * has not implemented it yet, so the adapter returns a zero benefit
+   * (fail-closed). The decision loop drives live-mode rebalancing with
+   * `estimateLiveRebalanceBenefit` (pool-level fee-share heuristic plus the
+   * real rebalance gas cost) instead of this hook.
    */
   readonly simulateRebalance: (
     poolAddress: string,
