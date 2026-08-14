@@ -4121,7 +4121,13 @@ export const program = Effect.gen(function* () {
                 positionSizeUsd: redeploySizeUsd,
                 nativePriceUsd: entryNativePriceUsd,
                 poolHasSolLeg: hasNativeSolLeg(candidate.pool),
-                solFunded: true,
+                // Non-native pools fund the entry from the HELD stablecoin
+                // leg (the adapter never swaps ETH into legs for them), so
+                // they consume no native ETH beyond gas — reserve the native
+                // budget only for pools that actually spend it. Reserving the
+                // full size in ETH for a USDG-funded entry double-counted and
+                // blocked every non-native deployment on a small wallet.
+                solFunded: hasNativeSolLeg(candidate.pool),
               });
               if (!entrySolBudgetKnown || neededLamports > entrySolBudgetLamports) {
                 const budgetHuman = entrySolBudgetKnown
@@ -8030,7 +8036,11 @@ export const program = Effect.gen(function* () {
               positionSizeUsd: entrySizeUsd,
               nativePriceUsd: entryNativePriceUsd,
               poolHasSolLeg: hasNativeSolLeg(pool),
-              solFunded: true,
+              // Non-native pools fund the entry from the HELD stablecoin leg
+              // (the adapter never swaps ETH into legs for them), so they
+              // consume no native ETH beyond gas — reserve the native budget
+              // only for pools that actually spend it.
+              solFunded: hasNativeSolLeg(pool),
             });
             if (!entrySolBudgetKnown || neededLamports > entrySolBudgetLamports) {
               const budgetHuman = entrySolBudgetKnown
