@@ -4256,7 +4256,15 @@ export const program = Effect.gen(function* () {
             idleCapitalUsd,
             paperTrading: config.paperTrading,
           });
-        } else if (!(solFundedEntryMode && isInsufficientTokenBalanceError(executionError))) {
+        } else if (
+          !(
+            solFundedEntryMode &&
+            (isInsufficientTokenBalanceError(executionError) ||
+              // dp8 pre-broadcast sim rejection: zero-cost abort before any
+              // broadcast — never arms the execution_failures pause.
+              (executionError ?? "").includes("mint simulation failed pre-broadcast"))
+          )
+        ) {
           // Issue #170: in SOL-funded mode a redeploy failing on a funding
           // condition is a wallet-capacity outcome — never arms the
           // execution_failures pause (plain live keeps its pause-breaker teeth).
