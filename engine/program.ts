@@ -8315,7 +8315,16 @@ export const program = Effect.gen(function* () {
             !(
               decision.action === "ENTER" &&
               solFundedEntryMode &&
-              isInsufficientTokenBalanceError(executionError)
+              (isInsufficientTokenBalanceError(executionError) ||
+                // dp8 pre-broadcast mint simulation: the exact mint reverted
+                // (token restriction, fork NPM/PositionManager incompatib-
+                // ility) and the entry aborted BEFORE any swap/wrap/approve
+                // broadcast — zero gas, zero strays. A rejection, not an
+                // execution failure: counting it would arm the
+                // execution_failures pause every cycle the pool is re-decided
+                // (observed oscillation 2026-08-16), pausing the agent for a
+                // doomed-but-free rejection.
+                (executionError ?? "").includes("mint simulation failed pre-broadcast"))
             )
           ) {
             cycle.poolsFailed++;
