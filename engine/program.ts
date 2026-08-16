@@ -6248,6 +6248,24 @@ export const program = Effect.gen(function* () {
         activeSafetyPause = { ...activeSafetyPause, resolvedAt: Date.now() };
         yield* db.saveSafetyPause(activeSafetyPause).pipe(Effect.catch(() => Effect.void));
       }
+      // core_data_unavailable had NO auto-resolver — a transient 2-cycle
+      // feed outage (Krystal/RPC blip) latched the pause permanently and only
+      // `beam resume` cleared it, silently pausing the agent for days even
+      // after the feed recovered (observed 2026-08-15/16: latched 10:09,
+      // unresolved through the next day). The consecutive counter resets to 0
+      // on any cycle where the feed recovers, so resolve as soon as the
+      // current counter is below the 2-failure breach threshold. The arm
+      // block below re-latches only on a genuine new breach.
+      if (
+        autonomousExecution &&
+        activeSafetyPause !== null &&
+        activeSafetyPause.resolvedAt === null &&
+        activeSafetyPause.reason === "core_data_unavailable" &&
+        consecutiveCoreDataFailures < 2
+      ) {
+        activeSafetyPause = { ...activeSafetyPause, resolvedAt: Date.now() };
+        yield* db.saveSafetyPause(activeSafetyPause).pipe(Effect.catch(() => Effect.void));
+      }
       if (
         autonomousExecution &&
         activeSafetyPause?.resolvedAt !== null &&

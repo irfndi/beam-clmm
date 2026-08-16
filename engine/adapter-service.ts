@@ -1839,6 +1839,129 @@ export const AdapterLive = Layer.effect(AdapterService,
       return txSignature;
     }
 
+    /** (dp8) Pre-broadcast entry simulation. The funding path broadcasts the
+     * deficit swap + WETH wrap + approvals before the mint's own sendTx
+     * dry-run, so a doomed mint (fork NPM storage bug, hook revert, token
+     * restriction) costs gas and leaves the swapped leg trapped in the pool
+     * (observed 2026-08-14: ~$4.7 on the native CollectionToken pool). This
+     * eth_calls the EXACT mint with the wallet's projected post-swap /
+     * post-wrap state injected (OZ storage layout: _balances slot 0,
+     * _allowances slot 1) and the caller aborts BEFORE any broadcast when it
+     * reverts. Fail-closed: any simulation error aborts the entry. v4 mints
+     * pull via Permit2 (not the ERC20 allowance), so their sim fails on the
+     * permit pull until the permit path is added — the desired fail-closed
+     * for the currently-broken v4 path. */
+    async function dryRunEntryMintSimulation(input: {
+      poolAddress: string;
+      state: PoolQuoteState;
+      amount0: bigint;
+      amount1: bigint;
+      lowerBinId: number;
+      upperBinId: number;
+      isV4: boolean;
+      owner: Address;
+      injectedTokenBalance: bigint;
+      injectedWethBalance: bigint;
+      deadline: number;
+    }): Promise<{ ok: boolean; reason?: string }> {
+      try {
+        const {
+          poolAddress,
+          state,
+          amount0,
+          amount1,
+          lowerBinId,
+          upperBinId,
+          isV4,
+          owner,
+          deadline,
+        } = input;
+        const rangeOverride =
+          lowerBinId && upperBinId && lowerBinId < upperBinId
+            ? { tickLower: lowerBinId, tickUpper: upperBinId }
+            : {};
+        const target = isV4 ? V4_POSITION_MANAGER : V3_NPM;
+        const built = isV4
+          ? buildV4MintCalldata({
+              poolKey: await resolveV4PoolKey(poolAddress),
+              sqrtPriceX96: state.sqrtPriceX96,
+              tickCurrent: state.tickCurrent,
+              token0Decimals: state.token0Decimals,
+              token1Decimals: state.token1Decimals,
+              amount0,
+              amount1,
+              recipient: owner,
+              deadline,
+              slippageToleranceBps: 50,
+              ...rangeOverride,
+            })
+          : buildV3MintCalldata({
+              token0: state.token0,
+              token1: state.token1,
+              fee: state.fee,
+              tickSpacing: state.tickSpacing,
+              sqrtPriceX96: state.sqrtPriceX96,
+              tickCurrent: state.tickCurrent,
+              token0Decimals: state.token0Decimals,
+              token1Decimals: state.token1Decimals,
+              amount0,
+              amount1,
+              recipient: owner,
+              deadline,
+              slippageToleranceBps: 50,
+              ...rangeOverride,
+            });
+        const storageSlot = (key: Address, mapSlot: bigint): `0x${string}` =>
+          keccak256(
+            encodeAbiParameters([{ type: "address" }, { type: "uint256" }], [key, mapSlot]),
+          );
+        const allowanceSlot = (spender: Address): `0x${string}` => {
+          const inner = keccak256(
+            encodeAbiParameters([{ type: "address" }, { type: "uint256" }], [spender, 1n]),
+          );
+          return keccak256(
+            encodeAbiParameters([{ type: "address" }, { type: "bytes32" }], [owner, inner]),
+          );
+        };
+        const MAX = toHex(2n ** 256n - 1n);
+        const nativeLike = (m: string): boolean =>
+          isNative(m) || getAddress(m).toLowerCase() === WETH9.toLowerCase();
+        const tokenAddr = nativeLike(state.token0) ? state.token1 : state.token0;
+        // Merge all storage diffs per address: viem rejects a state override
+        // with the same account listed twice (observed in adapter-gaps tests).
+        const storageByAddress = new Map<string, Record<string, Hex>>();
+        const addStorage = (addr: Address, slot: `0x${string}`, value: Hex): void => {
+          const key = getAddress(addr).toLowerCase();
+          const existing = storageByAddress.get(key) ?? {};
+          existing[slot] = value;
+          storageByAddress.set(key, existing);
+        };
+        if (input.injectedTokenBalance > 0n) {
+          addStorage(tokenAddr, storageSlot(owner, 0n), toHex(input.injectedTokenBalance));
+        }
+        if (input.injectedWethBalance > 0n) {
+          addStorage(WETH9, storageSlot(owner, 0n), toHex(input.injectedWethBalance));
+        }
+        if (!isV4) {
+          addStorage(tokenAddr, allowanceSlot(target), MAX);
+          addStorage(WETH9, allowanceSlot(target), MAX);
+        }
+        const overrides: Array<{ address: Address; storage: Record<string, Hex> }> = [
+          ...storageByAddress.entries(),
+        ].map(([address, storage]) => ({ address: address as Address, storage }));
+        await publicClient.call({
+          account: owner,
+          to: target,
+          data: built.calldata,
+          ...(built.value > 0n ? { value: built.value } : {}),
+          ...(overrides.length > 0 ? { stateOverride: overrides } : {}),
+        });
+        return { ok: true };
+      } catch (e) {
+        return { ok: false, reason: underlyingErrorMessage(e).slice(0, 200) };
+      }
+    }
+
     /**
      * enterPosition last-resort funding branch: the wallet holds NATIVE ETH but
      * neither pool leg is fundable. When exactly one leg is native/WETH and a
@@ -2392,13 +2515,23 @@ export const AdapterLive = Layer.effect(AdapterService,
             mints.add(key.currency0.toLowerCase());
             mints.add(key.currency1.toLowerCase());
           }
+          // Per-read timeout: the registry can hold hundreds of currencies and
+          // a single hanging RPC must never stall the whole cycle (observed
+          // 5min+ hang in the settlement sweep's holdings read). A timed-out
+          // token is skipped for this call; balances re-qualify next cycle.
+          const TIMEOUT_MS = 3_000;
+          const withTimeout = <T,>(p: Promise<T>, ms: number): Promise<T | null> =>
+            Promise.race([
+              p,
+              new Promise<null>((resolve) => setTimeout(() => resolve(null), ms)),
+            ]);
           const reads = await Promise.all(
             [...mints].map(async (mint) => {
               try {
-                const [bal, decimals] = await Promise.all([
-                  getBalance(mint, walletAddress),
-                  getDecimals(mint).catch(() => 0),
-                ]);
+                const bal = await withTimeout(getBalance(mint, walletAddress), TIMEOUT_MS);
+                if (bal === null || bal <= 0n) return null;
+                const decimals =
+                  (await withTimeout(getDecimals(mint).catch(() => 0), TIMEOUT_MS)) ?? 0;
                 return { mint, bal, decimals } as const;
               } catch {
                 return null;
@@ -2652,6 +2785,32 @@ export const AdapterLive = Layer.effect(AdapterService,
               if (state.liquidity <= 0n) {
                 throw new Error(
                   `enterPosition: wallet can fund neither leg (pool has no liquidity: ${poolAddress})`,
+                );
+              }
+              // dp8: pre-broadcast mint simulation — abort before the deficit
+              // swap broadcasts when the mint cannot succeed with the
+              // projected post-swap state. Prevents the gas bleed and
+              // trapped-leg loss of a doomed entry (fork NPM quirk, hook
+              // revert, token restriction): a reverting mint is now caught
+              // here, before any swap/wrap/approve tx is sent.
+              const nativeLike0 =
+                isNative(state.token0) || getAddress(state.token0) === WETH9;
+              const sim = await dryRunEntryMintSimulation({
+                poolAddress,
+                state,
+                amount0,
+                amount1,
+                lowerBinId,
+                upperBinId,
+                isV4,
+                owner,
+                injectedTokenBalance: nativeLike0 ? amount1 : amount0,
+                injectedWethBalance: nativeLike0 ? amount0 : amount1,
+                deadline: Math.floor(Date.now() / 1000) + POSITION_DEADLINE_S,
+              });
+              if (!sim.ok) {
+                throw new Error(
+                  `enterPosition: mint simulation failed pre-broadcast — NOT swapping (${sim.reason})`,
                 );
               }
               const fundedBySwap = await swapToFundDeficit({
