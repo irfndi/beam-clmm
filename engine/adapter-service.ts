@@ -2810,6 +2810,8 @@ export const AdapterLive = Layer.effect(AdapterService,
               // here, before any swap/wrap/approve tx is sent.
               const nativeLike0 =
                 isNative(state.token0) || getAddress(state.token0) === WETH9;
+              const missingLeg = nativeLike0 ? state.token1 : state.token0;
+              const missingLegAmount = nativeLike0 ? amount1 : amount0;
               const sim = await dryRunEntryMintSimulation({
                 poolAddress,
                 state,
@@ -2836,6 +2838,25 @@ export const AdapterLive = Layer.effect(AdapterService,
                 halfUsd,
                 nativeBal,
               });
+              // Post-swap pre-mint balance proof: the sim injected the exact
+              // required amounts, but the real deficit swap can land short
+              // (execution slippage/price drift), so the mint would revert
+              // AFTER the swap broadcast and strand the stray. Verify the
+              // wallet actually holds the missing leg before the mint and
+              // abort pre-broadcast (of the mint) when it fell short. The
+              // swapped output stays in the wallet (recoverable by the sweep),
+              // and this rejection is excluded from the failure count like
+              // the sim marker.
+              if (fundedBySwap === "swapped") {
+                const heldAfter = await getBalance(missingLeg, owner).catch(() => 0n);
+                if (heldAfter < missingLegAmount) {
+                  throw new Error(
+                    `enterPosition: deficit swap fell short pre-broadcast — ` +
+                      `held ${heldAfter.toString()} < needed ${missingLegAmount.toString()} ` +
+                      `(mint NOT broadcast; stray recoverable)`,
+                  );
+                }
+              }
               if (fundedBySwap === "reverted") {
                 throw new Error(
                   `enterPosition: wallet can fund neither leg (swap route reverts: ${poolAddress})`,

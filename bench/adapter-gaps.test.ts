@@ -377,6 +377,9 @@ describe("enterPosition funding decision (v3 WETH/USDG pool)", () => {
       nativeBalance: 10n ** 18n,
       mintTokenId: 11n,
       swapOut: 600_000_000n,
+      // The swap delivers the missing leg to the wallet; the post-swap
+      // pre-mint balance proof (dp8) reads it before the mint.
+      tokenBalances: { [`${addr(USDG)}:${addr(WALLET)}`]: 600_000_000n },
     });
     const svc = await adapterFor();
     const res = await Effect.runPromise(svc.enterPosition(POOL, 0, 0, 1000));

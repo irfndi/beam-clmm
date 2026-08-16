@@ -4262,7 +4262,8 @@ export const program = Effect.gen(function* () {
             (isInsufficientTokenBalanceError(executionError) ||
               // dp8 pre-broadcast sim rejection: zero-cost abort before any
               // broadcast — never arms the execution_failures pause.
-              (executionError ?? "").includes("mint simulation failed pre-broadcast"))
+              ((executionError ?? "").includes("mint simulation failed pre-broadcast") ||
+                (executionError ?? "").includes("fell short pre-broadcast")))
           )
         ) {
           // Issue #170: in SOL-funded mode a redeploy failing on a funding
@@ -8332,7 +8333,8 @@ export const program = Effect.gen(function* () {
                 // execution_failures pause every cycle the pool is re-decided
                 // (observed oscillation 2026-08-16), pausing the agent for a
                 // doomed-but-free rejection.
-                (executionError ?? "").includes("mint simulation failed pre-broadcast"))
+                ((executionError ?? "").includes("mint simulation failed pre-broadcast") ||
+                (executionError ?? "").includes("fell short pre-broadcast")))
             )
           ) {
             cycle.poolsFailed++;
