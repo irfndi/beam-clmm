@@ -2897,13 +2897,21 @@ export const AdapterLive = Layer.effect(AdapterService,
                 ? { tickLower: lowerBinId, tickUpper: upperBinId }
                 : {};
             if (isV4) {
+              // Re-read the pool state AFTER funding: the deficit swap moved
+              // the price, and building the mint off the stale pre-swap sqrt
+              // price makes the real mint revert on the live pool state
+              // (observed v4 residual 2026-08-16 on pool 0x002da18d49a3 —
+              // the sim passed, the real mint dry-run reverted). The amounts
+              // (USD-sized) stand; the price/tick used for the SDK's
+              // liquidity math must be current.
+              const freshState = await v4PoolQuoteState(poolAddress);
               const key = await resolveV4PoolKey(poolAddress);
               const built = buildV4MintCalldata({
                 poolKey: key,
-                sqrtPriceX96: state.sqrtPriceX96,
-                tickCurrent: state.tickCurrent,
-                token0Decimals: state.token0Decimals,
-                token1Decimals: state.token1Decimals,
+                sqrtPriceX96: freshState.sqrtPriceX96,
+                tickCurrent: freshState.tickCurrent,
+                token0Decimals: freshState.token0Decimals,
+                token1Decimals: freshState.token1Decimals,
                 amount0,
                 amount1,
                 recipient: owner,
@@ -2954,15 +2962,19 @@ export const AdapterLive = Layer.effect(AdapterService,
                 });
               }
             }
+            // Re-read the pool state after the WETH wrap (same rationale as
+            // the v4 branch: the deficit swap moved the price; build the mint
+            // off the CURRENT sqrt price/tick so it matches the live pool).
+            const freshState = await v3PoolQuoteState(getAddress(poolAddress));
             const built = buildV3MintCalldata({
               token0: state.token0,
               token1: state.token1,
               fee: state.fee,
               tickSpacing: state.tickSpacing,
-              sqrtPriceX96: state.sqrtPriceX96,
-              tickCurrent: state.tickCurrent,
-              token0Decimals: state.token0Decimals,
-              token1Decimals: state.token1Decimals,
+              sqrtPriceX96: freshState.sqrtPriceX96,
+              tickCurrent: freshState.tickCurrent,
+              token0Decimals: freshState.token0Decimals,
+              token1Decimals: freshState.token1Decimals,
               amount0,
               amount1,
               recipient: owner,
