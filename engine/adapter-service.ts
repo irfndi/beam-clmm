@@ -1942,7 +1942,22 @@ export const AdapterLive = Layer.effect(AdapterService,
         if (input.injectedWethBalance > 0n) {
           addStorage(WETH9, storageSlot(owner, 0n), toHex(input.injectedWethBalance));
         }
-        if (!isV4) {
+        if (isV4) {
+          // v4 pulls via Permit2 (not ERC20 allowance): inject a max
+          // PackedAllowance (amount + far-future expiration) for the
+          // non-native leg so the mint simulation is accurate.
+          const inner1 = keccak256(
+            encodeAbiParameters([{ type: "address" }, { type: "uint256" }], [target, 0n]),
+          );
+          const inner2 = keccak256(
+            encodeAbiParameters([{ type: "address" }, { type: "bytes32" }], [getAddress(tokenAddr), inner1]),
+          );
+          const permitSlot = keccak256(
+            encodeAbiParameters([{ type: "address" }, { type: "bytes32" }], [owner, inner2]),
+          );
+          const permitValue = toHex((2n ** 160n - 1n) | (0xffffn << 160n));
+          addStorage(PERMIT2, permitSlot, permitValue);
+        } else {
           addStorage(tokenAddr, allowanceSlot(target), MAX);
           addStorage(WETH9, allowanceSlot(target), MAX);
         }
