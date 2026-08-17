@@ -117,6 +117,13 @@ export interface AppConfig {
   readonly scanIntervalMs: number;
   readonly minPoolTvlUsd: number;
   readonly minFeeIlRatio: number;
+  /** Estimated round-trip on-chain gas (mint+collect+burn) for one position, USD.
+   *  Env `ENTER_ROUND_TRIP_GAS_USD`; default 0.15. Feeds the [fee-gas-gate]. */
+  readonly enterRoundTripGasUsd?: number;
+  /** Minimum multiple of 7-day expected fees over the round-trip gas cost for
+   *  an ENTER to be admissible ([fee-gas-gate]). Env `ENTER_MIN_7D_FEE_OVER_GAS`;
+   *  default 1.0 — a position must expect to earn its own gas within a week. */
+  readonly enterMin7dFeeOverGas?: number;
   readonly tvlDropExitPct: number;
   /** Native-ETH floor reserved purely for gas (wei). Env `MIN_NATIVE_FOR_GAS_WEI`;
    *  default = constants.MIN_NATIVE_FOR_GAS_WEI (0.005 ETH). Absent = default. */
@@ -864,6 +871,8 @@ const loadConfig = Effect.gen(function* () {
     // CHALLENGE_MODE keeps the 1.2 default (preset value == default).
     1.2,
   );
+  const enterRoundTripGasUsd = yield* validatedNumber("ENTER_ROUND_TRIP_GAS_USD", 0, 0.15);
+  const enterMin7dFeeOverGas = yield* validatedNumber("ENTER_MIN_7D_FEE_OVER_GAS", 0, 1.0);
   const tvlDropExitPct = yield* validatedNumber("TVL_DROP_EXIT_PCT", 0, 0.3);
   const volumeAuthThreshold = yield* validatedNumber("VOLUME_AUTH_THRESHOLD", 0, 0.7);
   const minRebalanceIntervalMs = yield* validatedNumber(
@@ -1674,6 +1683,8 @@ const loadConfig = Effect.gen(function* () {
     challengeHardFloorPct,
     challengeLossCooldownMs,
     minFeeIlRatio,
+    enterRoundTripGasUsd,
+    enterMin7dFeeOverGas,
     minNativeForGasWei,
     minNativeForEntryWei,
     tvlDropExitPct,

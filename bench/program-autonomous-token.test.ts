@@ -3,6 +3,7 @@ import { Effect } from "effect";
 import {
   isActionAllowedDuringSafetyPause,
   isTransientSettlementError,
+  isUnrecoverableSettlementError,
   loadDailyEquityBaseline,
   nextSettlementRetryAt,
   oldestActiveSettlementAgeMs,
@@ -936,6 +937,50 @@ describe("issue #166 settlement recovery", () => {
     expect(isTransientSettlementError(new Error("request failed with status code 429"))).toBe(true);
     expect(isTransientSettlementError(new Error("HTTP Error: Too Many Requests"))).toBe(true);
     expect(isTransientSettlementError(null)).toBe(false);
+  });
+
+  it("classifies deterministic quote/route failures as unrecoverable (immediate terminal)", () => {
+    // Dead-pool / impossible-route failures are stateless — no retry fixes them.
+    expect(isUnrecoverableSettlementError(new Error("quoteSwap: Invariant failed: TICK..."))).toBe(true);
+    expect(
+      isUnrecoverableSettlementError(
+        new Error("quoteSwap: no direct v3 or registered v4 pool for 0xabcd -> 0x0"),
+      ),
+    ).toBe(true);
+    expect(isUnrecoverableSettlementError(new Error("cannot swap through dead pool"))).toBe(true);
+    expect(isUnrecoverableSettlementError(new Error("unable to quote this route"))).toBe(true);
+    // Transient/network errors are NOT unrecoverable — they retry.
+    expect(isUnrecoverableSettlementError(new Error("Jupiter quote failed: 429"))).toBe(false);
+    expect(isUnrecoverableSettlementError(new Error("fetch failed"))).toBe(false);
+    // Deterministic but fixable-by-other-means errors are not unrecoverable either.
+    expect(isUnrecoverableSettlementError(new Error("insufficient funds for swap"))).toBe(false);
+  });
+
+  it("terminalizes an unrecoverable quote failure immediately, even before expiry", async () => {
+    // Given a job whose expiry is far in the future and a dead-pool quote error.
+    const job = settlementJob({ expiresAt: 1_000_000 });
+    const savedJobs: SettlementJobRecord[] = [];
+    const adapter = {
+      getTokenPrices: () => Effect.succeed({ [NATIVE_MINT]: 100, "token-1": 1 }),
+      getTokenDecimals: () => Effect.succeed(6),
+      quoteSwap: () =>
+        Effect.fail(new Error("quoteSwap: Invariant failed: TICK out of bounds (zombie pool)")),
+      prepareSwap: () => Effect.fail(new Error("unused")),
+      simulateSwap: () => Effect.fail(new Error("unused")),
+      submitSwap: () => Effect.fail(new Error("unused")),
+    } as unknown as AdapterApi;
+
+    // When
+    const [processed] = await runSettlementProcessor([job], adapter, savedJobs, "live");
+
+    // Then the job goes terminal NOW instead of churning until expiry — the
+    // swap can never succeed (dead pool state), so each retry is pure waste.
+    expect(processed).toMatchObject({
+      status: "terminal",
+      attempts: 1,
+      nextRetryAt: null,
+      error: "quoteSwap: Invariant failed: TICK out of bounds (zombie pool)",
+    });
   });
 
   it("never terminalizes a rate-limited settlement past expiry — it stays retryable", async () => {

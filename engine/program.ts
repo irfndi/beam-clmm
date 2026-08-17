@@ -6977,6 +6977,52 @@ export const program = Effect.gen(function* () {
             enterGateRejected = true;
           }
 
+          // [fee-gas-gate] profitability floor: a position must expect to earn
+          // its own round-trip gas (mint+collect+burn) within a week of
+          // measured 24h fees — otherwise the entry is a guaranteed net loss
+          // for the wallet. Measured-only like the fee/IL gates: a pool with
+          // no measured fees (0) is SKIPPED, not blocked — the absence of a
+          // measured fee signal does not vote either way. Config knobs
+          // ENTER_ROUND_TRIP_GAS_USD (default $0.15) × ENTER_MIN_7D_FEE_OVER_GAS
+          // (default 1.0).
+          if (
+            !enterGateRejected &&
+            (pool.fees24hUsd ?? 0) > 0 &&
+            (pool.tvlUsd ?? 0) > 0 &&
+            (config.enterRoundTripGasUsd ?? 0) > 0
+          ) {
+            const feeGasEntrySizeUsd = computeEntrySizeUsd({
+              walletBalanceUsd,
+              tvlUsd: pool.tvlUsd,
+              maxSizeUsd: config.maxEntrySizeUsd,
+              tvlFractionUsd: config.entrySizeTvlFraction,
+              floorUsd: config.entrySizeFloorUsd,
+            });
+            const expected7dFeesUsd =
+              (pool.fees24hUsd ?? 0) * (feeGasEntrySizeUsd / pool.tvlUsd) * 7;
+            const gasCostUsd =
+              (config.enterRoundTripGasUsd ?? 0) * (config.enterMin7dFeeOverGas ?? 1);
+            if (expected7dFeesUsd < gasCostUsd) {
+              yield* audit
+                .recordDecision({
+                  timestamp: Date.now(),
+                  cycleId,
+                  poolAddress,
+                  action: "ENTER",
+                  confidence: 0,
+                  reasoning: `[fee-gas-gate] expected 7d fees $${expected7dFeesUsd.toFixed(3)} < round-trip gas $${gasCostUsd.toFixed(3)} — entry cannot pay for itself`,
+                  metrics,
+                  riskResult: {
+                    approved: false,
+                    reason: `[fee-gas-gate] 7d fees $${expected7dFeesUsd.toFixed(3)} < gas $${gasCostUsd.toFixed(3)}`,
+                  },
+                  executed: false,
+                  paperTrading: config.paperTrading,
+                })
+                .pipe(Effect.catch(() => Effect.void));
+              enterGateRejected = true;
+            }
+          }
           // Modeled/fabricated fee/IL (feeIlRatioKnown=false — gecko's binStep
           // base-rate model, or heuristic) never gates the candidate in EITHER
           // direction: the Data API exposes per-pool baseFeePct, so the generic

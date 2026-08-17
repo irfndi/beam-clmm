@@ -2305,8 +2305,15 @@ export const AdapterLive = Layer.effect(AdapterService,
             feesEarnedUsd: 0,
             openedAt: Date.now(),
           });
-        } catch {
-          continue;
+        } catch (err) {
+          // Fail the WHOLE enumeration instead of silently skipping: a
+          // transient read failure here would look like "position gone" to
+          // reconcile, which would drop a live position from tracking and
+          // leave it unmanaged. The reconcile caller catches this and skips
+          // the cycle (fail-open — nothing is dropped or adopted).
+          throw new Error(
+            `v3PositionsOf: failed to read position ${i}/${balance} for ${owner}: ${underlyingErrorMessage(err)}`,
+          );
         }
       }
       return positions;
@@ -2431,8 +2438,14 @@ export const AdapterLive = Layer.effect(AdapterService,
             feesEarnedUsd: 0,
             openedAt: Date.now(),
           });
-        } catch {
-          continue;
+        } catch (err) {
+          // Same policy as v3PositionsOf: a transient read failure must NOT
+          // look like "position gone" to reconcile (which would drop a live
+          // position from tracking) — fail the whole enumeration so the
+          // reconcile caller skips the cycle instead.
+          throw new Error(
+            `v4PositionsOf: failed to read position ${tokenId} for ${owner}: ${underlyingErrorMessage(err)}`,
+          );
         }
       }
       return positions;

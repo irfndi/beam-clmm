@@ -287,6 +287,23 @@ export function isTransientSettlementError(error: unknown): boolean {
   return TRANSIENT_HTTP_STATUS.test(message) || TRANSIENT_NETWORK.test(message);
 }
 
+/**
+ * Deterministic, stateless settlement failures that no retry can fix: the
+ * quote/route logic itself rejects the swap (dead/broken pool state, an
+ * impossible route like WETH→native through a pool that must be unwrapped,
+ * or an out-of-bounds tick on a zombie pool). These are NOT transient in the
+ * sense of the HTTP/network classifier — they terminalize immediately
+ * instead of churning every cycle until expiresAt (the max-retry window is
+ * for flaky infrastructure, not for logic that will never succeed).
+ */
+const UNRECOVERABLE_SETTLEMENT =
+  /Invariant failed:|no direct v3 or registered v4 pool for|no .* pool for|invalid.*route|cannot.*swap|unable to quote/i;
+
+export function isUnrecoverableSettlementError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return UNRECOVERABLE_SETTLEMENT.test(message);
+}
+
 function retryableJob(job: SettlementJobRecord, now: number, error: unknown): SettlementJobRecord {
   const attempts = job.attempts + 1;
   // Transient failures (rate limits, network blips) never terminalize — the
@@ -294,12 +311,17 @@ function retryableJob(job: SettlementJobRecord, now: number, error: unknown): Se
   // the job resumes as soon as the outage clears. Only non-transient failures
   // expire into terminal once the max-pending window passes.
   const transient = isTransientSettlementError(error);
-  const expired = !transient && now >= job.expiresAt;
+  // Deterministic quote/route failures (dead pool tick, impossible route) can
+  // never succeed — terminalize immediately instead of waiting for the
+  // max-pending window (each retry burns a cycle and re-quotes the same
+  // doomed swap).
+  const unrecoverable = !transient && isUnrecoverableSettlementError(error);
+  const expired = !transient && !unrecoverable && now >= job.expiresAt;
   return {
     ...job,
-    status: expired ? "terminal" : "retryable",
+    status: expired || unrecoverable ? "terminal" : "retryable",
     attempts,
-    nextRetryAt: expired ? null : nextSettlementRetryAt(now, attempts),
+    nextRetryAt: expired || unrecoverable ? null : nextSettlementRetryAt(now, attempts),
     error: error instanceof Error ? error.message : String(error),
     updatedAt: now,
   };

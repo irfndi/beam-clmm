@@ -66,6 +66,8 @@ interface FakeTokenOpts {
   decimals?: number;
   decimalsReverts?: boolean;
   balanceOfReverts?: boolean;
+  /** transferFrom always reverts — the "frozen leg" class (pool pull impossible). */
+  transferFromReverts?: boolean;
   codeKind?: "erc20" | "erc1967" | "eip1167" | "none";
   implAddress?: Address;
 }
@@ -136,6 +138,25 @@ class FakeERC20 {
           address: this.address,
           topics: [TRANSFER_TOPIC, pad(sender), pad(to)],
           data: numberToHex(received, { size: 32 }),
+        });
+        return { returnData: `0x${"0".repeat(63)}1`, status: "0x1", logs };
+      }
+      case "0x23b872dd": {
+        // transferFrom(from, to, amount): reverts for "frozen" tokens even
+        // with funded balance + allowance (the token's own restriction) —
+        // everything else moves the funds like a normal ERC-20 pull.
+        if (this.opts.transferFromReverts) return revertCall("transferFrom restricted");
+        const from = `0x${data.slice(34, 74)}` as Address;
+        const to = `0x${data.slice(98, 138)}` as Address;
+        const amount = toBI(`0x${data.slice(138)}`);
+        const balance = read(from);
+        if (balance < amount) return revertCall("insufficient balance");
+        write(from, balance - amount);
+        write(to, read(to) + amount);
+        logs.push({
+          address: this.address,
+          topics: [TRANSFER_TOPIC, pad(from), pad(to)],
+          data: numberToHex(amount, { size: 32 }),
         });
         return { returnData: `0x${"0".repeat(63)}1`, status: "0x1", logs };
       }
@@ -332,10 +353,10 @@ describe("evm-token-risk pure helpers", () => {
   });
 
   it("compositeVerdict: any fail rejects, warn-only warns, clean is ok", () => {
-    const checks = (overrides: Partial<Record<"sanity" | "tax" | "owner" | "upgradable" | "sellRoute", "pass" | "warn" | "fail" | "skip">>) => {
+    const checks = (overrides: Partial<Record<"sanity" | "tax" | "owner" | "upgradable" | "sellRoute" | "transferFrom", "pass" | "warn" | "fail" | "skip">>) => {
       const base = {
-        sanity: "pass", tax: "pass", owner: "pass", upgradable: "pass", sellRoute: "skip",
-      } satisfies Record<"sanity" | "tax" | "owner" | "upgradable" | "sellRoute", "pass" | "warn" | "fail" | "skip">;
+        sanity: "pass", tax: "pass", owner: "pass", upgradable: "pass", sellRoute: "skip", transferFrom: "pass",
+      } satisfies Record<"sanity" | "tax" | "owner" | "upgradable" | "sellRoute" | "transferFrom", "pass" | "warn" | "fail" | "skip">;
       const merged = { ...base, ...overrides };
       return {
         sanity: { status: merged.sanity, detail: "", data: null },
@@ -343,12 +364,14 @@ describe("evm-token-risk pure helpers", () => {
         owner: { status: merged.owner, detail: "", data: null },
         upgradable: { status: merged.upgradable, detail: "", data: null },
         sellRoute: { status: merged.sellRoute, detail: "", data: null },
+        transferFrom: { status: merged.transferFrom, detail: "", data: null },
       } as Parameters<typeof compositeVerdict>[0];
     };
     expect(compositeVerdict(checks({}))).toBe("ok");
     expect(compositeVerdict(checks({ owner: "warn" }))).toBe("warn");
     expect(compositeVerdict(checks({ tax: "fail" }))).toBe("reject");
     expect(compositeVerdict(checks({ sanity: "fail", owner: "warn" }))).toBe("reject");
+    expect(compositeVerdict(checks({ transferFrom: "fail" }))).toBe("reject");
   });
 });
 
@@ -382,7 +405,21 @@ describe("evm-token-risk decision paths (mocked RPC)", () => {
     expect(report.checks.tax.data?.taxPct).toBe(0);
     expect(report.checks.owner.status).toBe("pass");
     expect(report.checks.upgradable.status).toBe("pass");
+    expect(report.checks.transferFrom.status).toBe("pass");
     expect(report.checks.sellRoute.status).toBe("skip");
+  });
+
+  it("frozen transferFrom (pool pull impossible) → reject", async () => {
+    // The "frozen leg" class: transferFrom reverts even with funded balance +
+    // allowance — a v3 mint or pool swap can never pull this token, so the
+    // pool is unmintable for the wallet (LEMON-class misdiagnosis; Hoodrat
+    // on 4663 reverts exactly like this).
+    const { report } = await assess(
+      new FakeERC20("0x00000000000000000000000000000000000000ce", { transferFromReverts: true }),
+      { enabled: true },
+    );
+    expect(report.checks.transferFrom.status).toBe("fail");
+    expect(report.verdict).toBe("reject");
   });
 
   it("decimals() revert → falls back to 18 decimals and still passes", async () => {

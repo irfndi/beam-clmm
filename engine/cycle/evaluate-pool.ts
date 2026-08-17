@@ -79,6 +79,10 @@ export interface ReplayEvaluationInput {
   readonly trailingStopConfirmCycles: number;
   /** Live MIN_FEE_IL_RATIO (evolvedThresholds base). */
   readonly minFeeIlRatio: number;
+  /** Live ENTER_ROUND_TRIP_GAS_USD — [fee-gas-gate] round-trip gas cost. */
+  readonly enterRoundTripGasUsd?: number;
+  /** Live ENTER_MIN_7D_FEE_OVER_GAS — [fee-gas-gate] 7d-fees/gas multiple. */
+  readonly enterMin7dFeeOverGas?: number;
   /** Live VOLUME_AUTH_THRESHOLD (evolvedThresholds base). */
   readonly volumeAuthThreshold: number;
   /** Live MIN_BIN_UTILIZATION (evolvedThresholds base). */
@@ -311,6 +315,20 @@ export function evaluateReplayPool(input: ReplayEvaluationInput): ReplayEvaluati
       // [fee-il-gate] hard ENTER floor — expected fees must beat IL.
       enterRejected =
         `[fee-il-gate] Fee/IL ratio ${feeIlRatio.toFixed(2)} below minimum ${input.minFeeIlRatio} — expected fees cannot beat IL`;
+    } else if (
+      (input.enterRoundTripGasUsd ?? 0) > 0 &&
+      metrics.pool.fees24hUsd > 0 &&
+      input.poolTvlUsd > 0 &&
+      metrics.pool.fees24hUsd * (input.proposedSizeUsd / input.poolTvlUsd) * 7 <
+        (input.enterRoundTripGasUsd ?? 0) * (input.enterMin7dFeeOverGas ?? 1)
+    ) {
+      // [fee-gas-gate] profitability floor — mirror of the live gate: a
+      // position must expect to earn its own round-trip gas within a week of
+      // measured fees. Measured-only: 0 fees does not vote either way.
+      const expected7d = metrics.pool.fees24hUsd * (input.proposedSizeUsd / input.poolTvlUsd) * 7;
+      const gasCost = (input.enterRoundTripGasUsd ?? 0) * (input.enterMin7dFeeOverGas ?? 1);
+      enterRejected =
+        `[fee-gas-gate] expected 7d fees $${expected7d.toFixed(3)} < round-trip gas $${gasCost.toFixed(3)} — entry cannot pay for itself`;
     } else if (
       !(metrics.feeIlRatioKnown ? feeIlRatio > input.minFeeIlRatio * 1.5 : true) ||
       !metrics.volumeAuthenticityKnown ||

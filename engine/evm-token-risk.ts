@@ -113,6 +113,18 @@ export interface SellRouteDetail {
   readonly expectedOutToken: Address | null;
 }
 
+export interface TransferFromDetail {
+  /** The simulated sender+owner of the tokens (the wallet the pool would pull from). */
+  readonly source: Address;
+  /** The simulated recipient of the pulled tokens. */
+  readonly recipient: Address;
+  /** The amount pulled (1 wei — enough to prove pull-ability). */
+  readonly amount: bigint;
+  /** Whether the funding-verify read confirmed the probe balance was injected. */
+  readonly funded: boolean;
+  readonly revertReason: string | null;
+}
+
 export interface TokenRiskReport {
   readonly token: Address;
   readonly verdict: TokenRiskVerdict;
@@ -124,6 +136,7 @@ export interface TokenRiskReport {
     readonly owner: CheckResult<OwnerDetail>;
     readonly upgradable: CheckResult<UpgradableDetail>;
     readonly sellRoute: CheckResult<SellRouteDetail>;
+    readonly transferFrom: CheckResult<TransferFromDetail>;
   };
 }
 
@@ -151,6 +164,7 @@ const MINIMAL_PROXY_MARKER = "0x363d3d373d3d3d3d363d73";
 
 const BALANCE_OF_SELECTOR = "0x70a08231";
 const TRANSFER_SELECTOR = "0xa9059cbb";
+const TRANSFER_FROM_SELECTOR = "0x23b872dd";
 const DECIMALS_SELECTOR = "0x313ce567";
 const OWNER_SELECTOR = "0x8da5cb5b";
 const PENDING_OWNER_SELECTOR = "0xe30c3978";
@@ -183,6 +197,7 @@ export function compositeVerdict(checks: TokenRiskReport["checks"]): TokenRiskVe
     checks.owner.status,
     checks.upgradable.status,
     checks.sellRoute.status,
+    checks.transferFrom.status,
   ];
   if (statuses.some((s) => s === "fail")) return "reject";
   if (statuses.some((s) => s === "warn")) return "warn";
@@ -266,6 +281,16 @@ function encodeTransfer(to: Address, amount: bigint): Hex {
     .toLowerCase()
     .slice(2)
     .padStart(64, "0")}${numberToHex(amount, { size: 32 }).slice(2)}`;
+}
+
+function encodeTransferFrom(from: Address, to: Address, amount: bigint): Hex {
+  return `0x${TRANSFER_FROM_SELECTOR.slice(2)}${from
+    .toLowerCase()
+    .slice(2)
+    .padStart(64, "0")}${to.toLowerCase().slice(2).padStart(64, "0")}${numberToHex(
+    amount,
+    { size: 32 },
+  ).slice(2)}`;
 }
 
 function extractRevertReason(returnData: Hex | null | undefined): string {
@@ -563,6 +588,81 @@ async function checkTax(client: PublicClient, token: Address, maxTax: number): P
   };
 }
 
+/**
+ * Feasibility of the pool pull: transferFrom must succeed when the source is
+ * funded and allowed. A token whose transferFrom reverts even with a funded
+ * balance + allowance can never fund a v3 mint, a swap input, or any other
+ * pool pull from the wallet — the pool is unmintable for this wallet and the
+ * token is effectively frozen (only direct transfer() moves it). This is the
+ * check that catches the "frozen-leg" class the sanity/tax/owner probes pass
+ * (LEMON passed every other probe yet could not fund a pool pull on-chain).
+ */
+async function checkTransferFrom(
+  client: PublicClient,
+  token: Address,
+): Promise<CheckResult<TransferFromDetail>> {
+  const amount = 1n; // 1 wei proves pull-ability without moving real value
+  const source = PROBE_ADDRESS;
+  const recipient = PROBE_RECIPIENT;
+  const base: TransferFromDetail = { source, recipient, amount, funded: false, revertReason: null };
+  const stateOverride = await buildFundingState(client, token, [source], amount, [source]);
+  const results = await simulateCalls(
+    client,
+    [
+      { from: source, to: token, data: encodeBalanceOf(source) }, // funding verify
+      { from: source, to: token, data: encodeTransferFrom(source, recipient, amount) },
+    ],
+    stateOverride,
+  );
+  if (!results) {
+    return {
+      status: "warn",
+      detail: "eth_simulateV1 unsupported on this RPC; transferFrom unverifiable",
+      data: base,
+    };
+  }
+  const [fundedCall, pullCall] = results;
+  if (!fundedCall || !pullCall) {
+    return { status: "fail", detail: "simulation returned incomplete results", data: base };
+  }
+  const funded = toBigInt(fundedCall.returnData) >= amount;
+  if (!funded) {
+    return {
+      status: "warn",
+      detail: "could not fund probe address (non-standard storage layout); transferFrom unverifiable",
+      data: base,
+    };
+  }
+  if (pullCall.status !== "0x1") {
+    const reason = extractRevertReason(pullCall.returnData);
+    return {
+      status: "fail",
+      detail: `transferFrom reverts with funded balance+allowance: ${reason}`,
+      data: { ...base, funded, revertReason: reason },
+    };
+  }
+  // Some tokens return true but never emit the Transfer (no-op transferFrom) —
+  // a pool pull would still move nothing. Require the Transfer event.
+  const moved = pullCall.logs.some(
+    (l) =>
+      l.topics.length === 3 &&
+      l.topics[0] === TRANSFER_EVENT_TOPIC &&
+      l.topics[2]?.slice(26).toLowerCase() === recipient.toLowerCase().slice(2),
+  );
+  if (!moved) {
+    return {
+      status: "fail",
+      detail: "transferFrom returned true without a Transfer event (no-op pull)",
+      data: { ...base, funded },
+    };
+  }
+  return {
+    status: "pass",
+    detail: "transferFrom executes with funded balance+allowance",
+    data: { ...base, funded },
+  };
+}
+
 async function checkOwner(client: PublicClient, token: Address): Promise<CheckResult<OwnerDetail>> {
   const owner = await readAddress(client, token, OWNER_SELECTOR);
   const pendingOwner = await readAddress(client, token, PENDING_OWNER_SELECTOR);
@@ -668,7 +768,14 @@ async function checkSellRoute(
 
 function skippedChecks(reason: string): TokenRiskReport["checks"] {
   const skip = (): CheckResult<never> => ({ status: "skip", detail: reason, data: null });
-  return { sanity: skip(), tax: skip(), owner: skip(), upgradable: skip(), sellRoute: skip() };
+  return {
+    sanity: skip(),
+    tax: skip(),
+    owner: skip(),
+    upgradable: skip(),
+    sellRoute: skip(),
+    transferFrom: skip(),
+  };
 }
 
 export function createTokenRiskProber(client: PublicClient, config: TokenRiskConfig): TokenRiskProber {
@@ -697,6 +804,9 @@ export function createTokenRiskProber(client: PublicClient, config: TokenRiskCon
         tax: await runCheck(() => checkTax(client, token, maxTax)),
         owner: await runCheck(() => checkOwner(client, token)),
         upgradable: await runCheck(() => checkUpgradable(impl)),
+        // Before sellRoute: the mocked-RPC state assertions expect the
+        // sell-route simulation to remain the LAST eth_simulateV1 request.
+        transferFrom: await runCheck(() => checkTransferFrom(client, token)),
         sellRoute: await runCheck(() => checkSellRoute(client, token, options?.sellRoute)),
       };
       return { token, verdict: compositeVerdict(checks), allowlisted: false, disabled: false, checks };
