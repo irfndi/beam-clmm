@@ -244,6 +244,14 @@ export interface AppConfig {
    *  execution-failure pause. Default false (operator-funded stablecoin
    *  legs allowed); set true on an ETH-only canary wallet. */
   readonly liveEntryNativeLegOnly?: boolean;
+  /** Live (canary/live) ENTERs on v4 pools. Default true. Robinhood Chain's
+   *  fork PositionManager rejects the SDK-built v4 mint calldata (verified
+   *  2026-08-16/17: every real v4 mint dry-run reverts 'unknown reason' even
+   *  after the pre-broadcast sim passes and Permit2 is modeled), so attempts
+   *  that pass the sim still broadcast swap+approve txs and burn gas before
+   *  the mint fails. Set false to skip v4 pools entirely (audited, not
+   *  failures) until the fork is fixed. */
+  readonly entryV4Enabled?: boolean;
 
   /** Master switch for the GeckoTerminal secondary pool-stats source (tried when
    *  the Meteora Data API is down). Default true; absent = gecko active. The
@@ -899,6 +907,9 @@ const loadConfig = Effect.gen(function* () {
   const dustExitUsd = yield* validatedNumber("DUST_EXIT_USD", 0, 5);
 
   const jupiterTokenRiskEnabled = yield* Config.boolean("JUPITER_TOKEN_RISK_ENABLED").pipe(
+    Effect.orElseSucceed(() => true),
+  );
+  const entryV4Enabled = yield* Config.boolean("LIVE_ENTRY_V4_ENABLED").pipe(
     Effect.orElseSucceed(() => true),
   );
   const liveEntryNativeLegOnly = yield* Config.boolean("LIVE_ENTRY_NATIVE_LEG_ONLY").pipe(
@@ -1722,6 +1733,7 @@ const loadConfig = Effect.gen(function* () {
     jupiterTokenRiskEnabled,
     jupiterTokenRiskCacheTtlMin,
     liveEntryNativeLegOnly,
+    entryV4Enabled,
     geckoTerminalEnabled,
     krystalEnabled,
     krystalApiUrl,

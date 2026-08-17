@@ -7056,6 +7056,38 @@ export const program = Effect.gen(function* () {
             pool.tokenX?.toLowerCase() === WETH9.toLowerCase() ||
             pool.tokenY?.toLowerCase() === WETH9.toLowerCase();
           const nativeLegOnly = config.liveEntryNativeLegOnly === true && !config.paperTrading;
+          // v4 ENTERs disabled (LIVE_ENTRY_V4_ENABLED=false): this chain's
+          // fork PositionManager rejects the SDK-built v4 mint calldata, so
+          // attempts that pass the pre-broadcast sim still broadcast
+          // swap+approve txs and burn gas before the real mint dry-run
+          // reverts 'unknown reason' (verified 2026-08-16/17 — ~$0.5/day
+          // bleed). Skip v4 pools entirely: audited, not a failure.
+          const v4Disabled =
+            config.entryV4Enabled === false &&
+            !config.paperTrading &&
+            poolAddress.length === 66;
+          if (!enterGateRejected && v4Disabled) {
+            yield* audit
+              .recordDecision({
+                timestamp: Date.now(),
+                cycleId,
+                poolAddress,
+                action: "ENTER",
+                confidence: 0,
+                reasoning:
+                  `[v4-disabled] v4 mint incompatible with chain fork — ` +
+                  `LIVE_ENTRY_V4_ENABLED=false`,
+                metrics,
+                riskResult: {
+                  approved: false,
+                  reason: "[v4-disabled] v4 mint incompatible with chain fork",
+                },
+                executed: false,
+                paperTrading: config.paperTrading,
+              })
+              .pipe(Effect.catch(() => Effect.void));
+            enterGateRejected = true;
+          }
           if (!enterGateRejected && pool.liquidity !== undefined && pool.liquidity <= 0n) {
             yield* audit
               .recordDecision({
