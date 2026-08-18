@@ -4,7 +4,13 @@ import os from "os";
 import { spawnSync } from "child_process";
 
 export const LOCKFILE_DIR = path.join(os.homedir(), ".config", "beam");
-export const LOCKFILE_PATH = path.join(LOCKFILE_DIR, "dev.lock");
+/** The dev singleton lock. Parallel chain/wallet agents each get their own
+ *  instance lock (AGENT_INSTANCE_ID → dev-<id>.lock) so `beam-base` and
+ *  `beam-robinhood` can run simultaneously, each guarding its own engine
+ *  process. Without AGENT_INSTANCE_ID the legacy shared dev.lock is used. */
+export const LOCKFILE_PATH = process.env.AGENT_INSTANCE_ID
+  ? path.join(LOCKFILE_DIR, `dev-${process.env.AGENT_INSTANCE_ID}.lock`)
+  : path.join(LOCKFILE_DIR, "dev.lock");
 
 interface LockfileData {
   readonly pid: number;

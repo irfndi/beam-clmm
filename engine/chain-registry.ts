@@ -16,6 +16,8 @@ import type { Address } from "viem";
 import { getAddress } from "viem";
 
 export interface ChainDeployment {
+  /** Machine key used by BEAM_CHAIN (e.g. "base", "robinhood"). Lowercase. */
+  readonly key: string;
   /** EVM chain id, used for the viem chain object and Token ids. */
   readonly chainId: number;
   /** Public display name, e.g. "Base" / "Robinhood Chain". */
@@ -57,6 +59,7 @@ export interface ChainDeployment {
  *  Verified live on mainnet.base.org (WETH/USDC 0.05% pool is deep and
  *  mintable — unlike Robinhood's dead meme shells). */
 const BASE: ChainDeployment = {
+  key: "base",
   chainId: 8453,
   name: "Base",
   defaultRpc: "https://mainnet.base.org",
@@ -82,6 +85,7 @@ const BASE: ChainDeployment = {
 /** Official Uniswap v3/v4 deployment for Robinhood Chain (4663). Retained as a
  *  registered chain, but no longer the default. */
 const ROBINHOOD: ChainDeployment = {
+  key: "robinhood",
   chainId: 4663,
   name: "Robinhood Chain",
   defaultRpc: "https://rpc.mainnet.chain.robinhood.com",
@@ -111,7 +115,7 @@ const CHAIN_DEPLOYMENTS: ReadonlyArray<ChainDeployment> = [BASE, ROBINHOOD];
 export const ACTIVE_CHAIN_KEY = (process.env.BEAM_CHAIN ?? "base").toLowerCase();
 
 function requireChain(key: string): ChainDeployment {
-  const found = CHAIN_DEPLOYMENTS.find((c) => c.name.toLowerCase() === key.toLowerCase());
+  const found = CHAIN_DEPLOYMENTS.find((c) => c.key === key.toLowerCase());
   if (found) return found;
   // Unknown BEAM_CHAIN falls back to Base and warns loudly rather than silently
   // picking Robinhood (the previous hardcoded default).
@@ -155,7 +159,7 @@ export const ROBINHOOD_CHAIN = {
 /** List every registered chain (for setup/CLI surfaces). */
 export function listChains(): ReadonlyArray<{ readonly key: string; readonly chainId: number; readonly name: string }> {
   return CHAIN_DEPLOYMENTS.map((c) => ({
-    key: c.name.toLowerCase(),
+    key: c.key,
     chainId: c.chainId,
     name: c.name,
   }));
@@ -163,5 +167,5 @@ export function listChains(): ReadonlyArray<{ readonly key: string; readonly cha
 
 /** Convenience: get a deployment by key (used by setup/validation). */
 export function getChainDeployment(key: string): ChainDeployment | null {
-  return CHAIN_DEPLOYMENTS.find((c) => c.name.toLowerCase() === key.toLowerCase()) ?? null;
+  return CHAIN_DEPLOYMENTS.find((c) => c.key === key.toLowerCase()) ?? null;
 }
