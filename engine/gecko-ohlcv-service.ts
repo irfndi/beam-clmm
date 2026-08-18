@@ -1,4 +1,5 @@
 import { createLogger } from "./logger.js";
+import { DEFAULT_GECKO_SLUG } from "./chain-registry.js";
 
 /**
  * GeckoTerminal OHLCV fetcher for fallen-angel mode (Wave 19).
@@ -265,7 +266,7 @@ export async function getGeckoPoolOhlcv(
     .replace(/\/+$/, "");
   const effectiveBase = base.length > 0 ? base : DEFAULT_BASE_URL;
   const limit = options.limit ?? DEFAULT_OHLCV_LIMIT;
-  const slug = process.env.GECKO_NETWORK_SLUG ?? "robinhood";
+  const slug = process.env.GECKO_NETWORK_SLUG ?? DEFAULT_GECKO_SLUG;
   const url = `${effectiveBase}/networks/${slug}/pools/${poolAddress}/ohlcv/day?limit=${limit}`;
   pruneOhlcvState(Date.now());
 

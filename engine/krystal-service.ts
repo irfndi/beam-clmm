@@ -4,6 +4,7 @@ import { registerV4Pool, type V4PoolKey } from "./adapter-service.js";
 import type { PoolState } from "./types.js";
 import { NATIVE_MINT } from "./constants.js";
 import { createLogger } from "./logger.js";
+import { ACTIVE_CHAIN_ID } from "./chain-registry.js";
 
 /**
  * Krystal LP explorer — the primary pool-stats source on Robinhood Chain.
@@ -163,7 +164,7 @@ export async function fetchKrystalUniverse(
     .replace(/\/+$/, "");
   const url =
     `${base}/all/v2/lp_explorer/top_pools` +
-    `?chainId=4663&protocols=uniswapv2,uniswapv3,uniswapv4&quoteSymbols=usd` +
+    `?chainId=${ACTIVE_CHAIN_ID}&protocols=uniswapv2,uniswapv3,uniswapv4&quoteSymbols=usd` +
     `&limit=500&skipCheckAutomation=true`;
   try {
     const response = await fetchImpl(url, { signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });

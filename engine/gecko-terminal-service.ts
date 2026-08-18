@@ -2,6 +2,7 @@ import { Effect, Layer } from "effect";
 import { createLogger } from "./logger.js";
 import { GeckoTerminalService } from "./services.js";
 import type { PoolState } from "./types.js";
+import { DEFAULT_GECKO_SLUG } from "./chain-registry.js";
 
 /**
  * GeckoTerminal secondary pool-stats source. Sits between the Meteora Data API
@@ -42,9 +43,9 @@ import type { PoolState } from "./types.js";
 const logger = createLogger("gecko-terminal");
 
 const DEFAULT_BASE_URL = "https://api.geckoterminal.com/api/v2";
-// Robinhood Chain is the EVM network slug (verified live 2026-08-08); the
-// Solana-era slug never existed on this chain.
-export const GECKO_NETWORK_SLUG = process.env.GECKO_NETWORK_SLUG ?? "robinhood";
+// The ACTIVE chain's GeckoTerminal network slug (from chain-registry: base,
+// robinhood, ...). Env GECKO_NETWORK_SLUG overrides.
+const GECKO_NETWORK_SLUG = process.env.GECKO_NETWORK_SLUG ?? DEFAULT_GECKO_SLUG;
 const REQUEST_TIMEOUT_MS = 10_000;
 
 // ─── Request pacing (30 req/min keyless endpoint) ────────────────────────────

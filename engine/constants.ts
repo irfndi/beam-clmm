@@ -1,14 +1,19 @@
-// Robinhood Chain (EVM L2, chain id 4663) — native ETH is the gas token.
-// The engine's "native" leg is ETH, and its settlement stablecoin is USDG
-// (Paxos Global Dollar) — the canonical stablecoin on Robinhood Chain.
-// Addresses cross-checked against Uniswap deployment docs + Blockscout (2026-07).
+// Chain parameters resolved from the active BEAM_CHAIN (chain-registry.ts).
+// The engine's "native" leg is ETH on every registered chain (Base, Robinhood),
+// and its settlement stablecoin is the ACTIVE chain's canonical stablecoin
+// (USDG on Robinhood, USDC on Base). Addresses cross-checked against Uniswap
+// deployment docs per chain (2026-08).
+
+import { DEFAULT_STABLECOIN_MINT } from "./chain-registry.js";
 
 export const NATIVE_MINT = "0x0000000000000000000000000000000000000000"; // ETH (address zero, first-class in v4)
-/** Native gas token decimals on Robinhood Chain (ETH, 18). The Solana-era
+/** Native gas token decimals on the ACTIVE chain (ETH, 18). The Solana-era
  *  settlement path priced native at 9 decimals (SOL) — every use of this
  *  constant must be chain-aware. */
 export const NATIVE_DECIMALS = 18;
-export const STABLECOIN_MINT = "0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168"; // USDG, 6 decimals
+/** Canonical stablecoin mint of the ACTIVE chain (USDG on Robinhood, USDC on
+ *  Base). The engine's settlement stablecoin and gas-top-up leg. */
+export const STABLECOIN_MINT = DEFAULT_STABLECOIN_MINT;
 
 // Pure gas + non-position fee floor (0.001 ETH). Arbitrum-class L2s need
 // ~0.00001 ETH per tx; this reserve is far above realistic gas and exists to

@@ -17,16 +17,18 @@ import { privateKeyToAccount } from "viem/accounts";
 import { AdapterLive } from "../engine/adapter-service.js";
 import { ConfigService, type AppConfig } from "../engine/config-service.js";
 import { AdapterService, type AdapterApi } from "../engine/services.js";
+import { WETH9, V3_NPM, V3_SWAP_ROUTER_02, DEFAULT_STABLECOIN_MINT, V3_SWAP_ROUTER_ENCODING } from "../engine/chain-registry.js";
 import { defaultAppConfig } from "./helpers.js";
 
-// ─── Fixtures (on-chain-known WETH/USDG 0.3% pool, tick -200723) ─────────────
+// ─── Fixtures: a WETH/<stablecoin> 0.3% pool on the ACTIVE chain ─────────────
+// Addresses come from chain-registry (Base by default), so the mock RPC builds
+// a pool the adapter actually targets with the right WETH + canonical stablecoin.
 
-const WETH = "0x0Bd7D308f8E1639FAb988df18A8011f41EAcAD73";
-const USDG = "0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168";
+const WETH = WETH9;
+const USDG = DEFAULT_STABLECOIN_MINT;
 const ZERO = "0x0000000000000000000000000000000000000000";
 const POOL = "0xa9188730fe85be88ad499d7d52b099e800fb0334";
-const V3_NPM = "0x73991a25c818bf1f1128deaab1492d45638de0d3";
-const SWAP_ROUTER_02 = "0xCaf681a66D020601342297493863E78C959E5cb2";
+const SWAP_ROUTER_02 = V3_SWAP_ROUTER_02;
 const TICK = -200723;
 const SQRT_PRICE_X96 = BigInt(TickMath.getSqrtRatioAtTick(TICK).toString());
 const LIQUIDITY = 10n ** 22n;
@@ -42,6 +44,9 @@ const exactInputSingleV2Selector = toFunctionSelector(
 const multicallSelector = toFunctionSelector("multicall(bytes[])").slice(2);
 const exactInputSingleAbi = parseAbi([
   "function exactInputSingle((address,address,uint24,address,uint256,uint256,uint160)) payable returns (uint256)",
+]);
+const exactInputSingleCanonicalAbi = parseAbi([
+  "function exactInputSingle((address,address,uint24,address,uint256,uint256,uint256,uint160)) payable returns (uint256)",
 ]);
 const multicallAbi = parseAbi(["function multicall(bytes[]) returns (bytes[])"]);
 
@@ -88,6 +93,9 @@ const sel = {
   liquidity: toFunctionSelector("liquidity()"),
   positions: toFunctionSelector("positions(uint256)"),
   exactInputSingleV2: toFunctionSelector("exactInputSingle((address,address,uint24,address,uint256,uint256,uint160))"),
+  // Canonical SwapRouter02 (8-field, WITH deadline) — the ACTIVE chain's
+  // encoding when it is a canonical deployment (Base). Same mock behavior.
+  exactInputSingleCanonical: toFunctionSelector("exactInputSingle((address,address,uint24,address,uint256,uint256,uint256,uint160))"),
   multicall: toFunctionSelector("multicall(bytes[])"),
   withdraw: toFunctionSelector("withdraw(uint256)"),
   deposit: toFunctionSelector("deposit()"),
@@ -206,10 +214,13 @@ function createRpcMock(opts: MockOpts = {}): RpcMock {
         console.error(`[mock:revertExit] firing to=${to.slice(0, 10)} sel=${selector}`);
         return err(revertBody(opts.revertExit), id);
       }
-      if (selector === sel.exactInputSingleV2 && opts.revertSwap) {
+      if (
+        (selector === sel.exactInputSingleV2 || selector === sel.exactInputSingleCanonical) &&
+        opts.revertSwap
+      ) {
         return err(revertBody("insufficient liquidity for swap"), id);
       }
-      if (selector === sel.exactInputSingleV2) {
+      if (selector === sel.exactInputSingleV2 || selector === sel.exactInputSingleCanonical) {
         return ok(encodeAbiParameters([{ type: "uint256" }], [opts.swapOut ?? 0n]), id);
       }
       if (selector === sel.balanceOf) {
@@ -386,8 +397,13 @@ describe("enterPosition funding decision (v3 WETH/USDG pool)", () => {
     expect(res.depositMode).toBe("two-sided");
     const swapTx = m.sentTxs.find((t) => t.to === addr(SWAP_ROUTER_02));
     expect(swapTx).toBeDefined();
-    // the swap uses the LIVE v2 encoding (7-field, no deadline)
-    expect(swapTx!.data.slice(2, 10)).toBe(exactInputSingleV2Selector);
+    // the swap uses the ACTIVE chain's SwapRouter02 encoding (8-field on
+    // canonical chains like Base, 7-field on Robinhood's fork)
+    const expectedSwapSelector =
+      V3_SWAP_ROUTER_ENCODING === "canonical-8f"
+        ? sel.exactInputSingleCanonical.slice(2)
+        : sel.exactInputSingleV2.slice(2);
+    expect(swapTx!.data.slice(2, 10)).toBe(expectedSwapSelector);
     // native-in swap carries msg.value = amountIn
     expect(BigInt(swapTx!.value ?? "0x0")).toBeGreaterThan(0n);
     // swap before mint
@@ -535,9 +551,17 @@ describe("convertClaimedFees (real conversion)", () => {
     expect(swapTx).toBeDefined();
     const { args } = decodeFunctionData({ abi: multicallAbi, data: swapTx!.data });
     const inner = (args[0] as readonly `0x${string}`[])[0]!;
-    expect(inner.slice(2, 10)).toBe(exactInputSingleV2Selector);
-    const innerDecoded = decodeFunctionData({ abi: exactInputSingleAbi, data: inner });
-    expect((innerDecoded.args[0] as unknown as unknown[]).length).toBe(7);
+    // USDG leg uses the ACTIVE chain's SwapRouter02 encoding (8-field canonical
+    // on Base, 7-field on Robinhood's fork).
+    if (V3_SWAP_ROUTER_ENCODING === "canonical-8f") {
+      expect(inner.slice(2, 10)).toBe(sel.exactInputSingleCanonical.slice(2));
+      const innerDecoded = decodeFunctionData({ abi: exactInputSingleCanonicalAbi, data: inner });
+      expect((innerDecoded.args[0] as unknown as unknown[]).length).toBe(8);
+    } else {
+      expect(inner.slice(2, 10)).toBe(exactInputSingleV2Selector);
+      const innerDecoded = decodeFunctionData({ abi: exactInputSingleAbi, data: inner });
+      expect((innerDecoded.args[0] as unknown as unknown[]).length).toBe(7);
+    }
 
     // ordering: eth_call dry-run of the swap precedes its broadcast
     const swapCall = m.rpcLog.findIndex((e) => e.method === "eth_call" && e.to === addr(SWAP_ROUTER_02));

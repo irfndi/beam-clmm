@@ -85,10 +85,14 @@ describe("ConfigService STABLECOIN_MINTS", () => {
     vi.unstubAllEnvs();
   });
 
-  it("defaults to the verified USDG stablecoin mint when unset", async () => {
+  it("defaults to the ACTIVE chain's canonical stablecoin mint when unset", async () => {
     const cfg = await loadConfig();
     // Lowercase-normalized: matches the EVM adapter's lowercase token mints.
-    expect(cfg.stablecoinMints).toEqual(new Set(["0x5fc5360d0400a0fd4f2af552add042d716f1d168"]));
+    // Default = the active BEAM_CHAIN's stablecoin (USDC on Base, USDG on
+    // Robinhood — from chain-registry). Resolve it dynamically so the test
+    // holds whichever chain is active.
+    const { DEFAULT_STABLECOIN_MINT } = await import("../engine/chain-registry.js");
+    expect(cfg.stablecoinMints).toEqual(new Set([DEFAULT_STABLECOIN_MINT.toLowerCase()]));
   });
 
   it("normalizes config entries to lowercase for case-insensitive matching", async () => {

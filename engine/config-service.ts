@@ -13,6 +13,12 @@ import { createLogger } from "./logger.js";
 import { applyDbConfigOverrides, readDbConfigOverrides } from "./db-config.js";
 import { ENTRY_SIZE_CAP_USD, ENTRY_SIZE_FLOOR_USD, ENTRY_SIZE_TVL_FRACTION } from "./entry-sizing.js";
 import { MIN_NATIVE_FOR_ENTRY_WEI, MIN_NATIVE_FOR_GAS_WEI } from "./constants.js";
+import {
+  LIVE_ENTRY_V4_ENABLED_CHAIN,
+  DEFAULT_STABLECOIN_MINT,
+  DEFAULT_RPC,
+  ACTIVE_CHAIN_KEY,
+} from "./chain-registry.js";
 
 const logger = createLogger("ConfigService");
 
@@ -703,17 +709,21 @@ const loadConfig = Effect.gen(function* () {
   const walletPrivateKey = yield* Config.string("WALLET_PRIVATE_KEY").pipe(
     Effect.orElseSucceed(() => loadKeystoreSecretKeyHex() ?? ""),
   );
-  // `RPC_URL` is canonical; `ROBINHOOD_RPC_URL` is the legacy name `beam
-  // setup` has always written and AGENTS.md documents. Accept both so a user
-  // who sets the documented name is not silently ignored.
+  // RPC resolution (chain-aware): the ACTIVE chain's own var wins first
+  // (e.g. BEAM_BASE_RPC_URL / legacy BEAM_ROBINHOOD_RPC_URL), then the generic
+  // RPC_URL, then the legacy ROBINHOOD_RPC_URL (for existing setups), then the
+  // ACTIVE chain's default RPC from chain-registry.
   const rpcUrlOr = (name: string) =>
     Config.string(name).pipe(Effect.catch(() => Effect.succeed("")));
+  const chainRpcVar = `BEAM_${ACTIVE_CHAIN_KEY.toUpperCase()}_RPC_URL`;
   const rpcUrl = yield* Effect.gen(function* () {
+    const chainVar = yield* rpcUrlOr(chainRpcVar);
+    if (chainVar) return chainVar;
     const primary = yield* rpcUrlOr("RPC_URL");
     if (primary) return primary;
     const legacy = yield* rpcUrlOr("ROBINHOOD_RPC_URL");
     if (legacy) return legacy;
-    return isTest ? "https://example.com" : "https://rpc.mainnet.chain.robinhood.com";
+    return isTest ? "https://example.com" : DEFAULT_RPC;
   });
   const rpcFallbackUrl = yield* Config.string("RPC_FALLBACK_URL").pipe(
     Effect.orElseSucceed(() => ""),
@@ -892,9 +902,9 @@ const loadConfig = Effect.gen(function* () {
   // empty value (STABLECOIN_MINTS=) is present, not absent, so it disables the
   // allowlist (empty set). Entries are pubkey-validated below, fail-closed.
   const stablecoinMintsRaw = yield* Config.string("STABLECOIN_MINTS").pipe(
-    // Default = USDG (Paxos Global Dollar), the canonical stablecoin on
-    // Robinhood Chain (verified 2026-07).
-    Effect.orElseSucceed(() => "0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168"),
+    // Default = the ACTIVE chain's canonical stablecoin mint (USDG on
+    // Robinhood, USDC on Base — from chain-registry).
+    Effect.orElseSucceed(() => DEFAULT_STABLECOIN_MINT),
   );
   const depegAbsoluteUsd = yield* validatedNumber("DEPEG_ABSOLUTE_USD", 0.001, 0.02);
   const depegRelativePct = yield* validatedNumber("DEPEG_RELATIVE_PCT", 0.001, 0.02);
@@ -919,7 +929,10 @@ const loadConfig = Effect.gen(function* () {
     Effect.orElseSucceed(() => true),
   );
   const entryV4Enabled = yield* Config.boolean("LIVE_ENTRY_V4_ENABLED").pipe(
-    Effect.orElseSucceed(() => true),
+    // Default = the ACTIVE chain's support for live v4 ENTERs (from
+    // chain-registry): Base's official v4 PM is proven (true), Robinhood's
+    // fork PM rejects v4 mints (false). An explicit env value overrides.
+    Effect.orElseSucceed(() => LIVE_ENTRY_V4_ENABLED_CHAIN),
   );
   const liveEntryNativeLegOnly = yield* Config.boolean("LIVE_ENTRY_NATIVE_LEG_ONLY").pipe(
     Effect.orElseSucceed(() => false),

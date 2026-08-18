@@ -60,26 +60,47 @@ interface AmountsInRange {
   amount1: bigint;
 }
 
-// ─── Robinhood Chain verified addresses (2026-07; Uniswap deployment docs +
-//     Blockscout cross-check). Do NOT assume other-chain addresses — the
-//     Uniswap docs explicitly warn deployments differ per chain.
-export const CHAIN_ID = 4663;
-export const DEFAULT_RPC = "https://rpc.mainnet.chain.robinhood.com";
-export const V3_FACTORY: Address = getAddress("0x1f7d7550b1b028f7571e69a784071f0205fd2efa");
-export const V3_NPM: Address = getAddress("0x73991a25c818bf1f1128deaab1492d45638de0d3");
-export const V3_TICK_LENS: Address = getAddress("0x7dfd4f31be6814d2906bde155c3e1b146eac1468");
-export const V4_POSITION_MANAGER: Address = getAddress(
-  "0x58daec3116aae6d93017baaea7749052e8a04fa7",
-);
-export const V4_STATE_VIEW: Address = getAddress("0xF3334192D15450CdD385c8B70e03f9A6bD9E673b");
-// Official 4663 deployments (developers.uniswap.org/deployments.json, 2026-07-15).
-export const UNIVERSAL_ROUTER: Address = getAddress("0x06AfBA43Fd06227fA663b0DAecF536f6EaA6bf99");
-export const V3_SWAP_ROUTER_02: Address = getAddress(
-  "0xCaf681a66D020601342297493863E78C959E5cb2",
-);
-// v3 pools on Robinhood Chain are WETH-paired (native ETH must be wrapped for
-// v3; v4 treats address-zero as a first-class currency). Verified 2026-07.
-export const WETH9: Address = getAddress("0x0Bd7D308f8E1639FAb988df18A8011f41EAcAD73");
+// ─── Chain selection ─────────────────────────────────────────────────────────
+// The chain is a RUNTIME selection driven by BEAM_CHAIN (default "base"), with
+// all Uniswap deployment addresses and the viem chain object resolved from
+// chain-registry.ts. Robinhood is no longer the default — Base is. Paper
+// trading works on any registered chain; live trading needs a funded key on
+// the selected chain. The values are both imported (for local use) and
+// re-exported (so downstream imports of CHAIN_ID etc. keep resolving).
+import {
+  CHAIN_ID,
+  DEFAULT_RPC,
+  ROBINHOOD_CHAIN,
+  V3_FACTORY,
+  V3_NPM,
+  V3_TICK_LENS,
+  V4_POSITION_MANAGER,
+  V4_STATE_VIEW,
+  UNIVERSAL_ROUTER,
+  V3_SWAP_ROUTER_02,
+  V3_SWAP_ROUTER_ENCODING,
+  WETH9,
+} from "./chain-registry.js";
+export {
+  CHAIN_ID,
+  DEFAULT_RPC,
+  ROBINHOOD_CHAIN,
+  V3_FACTORY,
+  V3_NPM,
+  V3_TICK_LENS,
+  V4_POSITION_MANAGER,
+  V4_STATE_VIEW,
+  UNIVERSAL_ROUTER,
+  V3_SWAP_ROUTER_02,
+  WETH9,
+  DEFAULT_STABLECOIN_MINT,
+  GECKO_NETWORK_SLUG,
+  LIVE_ENTRY_V4_ENABLED_CHAIN,
+  listChains,
+  getChainDeployment,
+  BEAM_CHAIN_NAME,
+  ACTIVE_CHAIN_KEY,
+} from "./chain-registry.js";
 
 /**
  * v4 pools have no per-pool contract address — identity is the PoolKey struct
@@ -259,13 +280,7 @@ const v3SwapEventTopic = keccak256(
   toHex("Swap(address,address,int256,int256,uint160,uint128,int24)"),
 ).toLowerCase();
 
-/** viem chain object for wallet transactions on 4663. */
-export const ROBINHOOD_CHAIN = {
-  id: CHAIN_ID,
-  name: "Robinhood Chain",
-  nativeCurrency: { name: "Ether", symbol: "ETH", decimals: 18 },
-  rpcUrls: { default: { http: [DEFAULT_RPC] } },
-} as const;
+/** viem chain object for the ACTIVE chain (re-exported values resolve above). */
 
 // ─── Pure calldata builders + quote math (network-free, unit-tested) ─────────
 
@@ -639,6 +654,41 @@ export function buildUnwrapWETH9Calldata(amountMinimum: bigint, recipient: Addre
     abi: swapRouter02Abi,
     functionName: "unwrapWETH9",
     args: [amountMinimum, getAddress(recipient)],
+  });
+}
+
+/** v3 SwapRouter02 exactInputSingle calldata for the ACTIVE chain. Canonical
+ *  deployments (Base) use the 8-field struct WITH deadline (selector
+ *  0x414bf389); Robinhood's fork uses the 7-field struct WITHOUT deadline
+ *  (selector 0x04e45aaf). ALL v3 swap paths must route through this so the
+ *  encoding matches the deployed router — a mismatch reverts every swap. */
+export function buildV3SwapCalldataForChain(args: {
+  readonly tokenIn: Address;
+  readonly tokenOut: Address;
+  readonly fee: number;
+  readonly recipient: Address;
+  readonly amountIn: bigint;
+  readonly amountOutMinimum: bigint;
+  readonly deadline?: number;
+}): Hex {
+  if (V3_SWAP_ROUTER_ENCODING === "canonical-8f") {
+    return buildV3ExactInputSingleCalldata({
+      tokenIn: args.tokenIn,
+      tokenOut: args.tokenOut,
+      fee: args.fee,
+      recipient: args.recipient,
+      deadline: args.deadline ?? Math.floor(Date.now() / 1000) + 300,
+      amountIn: args.amountIn,
+      amountOutMinimum: args.amountOutMinimum,
+    });
+  }
+  return buildV3ExactInputSingleCalldataV2({
+    tokenIn: args.tokenIn,
+    tokenOut: args.tokenOut,
+    fee: args.fee,
+    recipient: args.recipient,
+    amountIn: args.amountIn,
+    amountOutMinimum: args.amountOutMinimum,
   });
 }
 
@@ -1764,7 +1814,7 @@ export const AdapterLive = Layer.effect(AdapterService,
           deadline,
         });
       }
-      return buildV3ExactInputSingleCalldataV2({
+      return buildV3SwapCalldataForChain({
         tokenIn: isNative(tokenIn) ? WETH9 : getAddress(tokenIn),
         tokenOut: isNative(tokenOut) ? WETH9 : getAddress(tokenOut),
         fee: route.fee,
@@ -1813,13 +1863,14 @@ export const AdapterLive = Layer.effect(AdapterService,
       deadline: number,
     ): Hex {
       if (route.router === "swaprouter02") {
-        return buildV3ExactInputSingleCalldataV2({
+        return buildV3SwapCalldataForChain({
           tokenIn: routerInputAddress(tokenIn, "swaprouter02"),
           tokenOut: routerInputAddress(tokenOut, "swaprouter02"),
           fee: route.fee,
           recipient: requireWallet(),
           amountIn,
           amountOutMinimum,
+          deadline,
         });
       }
       return buildUniversalRouterV4SwapCalldata({
@@ -3458,7 +3509,7 @@ export const AdapterLive = Layer.effect(AdapterService,
                 if (destAddr === NATIVE_MINT.toLowerCase() && route.router === "swaprouter02") {
                   // v3 swap outputs WETH; unwrap to native in one multicall
                   // (the swapUSDCForNative pattern, v2 encoding).
-                  const swapData = buildV3ExactInputSingleCalldataV2({
+                  const swapData = buildV3SwapCalldataForChain({
                     tokenIn: routerInputAddress(leg.mint, "swaprouter02"),
                     tokenOut: WETH9,
                     fee: route.fee,
@@ -3624,7 +3675,7 @@ export const AdapterLive = Layer.effect(AdapterService,
               return;
             }
             const amountOutMinimum = (outAmountAtomic * 9900n) / 10000n; // 1% slippage
-            const swapData = buildV3ExactInputSingleCalldataV2({
+            const swapData = buildV3SwapCalldataForChain({
               tokenIn: STABLECOIN_MINT,
               tokenOut: WETH9,
               fee: route.fee,
@@ -3738,7 +3789,7 @@ export const AdapterLive = Layer.effect(AdapterService,
               // v3 swap outputs WETH; unwrap to native so the settlement
               // actually lands ETH (gas-usable), one multicall — the
               // convertClaimedFees / swapUSDCForNative pattern.
-              const swapData = buildV3ExactInputSingleCalldataV2({
+              const swapData = buildV3SwapCalldataForChain({
                 tokenIn: routerInputAddress(quote.request.inputMint, "swaprouter02"),
                 tokenOut: WETH9,
                 fee: raw.fee as number,
@@ -3752,7 +3803,7 @@ export const AdapterLive = Layer.effect(AdapterService,
               );
               calldata = buildSwapRouterMulticallCalldata([swapData, unwrapData]);
             } else {
-              calldata = buildV3ExactInputSingleCalldataV2({
+              calldata = buildV3SwapCalldataForChain({
                 tokenIn: routerInputAddress(quote.request.inputMint, "swaprouter02"),
                 tokenOut: routerInputAddress(quote.request.outputMint, "swaprouter02"),
                 fee: raw.fee as number,
