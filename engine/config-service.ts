@@ -45,6 +45,11 @@ export interface AppConfig {
   readonly walletPrivateKey: string;
   readonly rpcUrl: string;
   readonly rpcFallbackUrl: string;
+  /** RPC transport retries on transient failures (rate limits/5xx/timeouts).
+   *  Public RPCs (Base mainnet.base.org, etc.) throttle heavy pool scans with
+   *  429s — more retries keeps paper/live scanning healthy on shared endpoints.
+   *  Env `RPC_RETRY_COUNT`; default 4. */
+  readonly rpcRetryCount?: number;
   readonly paperTrading: boolean;
   readonly autonomousTokenMode: AutonomousTokenMode;
   readonly settlementAsset: SettlementAsset;
@@ -728,6 +733,7 @@ const loadConfig = Effect.gen(function* () {
   const rpcFallbackUrl = yield* Config.string("RPC_FALLBACK_URL").pipe(
     Effect.orElseSucceed(() => ""),
   );
+  const rpcRetryCount = yield* validatedNumber("RPC_RETRY_COUNT", 0, 4);
   const paperTrading = yield* Config.boolean("PAPER_TRADING").pipe(
     Effect.orElseSucceed(() => true),
   );
@@ -1668,6 +1674,7 @@ const loadConfig = Effect.gen(function* () {
     walletPrivateKey,
     rpcUrl,
     rpcFallbackUrl,
+    rpcRetryCount,
     paperTrading,
     autonomousTokenMode,
     settlementAsset,

@@ -9,6 +9,7 @@ import {
   getAddress,
   getContract,
   http,
+  fallback,
   keccak256,
   parseAbi,
   toHex,
@@ -1053,14 +1054,20 @@ export const AdapterLive = Layer.effect(AdapterService,
   Effect.gen(function* () {
     const config = yield* ConfigService;
     const rpcUrl = config.rpcUrl || DEFAULT_RPC;
-    // Generous transport timeout: the public Robinhood Chain RPC is slow
-    // under load and heavy pool-state reads (StateView slot0/liquidity) can
-    // exceed viem's default 10s — every timeout threw evaluatePool, counted
-    // the pool as failed + core-data failure, and latched the
-    // core_data_unavailable pause for hours (observed 2026-08-17: failed:30
-    // per cycle starting ~10:06 UTC while simple RPC calls returned fine).
+    // Generous transport timeout + retries: the public RPCs (Base
+    // mainnet.base.org, Robinhood) are slow AND rate-limited under load and
+    // heavy pool-state reads (StateView slot0/liquidity) can exceed viem's
+    // default 10s or hit 429s — every timeout/rate-limit threw evaluatePool,
+    // counted the pool as failed + core-data failure, and latched pauses.
+    // Retries are config-driven (RPC_RETRY_COUNT, default 4) so 429s/5xx on
+    // shared public endpoints don't churn cycles. A configured fallback RPC is
+    // wrapped in a viem fallback() transport for cross-endpoint resilience.
+    const retryCount = config.rpcRetryCount ?? 4;
+    const rawTransport = () => http(rpcUrl, { timeout: 45_000, retryCount: retryCount });
     const publicClient = createPublicClient({
-      transport: http(rpcUrl, { timeout: 45_000 }),
+      transport: config.rpcFallbackUrl
+        ? fallback([rawTransport(), http(config.rpcFallbackUrl, { timeout: 45_000, retryCount })])
+        : rawTransport(),
     });
 
     // Fee-truth two-seat knobs: read the nested SwapMintConfig/ExitProofConfig
