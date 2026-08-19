@@ -1,3 +1,4 @@
+// oxlint-disable anti-slop/no-unknown-parameters, anti-slop/no-unsafe-dictionary-type, anti-slop/no-runtime-typeof -- JSON parser predicates are the I/O boundary for this keyless API.
 import { Effect, Layer } from "effect";
 import { createLogger } from "./logger.js";
 import { GeckoTerminalService } from "./services.js";

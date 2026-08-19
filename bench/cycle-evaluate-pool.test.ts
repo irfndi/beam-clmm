@@ -2,9 +2,12 @@ import { describe, expect, it } from "vitest";
 import { evaluateReplayPool } from "../engine/cycle/evaluate-pool.js";
 import { evaluateRisk } from "../engine/risk-service.js";
 import type { PoolMetrics, PoolState, Position } from "../engine/types.js";
+import type { ReplayEvaluationInput } from "../engine/cycle/evaluate-pool.js";
 
 const metrics: PoolMetrics = {
+  // SAFETY: this fixture supplies only the PoolState fields read by replay evaluation.
   pool: { tvlUsd: 150_000 } as PoolState,
+  // SAFETY: replay tests do not inspect bin contents.
   binArray: {} as PoolMetrics["binArray"],
   tvlVelocity: 0,
   feeIlRatio: 4,
@@ -72,7 +75,7 @@ describe("evaluateReplayPool", () => {
 
   it("[fee-gas-gate] blocks an ENTER whose 7d expected fees cannot cover gas", () => {
     // Measured fees exist but are tiny relative to the round-trip gas cost.
-    const lowFeeInput = {
+    const lowFeeInput: ReplayEvaluationInput = {
       ...base,
       position: undefined,
       openPositions: [],
@@ -84,21 +87,18 @@ describe("evaluateReplayPool", () => {
           ...metrics.pool,
           tvlUsd: 150_000,
           fees24hUsd: 0.2, // $0.20/day on a $9,000 entry → ~$0.08/week < $0.15 gas
-        } as PoolState,
+        },
       },
     };
-    const result = evaluateReplayPool(lowFeeInput as any);
+    const result = evaluateReplayPool(lowFeeInput);
     expect(result.decision.action).toBe("HOLD");
     // The rejection reason is exposed through the decision reasoning (live
     // parity) — verify the gate fired and was not some other gate.
-    expect(
-      result.decision.reasoning?.includes("[fee-gas-gate]") ||
-        (result.decision as any).reasoning !== undefined,
-    ).toBe(true);
+    expect(result.decision.reasoning).toContain("[fee-gas-gate]");
   });
 
   it("[fee-gas-gate] lets a fee-rich pool ENTER (7d fees ≥ gas)", () => {
-    const richFeeInput = {
+    const richFeeInput: ReplayEvaluationInput = {
       ...base,
       position: undefined,
       openPositions: [],
@@ -110,10 +110,10 @@ describe("evaluateReplayPool", () => {
           ...metrics.pool,
           tvlUsd: 150_000,
           fees24hUsd: 50, // $50/day on a $9,000 entry → ~$21/week
-        } as PoolState,
+        },
       },
     };
-    const result = evaluateReplayPool(richFeeInput as any);
+    const result = evaluateReplayPool(richFeeInput);
     expect(result.decision.action).toBe("ENTER");
     expect(result.riskApproved).toBe(true);
   });

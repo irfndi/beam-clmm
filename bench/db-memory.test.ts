@@ -8,13 +8,11 @@ import { createDatabase, hasVecMemoryTable, probeVecAvailability } from "../engi
 import { DbLive } from "../engine/db-service.js";
 import { DbService } from "../engine/services.js";
 
-async function run<T, E, R, E2, R2>(
+async function run<T, E, R, E2>(
   effect: Effect.Effect<T, E, R>,
-  layer: Layer.Layer<R, E2, R2>,
+  layer: Layer.Layer<R, E2, never>,
 ): Promise<T> {
-  return Effect.runPromise(
-    (Effect.provide as any)(effect, layer) as Effect.Effect<T, Error, never>,
-  );
+  return Effect.runPromise(Effect.provide(effect, layer));
 }
 
 /**
@@ -126,9 +124,9 @@ describe("migration 1 creates core tables even when vec0 is missing", () => {
       .query("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'blacklists'")
       .get();
 
-    expect(hasPositions).toBeTruthy();
-    expect(hasAudit).toBeTruthy();
-    expect(hasBlacklists).toBeTruthy();
+    expect(hasPositions).toBeDefined();
+    expect(hasAudit).toBeDefined();
+    expect(hasBlacklists).toBeDefined();
     expect(hasVecMemoryTable(db)).toBe(false);
     db.close();
   });
@@ -406,7 +404,7 @@ describe("probeVecAvailability", () => {
       const result = probeVecAvailability();
       const after = readdirSync(tmpDir);
       expect(after).toEqual(before);
-      expect(typeof result.available).toBe("boolean");
+      expect(result.available).toBeTypeOf("boolean");
     } finally {
       process.chdir(previousCwd);
       rmSync(tmpDir, { recursive: true, force: true });

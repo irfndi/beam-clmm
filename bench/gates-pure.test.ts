@@ -124,9 +124,7 @@ describe("fee persistence (rule 2: reject one-off spikes)", () => {
   });
 
   it("is not persistent for an all-null series", () => {
-    expect(feePersistence([null, null, null, null, null, null, null]).persistent).toBe(
-      false,
-    );
+    expect(feePersistence([null, null, null, null, null, null, null]).persistent).toBe(false);
   });
 
   it("only considers the last windowDays entries", () => {
@@ -136,9 +134,7 @@ describe("fee persistence (rule 2: reject one-off spikes)", () => {
   });
 
   it("works with a single-day window", () => {
-    expect(feePersistence([5], { windowDays: 1, minPositiveDays: 1 }).persistent).toBe(
-      true,
-    );
+    expect(feePersistence([5], { windowDays: 1, minPositiveDays: 1 }).persistent).toBe(true);
   });
 
   it("computes the median of an even positive count", () => {
@@ -153,27 +149,21 @@ describe("fee persistence (rule 2: reject one-off spikes)", () => {
   });
 
   it("fails closed on malformed windowDays", () => {
-    expect(feePersistence([1, 1, 1, 1, 1, 1, 1], { windowDays: 0 }).persistent).toBe(
-      false,
-    );
+    expect(feePersistence([1, 1, 1, 1, 1, 1, 1], { windowDays: 0 }).persistent).toBe(false);
     expect(feePersistence([1, 1, 1, 1, 1, 1, 1], { windowDays: Number.NaN }).persistent).toBe(
       false,
     );
   });
 
   it("fails closed on malformed minPositiveDays", () => {
-    expect(feePersistence([1, 1, 1, 1, 1, 1, 1], { minPositiveDays: 0 }).persistent).toBe(
-      false,
-    );
+    expect(feePersistence([1, 1, 1, 1, 1, 1, 1], { minPositiveDays: 0 }).persistent).toBe(false);
   });
 
   it("fails closed on malformed maxSpikeRatio", () => {
-    expect(feePersistence([1, 1, 1, 1, 1, 1, 1], { maxSpikeRatio: 0 }).persistent).toBe(
+    expect(feePersistence([1, 1, 1, 1, 1, 1, 1], { maxSpikeRatio: 0 }).persistent).toBe(false);
+    expect(feePersistence([1, 1, 1, 1, 1, 1, 1], { maxSpikeRatio: Number.NaN }).persistent).toBe(
       false,
     );
-    expect(
-      feePersistence([1, 1, 1, 1, 1, 1, 1], { maxSpikeRatio: Number.NaN }).persistent,
-    ).toBe(false);
   });
 });
 
@@ -259,9 +249,7 @@ describe("gas reserve (rule 6: max(10% allocation, emergency-exit minimum))", ()
 
   it("computes the max of equal reserves once", () => {
     // reservePct 30 -> 300; emergency 300 -> max 300
-    expect(entryBudgetWei(1_000n, { reservePct: 30, emergencyExitWei: 300n })).toBe(
-      700n,
-    );
+    expect(entryBudgetWei(1_000n, { reservePct: 30, emergencyExitWei: 300n })).toBe(700n);
   });
 
   it("supports reservePct 0 (only the emergency floor applies)", () => {
@@ -300,10 +288,8 @@ describe("gas reserve (rule 6: max(10% allocation, emergency-exit minimum))", ()
 
   it("keeps full wei precision (no float rounding)", () => {
     const balance = 10n ** 24n;
-    expect(entryBudgetWei(balance)).toBe((9n * 10n ** 23n));
-    expect(entryBudgetWei(balance, { emergencyExitWei: 7n * 10n ** 22n })).toBe(
-      9n * 10n ** 23n,
-    );
+    expect(entryBudgetWei(balance)).toBe(9n * 10n ** 23n);
+    expect(entryBudgetWei(balance, { emergencyExitWei: 7n * 10n ** 22n })).toBe(9n * 10n ** 23n);
   });
 
   it("never returns a negative spendable", () => {

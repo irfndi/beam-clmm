@@ -1,3 +1,4 @@
+/* eslint-disable anti-slop/no-unknown-parameters, anti-slop/require-safety-comment-for-type-assertion */
 import { Database } from "bun:sqlite";
 import { load as loadVec } from "sqlite-vec";
 import path from "path";
@@ -939,7 +940,9 @@ const MIGRATIONS: ReadonlyArray<Migration> = [
       // v22 and earlier constrained destination_asset to 'SOL' (Solana era).
       // SQLite cannot alter a CHECK constraint — rebuild the table. The new
       // CHECK accepts the native gas token of Robinhood Chain (ETH).
-      const existing = db.query("SELECT sql FROM sqlite_master WHERE type='table' AND name='settlement_jobs'").get() as { sql: string } | undefined;
+      const existing = db
+        .query("SELECT sql FROM sqlite_master WHERE type='table' AND name='settlement_jobs'")
+        .get() as { sql: string } | undefined;
       if (existing && existing.sql.includes("'SOL'")) {
         db.exec("ALTER TABLE settlement_jobs RENAME TO settlement_jobs_old");
         db.exec(`

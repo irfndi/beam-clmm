@@ -578,8 +578,9 @@ async function runBacktest(argv: ReadonlyArray<string>): Promise<void> {
 export { runBacktest };
 
 const isDirectBacktestExecution =
-  typeof Bun !== "undefined" &&
-  (Bun.main?.endsWith("ops/backtest.ts") || Bun.main?.endsWith("ops/backtest.js"));
+  Boolean(globalThis.Bun) &&
+  (globalThis.Bun?.main?.endsWith("ops/backtest.ts") ||
+    globalThis.Bun?.main?.endsWith("ops/backtest.js"));
 if (isDirectBacktestExecution) {
   if (process.env.BEAM_ALLOW_DIRECT !== "true") {
     console.error("Error: Direct backtest execution is not allowed.");

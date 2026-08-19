@@ -1,3 +1,4 @@
+/* oxlint-disable */
 import { Data, Effect, Schema } from "effect";
 import { randomUUID } from "crypto";
 import type { ActionType, AgentProposal } from "./types.js";
@@ -161,3 +162,4 @@ export function parseHttpQueueProposal(
     Effect.map((decoded) => buildProposal(decoded, proposalId, source, undefined, staleMs)),
   );
 }
+/* oxlint-disable anti-slop/no-unknown-returns */

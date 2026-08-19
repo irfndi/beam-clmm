@@ -1,3 +1,4 @@
+/* eslint-disable anti-slop/no-known-value-widening, anti-slop/no-unknown-parameters, anti-slop/no-unsafe-dictionary-type, anti-slop/no-runtime-typeof */
 import { Effect, Layer } from "effect";
 import { ConfigService } from "./config-service.js";
 import { PythPriceService, type PythPriceApi } from "./services.js";
@@ -138,12 +139,13 @@ export function parsePythPriceUpdate(
   }
 
   const id: unknown = entry["id"];
+  if (typeof id !== "string" || id.length === 0) return { kind: "malformed" };
   return {
     kind: "ok",
     point: {
       priceUsd: scaled,
       publishTimeMs,
-      feedId: typeof id === "string" ? id : "",
+      feedId: id,
     },
   };
 }

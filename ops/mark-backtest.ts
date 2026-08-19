@@ -76,6 +76,29 @@ interface PoolResult {
   finalValueUsd: number;
 }
 
+interface PoolRow {
+  readonly p: string;
+}
+
+interface SchemaRow {
+  readonly name: string;
+}
+
+interface SnapshotRow {
+  readonly timestamp: number;
+  readonly current_price: number;
+  readonly fees_24h_usd: number;
+  readonly tvl_usd: number;
+  readonly active_bin_id: number;
+  readonly drawdown24h: number | null;
+}
+
+interface BacktestArgs {
+  dbPath: string;
+  days: number;
+  sweep: boolean;
+}
+
 const DEFAULT_CONFIG: Config = {
   portfolioUsd: 10_000,
   maxPositionUsd: 1_500,
@@ -211,7 +234,8 @@ export function simulatePool(snaps: readonly Snapshot[], cfg: Config): PoolResul
     }
 
     let exitReason: string | null = null;
-    const yieldDecayed = avgYield !== null && avgYield > 0 && yieldPct < avgYield * cfg.yieldDecayFraction;
+    const yieldDecayed =
+      avgYield !== null && avgYield > 0 && yieldPct < avgYield * cfg.yieldDecayFraction;
     if (dd < -cfg.drawdownExitPct) exitReason = `drawdown ${(dd * 100).toFixed(1)}%`;
     else if (yieldDecayed) exitReason = `yield ${yieldPct.toFixed(1)}%/d decayed`;
     else if (cfg.stopLossEnabled) {
@@ -254,7 +278,7 @@ export function simulatePool(snaps: readonly Snapshot[], cfg: Config): PoolResul
 }
 
 // ─── CLI ──────────────────────────────────────────────────────────────────────
-function parseArgs(argv: string[]): { dbPath: string; days: number; sweep: boolean } {
+function parseArgs(argv: string[]): BacktestArgs {
   const out = { dbPath: "./beam.db", days: 7, sweep: false };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]!;
@@ -268,18 +292,21 @@ function parseArgs(argv: string[]): { dbPath: string; days: number; sweep: boole
 const args = parseArgs(process.argv.slice(2));
 const db = new Database(args.dbPath);
 
-const pools = db
+const poolRows = db
   .query(`SELECT DISTINCT pool_address AS p FROM positions ORDER BY pool_address`)
-  .all()
-  .map((r) => (r as { p: string }).p) as string[];
+  .all();
+// SAFETY: the SELECT aliases its sole text column to `p`.
+const pools = poolRows as PoolRow[];
+const poolAddresses = pools.map((row) => row.p);
 
 const endMs = Date.now();
 const startMs = endMs - args.days * 24 * 3_600_000;
 
 const hasDrawdownColumn = (() => {
   try {
-    const cols = db.query("PRAGMA table_info(pool_snapshots)").all() as Array<{ name: string }>;
-    return cols.some((c) => c.name === "drawdown24h");
+    // SAFETY: PRAGMA table_info always returns rows with a text `name` column.
+    const cols = db.query("PRAGMA table_info(pool_snapshots)").all() as SchemaRow[];
+    return cols.some((row) => row.name === "drawdown24h");
   } catch {
     return false;
   }
@@ -293,27 +320,15 @@ function loadSnapshots(pool: string): Snapshot[] {
     : `SELECT timestamp, current_price, fees_24h_usd, tvl_usd, active_bin_id, NULL AS drawdown24h
        FROM pool_snapshots WHERE pool_address=? AND timestamp>=? AND timestamp<=?
        ORDER BY timestamp`;
-  return db
-    .query(select)
-    .all(pool, startMs, endMs)
-    .map((r) => {
-      const x = r as {
-        timestamp: number;
-        current_price: number;
-        fees_24h_usd: number;
-        tvl_usd: number;
-        active_bin_id: number;
-        drawdown24h: number | null;
-      };
-      return {
-        timestamp: x.timestamp,
-        currentPrice: x.current_price,
-        fees24hUsd: x.fees_24h_usd,
-        tvlUsd: x.tvl_usd,
-        activeBinId: x.active_bin_id,
-        drawdown24h: x.drawdown24h,
-      };
-    });
+  // SAFETY: the SELECT supplies exactly these numeric columns and a nullable drawdown alias.
+  return (db.query(select).all(pool, startMs, endMs) as SnapshotRow[]).map((row) => ({
+    timestamp: row.timestamp,
+    currentPrice: row.current_price,
+    fees24hUsd: row.fees_24h_usd,
+    tvlUsd: row.tvl_usd,
+    activeBinId: row.active_bin_id,
+    drawdown24h: row.drawdown24h,
+  }));
 }
 
 function aggregate(results: PoolResult[]): PoolResult {
@@ -345,7 +360,7 @@ if (args.sweep) {
   for (const dd of [3, 5, 7, 10]) {
     for (const yf of [0.5, 0.7, 1.0]) {
       const cfg: Config = { ...DEFAULT_CONFIG, drawdownExitPct: dd, yieldDecayFraction: yf };
-      const results = pools.map((p) => simulatePool(loadSnapshots(p), { ...cfg }));
+      const results = poolAddresses.map((p) => simulatePool(loadSnapshots(p), { ...cfg }));
       const total = aggregate(results);
       rows.push(
         `dd<${String(dd).padStart(2)}%  yield<${yf.toFixed(1).padStart(3)}x  ` +
@@ -376,7 +391,7 @@ if (args.sweep) {
   for (const [label, overrides] of variants) {
     const cfg: Config =
       label === "ALL fixes" ? { ...DEFAULT_CONFIG } : { ...baseline, ...overrides };
-    const results = pools.map((p) => simulatePool(loadSnapshots(p), cfg));
+    const results = poolAddresses.map((p) => simulatePool(loadSnapshots(p), cfg));
     const total = aggregate(results);
     rows.push(
       `${label.padEnd(22)}  trades=${String(total.trades).padStart(3)}  fees=$${total.feesUsd.toFixed(0).padStart(5)}  ` +
@@ -387,7 +402,7 @@ if (args.sweep) {
   console.log(rows.join("\n"));
 } else {
   const cfg = DEFAULT_CONFIG;
-  const results = pools.map((p) => {
+  const results = poolAddresses.map((p) => {
     const r = simulatePool(loadSnapshots(p), cfg);
     r.pool = p;
     return r;

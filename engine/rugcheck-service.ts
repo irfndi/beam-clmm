@@ -1,3 +1,4 @@
+// oxlint-disable anti-slop/no-unknown-parameters, anti-slop/no-unsafe-dictionary-type, anti-slop/no-runtime-typeof -- JSON parser predicates are the I/O boundary for RugCheck responses.
 import { createLogger } from "./logger.js";
 
 /**
@@ -104,10 +105,8 @@ export function parseRugCheckReport(raw: unknown): RugCheckReport | null {
   const mint = typeof raw["mint"] === "string" ? raw["mint"] : "";
   if (mint.length === 0) return null;
 
-  const token = isObject(raw["token"]) ? (raw["token"] as Record<string, unknown>) : null;
-  const tokenMeta = isObject(raw["tokenMeta"])
-    ? (raw["tokenMeta"] as Record<string, unknown>)
-    : null;
+  const token = isObject(raw["token"]) ? raw["token"] : null;
+  const tokenMeta = isObject(raw["tokenMeta"]) ? raw["tokenMeta"] : null;
 
   const risks: RugCheckRisk[] = [];
   if (Array.isArray(raw["risks"])) {

@@ -19,20 +19,15 @@ export interface GasReserveOptions {
  * default. A negative `emergencyExitWei` is clamped to 0n. The result is
  * never negative and never NaN (bigint).
  */
-export function entryBudgetWei(
-  nativeBalanceWei: bigint,
-  options: GasReserveOptions = {},
-): bigint {
+export function entryBudgetWei(nativeBalanceWei: bigint, options: GasReserveOptions = {}): bigint {
   if (nativeBalanceWei <= 0n) return 0n;
 
   const reservePct = options.reservePct ?? 10;
   const emergencyExitWei = options.emergencyExitWei ?? 0n;
-  const pct =
-    Number.isFinite(reservePct) && reservePct >= 0 ? Math.floor(reservePct) : 10;
+  const pct = Number.isFinite(reservePct) && reservePct >= 0 ? Math.floor(reservePct) : 10;
 
   const reserveByPct = (nativeBalanceWei * BigInt(pct)) / 100n;
-  const emergency =
-    emergencyExitWei < 0n ? 0n : emergencyExitWei;
+  const emergency = emergencyExitWei < 0n ? 0n : emergencyExitWei;
   const reserve = reserveByPct > emergency ? reserveByPct : emergency;
 
   const spendable = nativeBalanceWei - reserve;

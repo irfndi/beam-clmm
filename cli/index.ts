@@ -23,10 +23,7 @@ import { getCurrentVersion } from "../engine/version.js";
 
 const program = new Command();
 
-program
-  .name("beam")
-  .description("Beam — autonomous liquidity agent")
-  .version(getCurrentVersion());
+program.name("beam").description("Beam — autonomous liquidity agent").version(getCurrentVersion());
 
 program.addCommand(setupCommand);
 program.addCommand(registerCommand);

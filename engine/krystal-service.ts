@@ -1,3 +1,4 @@
+// oxlint-disable anti-slop/no-unknown-parameters, anti-slop/no-unsafe-dictionary-type, anti-slop/no-runtime-typeof -- JSON parser predicates are the I/O boundary for Krystal responses.
 import { Effect, Layer } from "effect";
 import { KrystalService, type KrystalApi } from "./services.js";
 import { registerV4Pool, type V4PoolKey } from "./adapter-service.js";
@@ -5,6 +6,7 @@ import type { PoolState } from "./types.js";
 import { NATIVE_MINT } from "./constants.js";
 import { createLogger } from "./logger.js";
 import { ACTIVE_CHAIN_ID } from "./chain-registry.js";
+import { isAddress, type Address } from "viem";
 
 /**
  * Krystal LP explorer — the primary pool-stats source on Robinhood Chain.
@@ -96,14 +98,8 @@ export function parseKrystalPool(raw: unknown): KrystalPoolStats | null {
     protocolFee: readFiniteNumber(raw.protocolFee) ?? 0,
     token0Symbol: typeof token0.symbol === "string" ? token0.symbol : "",
     token1Symbol: typeof token1.symbol === "string" ? token1.symbol : "",
-    token0Address:
-      typeof token0.address === "string"
-        ? normalizeNativeAddress(token0.address)
-        : "",
-    token1Address:
-      typeof token1.address === "string"
-        ? normalizeNativeAddress(token1.address)
-        : "",
+    token0Address: typeof token0.address === "string" ? normalizeNativeAddress(token0.address) : "",
+    token1Address: typeof token1.address === "string" ? normalizeNativeAddress(token1.address) : "",
   };
 }
 
@@ -111,9 +107,7 @@ export function parseKrystalPool(raw: unknown): KrystalPoolStats | null {
  *  0xeeee…; the engine's isNative checks address(0). Lowercased. */
 function normalizeNativeAddress(address: string): string {
   const lower = address.toLowerCase();
-  return lower === "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
-    ? NATIVE_MINT
-    : lower;
+  return lower === "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee" ? NATIVE_MINT : lower;
 }
 
 // ─── Pool enrichment (source-aware) ──────────────────────────────────────────
@@ -205,16 +199,20 @@ export async function fetchKrystalUniverse(
         const token0 = isObject(entry.token0) ? entry.token0 : null;
         const token1 = isObject(entry.token1) ? entry.token1 : null;
         if (token0 !== null && token1 !== null && typeof token0.address === "string") {
-          const normalize = (addr: string): `0x${string}` =>
-            addr.toLowerCase() === "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
-              ? NATIVE_MINT
-              : (addr.toLowerCase() as `0x${string}`);
+          const normalize = (addr: string): Address | null => {
+            if (addr.toLowerCase() === "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee") {
+              return NATIVE_MINT;
+            }
+            const normalized = addr.toLowerCase();
+            return isAddress(normalized) ? normalized : null;
+          };
+          const currency0 = normalize(token0.address);
+          const currency1 =
+            typeof token1.address === "string" ? normalize(token1.address) : NATIVE_MINT;
+          if (currency0 === null || currency1 === null) continue;
           const key: V4PoolKey = {
-            currency0: normalize(token0.address),
-            currency1:
-              typeof token1.address === "string"
-                ? normalize(token1.address)
-                : (NATIVE_MINT as `0x${string}`),
+            currency0,
+            currency1,
             fee: Math.max(0, Math.round((stats.lpFee || stats.feeTier) * 10_000)),
             // Cosmetic: the chain convention is tickSpacing 400; only used for
             // binStep display (StateView reads by poolId, not key).
@@ -257,9 +255,7 @@ export const KrystalLive = Layer.succeed(KrystalService, {
         // dropped out of the top-500 keeps its drawdown signal instead of
         // silently disabling the rotation gate mid-crash.
         const last = lastKnownStats.get(addr);
-        return last !== undefined && Date.now() - last.at <= LAST_KNOWN_TTL_MS
-          ? last.stats
-          : null;
+        return last !== undefined && Date.now() - last.at <= LAST_KNOWN_TTL_MS ? last.stats : null;
       }),
     ).pipe(Effect.catch(() => Effect.succeed(null))),
   getUniverse: (): Effect.Effect<ReadonlyMap<string, KrystalPoolStats>, never> =>

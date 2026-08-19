@@ -174,10 +174,12 @@ describe("evaluateAgentProposal", () => {
   });
 
   it("rejects an unknown action", () => {
+    // SAFETY: the invalid action is intentional; runtime validation must reject it.
+    // @ts-expect-error the invalid action is the behavior under test.
     const proposal = {
       ...makeProposal({ action: "HOLD", poolAddress: "pool1" }),
       action: "BUY" as const,
-    } as unknown as AgentProposal;
+    } as AgentProposal;
     const result = evaluateAgentProposal(proposal, makeContext(), makeConfig());
     expect(result.valid).toBe(false);
     expect(result.reason).toMatch(/Invalid action/);
@@ -738,6 +740,8 @@ describe("evaluateAgentProposal", () => {
 
 describe("proposal template echo end-to-end", () => {
   const makePromptCtx = (decision: AgentDecision): AgentRuntimeContext =>
+    // SAFETY: the risk test supplies all context fields read by the validator.
+    // @ts-expect-error the fixture intentionally omits fields unused by this prompt test.
     ({
       decision,
       pool: {
@@ -758,7 +762,7 @@ describe("proposal template echo end-to-end", () => {
       warnings: [],
       recentDecisions: [],
       hasOpenPosition: decision.action === "REBALANCE" || decision.action === "EXIT",
-    }) as unknown as AgentRuntimeContext;
+    }) as AgentRuntimeContext;
 
   // Simulate a faithful advisor: take the prompt's response template and
   // substitute only the action and confidence it is proposing.

@@ -75,11 +75,7 @@ await Effect.runPromise(
     }
 
     // 3. Token prices.
-    const prices = yield* adapter.getTokenPrices([
-      STABLECOIN_MINT,
-      WETH9,
-      NATIVE_MINT,
-    ]);
+    const prices = yield* adapter.getTokenPrices([STABLECOIN_MINT, WETH9, NATIVE_MINT]);
     console.log("\n[prices]");
     for (const [mint, price] of Object.entries(prices)) {
       console.log(`  ${mint.slice(0, 8)}… = $${price}`);
@@ -91,12 +87,16 @@ await Effect.runPromise(
       const state = yield* adapter.getPoolState(poolId);
       const bins = yield* adapter.getBinArray(poolId);
       console.log("\n[v4]");
-      console.log(`  poolId ${poolId.slice(0, 12)}… tick=${state.activeBinId} price=${state.currentPrice.toFixed(6)}`);
+      console.log(
+        `  poolId ${poolId.slice(0, 12)}… tick=${state.activeBinId} price=${state.currentPrice.toFixed(6)}`,
+      );
       console.log(`  binArray: activeTick=${bins.activeBinId} reservesKnown=${bins.reservesKnown}`);
     }
 
     // 5. Wallet (paper default — likely no key configured).
-    console.log(`\n[wallet] hasWallet=${adapter.hasWallet()} address=${adapter.getWalletAddress() ?? "none"}`);
+    console.log(
+      `\n[wallet] hasWallet=${adapter.hasWallet()} address=${adapter.getWalletAddress() ?? "none"}`,
+    );
 
     console.log(`\nOK — market detection data layer works (${Date.now() - t0}ms total)`);
   }).pipe(Effect.provide(program)),

@@ -36,34 +36,89 @@ function pool(overrides: Partial<DiscoveredPool>): DiscoveredPool {
 
 describe("marketLegPasses", () => {
   it("always passes stablecoins and SOL", () => {
-    expect(marketLegPasses({ isStableOrSol: true, verified: undefined, freezeDisabled: undefined, holders: undefined }, 100)).toBe(true);
+    expect(
+      marketLegPasses(
+        { isStableOrSol: true, verified: undefined, freezeDisabled: undefined, holders: undefined },
+        100,
+      ),
+    ).toBe(true);
   });
 
   it("passes verified + freeze-disabled regardless of holders", () => {
-    expect(marketLegPasses({ isStableOrSol: false, verified: true, freezeDisabled: true, holders: 0 }, 100)).toBe(true);
+    expect(
+      marketLegPasses(
+        { isStableOrSol: false, verified: true, freezeDisabled: true, holders: 0 },
+        100,
+      ),
+    ).toBe(true);
   });
 
   it("passes verified + freeze-enabled only when holders >= min (or absent)", () => {
-    expect(marketLegPasses({ isStableOrSol: false, verified: true, freezeDisabled: false, holders: 1000 }, 100)).toBe(true);
-    expect(marketLegPasses({ isStableOrSol: false, verified: true, freezeDisabled: false, holders: 50 }, 100)).toBe(false);
-    expect(marketLegPasses({ isStableOrSol: false, verified: true, freezeDisabled: false, holders: undefined }, 100)).toBe(true);
+    expect(
+      marketLegPasses(
+        { isStableOrSol: false, verified: true, freezeDisabled: false, holders: 1000 },
+        100,
+      ),
+    ).toBe(true);
+    expect(
+      marketLegPasses(
+        { isStableOrSol: false, verified: true, freezeDisabled: false, holders: 50 },
+        100,
+      ),
+    ).toBe(false);
+    expect(
+      marketLegPasses(
+        { isStableOrSol: false, verified: true, freezeDisabled: false, holders: undefined },
+        100,
+      ),
+    ).toBe(true);
   });
 
   it("rejects unverified + known freeze-enabled", () => {
-    expect(marketLegPasses({ isStableOrSol: false, verified: false, freezeDisabled: false, holders: 9999 }, 100)).toBe(false);
+    expect(
+      marketLegPasses(
+        { isStableOrSol: false, verified: false, freezeDisabled: false, holders: 9999 },
+        100,
+      ),
+    ).toBe(false);
   });
 
   it("passes unverified + freeze-disabled with enough holders (or absent)", () => {
-    expect(marketLegPasses({ isStableOrSol: false, verified: false, freezeDisabled: true, holders: 500 }, 100)).toBe(true);
-    expect(marketLegPasses({ isStableOrSol: false, verified: false, freezeDisabled: true, holders: 50 }, 100)).toBe(false);
-    expect(marketLegPasses({ isStableOrSol: false, verified: false, freezeDisabled: true, holders: undefined }, 100)).toBe(true);
+    expect(
+      marketLegPasses(
+        { isStableOrSol: false, verified: false, freezeDisabled: true, holders: 500 },
+        100,
+      ),
+    ).toBe(true);
+    expect(
+      marketLegPasses(
+        { isStableOrSol: false, verified: false, freezeDisabled: true, holders: 50 },
+        100,
+      ),
+    ).toBe(false);
+    expect(
+      marketLegPasses(
+        { isStableOrSol: false, verified: false, freezeDisabled: true, holders: undefined },
+        100,
+      ),
+    ).toBe(true);
   });
 });
 
 describe("gateAndRankMarketPools", () => {
   it("ranks admissible pools by composite score (fee APR × liquidity factor)", () => {
-    const lowFees = pool({ address: "low", tvlUsd: 100_000, fees24hUsd: 50, volume24hUsd: 100_000 });
-    const highFees = pool({ address: "high", tvlUsd: 100_000, fees24hUsd: 500, volume24hUsd: 100_000 });
+    const lowFees = pool({
+      address: "low",
+      tvlUsd: 100_000,
+      fees24hUsd: 50,
+      volume24hUsd: 100_000,
+    });
+    const highFees = pool({
+      address: "high",
+      tvlUsd: 100_000,
+      fees24hUsd: 500,
+      volume24hUsd: 100_000,
+    });
     const result = gateAndRankMarketPools([lowFees, highFees], config);
     expect(result.rejected).toHaveLength(0);
     expect(result.ranked.map((r) => r.pool.address)).toEqual(["high", "low"]);
@@ -78,10 +133,7 @@ describe("gateAndRankMarketPools", () => {
 
   it("rejects pools with no 24h fees or non-finite TVL", () => {
     const result = gateAndRankMarketPools(
-      [
-        pool({ address: "nofees", fees24hUsd: 0 }),
-        pool({ address: "nontvl", tvlUsd: Number.NaN }),
-      ],
+      [pool({ address: "nofees", fees24hUsd: 0 }), pool({ address: "nontvl", tvlUsd: Number.NaN })],
       config,
     );
     expect(result.ranked).toHaveLength(0);
@@ -110,8 +162,18 @@ describe("gateAndRankMarketPools", () => {
   });
 
   it("rejects pools with a failing token-safety leg", () => {
-    const badX = pool({ tokenX: "SHIT", tokenXVerified: false, tokenXFreezeDisabled: false, tokenXHolders: 5 });
-    const badY = pool({ tokenY: "SHIT2", tokenYVerified: false, tokenYFreezeDisabled: false, tokenYHolders: 5 });
+    const badX = pool({
+      tokenX: "SHIT",
+      tokenXVerified: false,
+      tokenXFreezeDisabled: false,
+      tokenXHolders: 5,
+    });
+    const badY = pool({
+      tokenY: "SHIT2",
+      tokenYVerified: false,
+      tokenYFreezeDisabled: false,
+      tokenYHolders: 5,
+    });
     const result = gateAndRankMarketPools([badX, badY], config);
     expect(result.ranked).toHaveLength(0);
     expect(result.rejected[0]!.reason).toContain("fails token safety");

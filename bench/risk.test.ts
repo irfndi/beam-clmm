@@ -22,6 +22,7 @@ function makeContext(
     activeBinId: number;
   }> = {},
 ) {
+  // SAFETY: the base risk fixture intentionally supplies the minimal position list shape.
   return {
     openPositions: [] as ReadonlyArray<Position>,
     portfolioValueUsd: 10_000,
@@ -290,6 +291,7 @@ describe("RiskEngine", () => {
         proposal,
         makeContext({
           openPositions: [
+            // SAFETY: this fixture intentionally uses the minimal position shape for risk math.
             {
               poolAddress: "TestPool111111111111111111111111111111111111",
               depositedUsd: 1_000,
@@ -297,7 +299,7 @@ describe("RiskEngine", () => {
               unrealizedPnlUsd: 0,
               feesEarnedUsd: 0,
               openedAt: Date.now(),
-            } as unknown as Position,
+            } as Position,
           ],
         }),
         appConfig,

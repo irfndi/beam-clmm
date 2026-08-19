@@ -19,14 +19,7 @@
 
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { execFileSync } from "node:child_process";
-import {
-  cpSync,
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -81,12 +74,18 @@ function runScript(args: string[]): RunResult {
   try {
     const stdout = execFileSync("bash", ["scripts/publish-skills.sh", ...args], {
       cwd: sandbox,
-      env: { ...(process.env as Record<string, string>), PATH: `${stubDir}:${process.env.PATH}`, STUB_LOG: stubLog },
+      // SAFETY: process.env is copied into a child-process environment whose values are strings.
+      env: {
+        ...(process.env as Record<string, string>),
+        PATH: `${stubDir}:${process.env.PATH}`,
+        STUB_LOG: stubLog,
+      },
       encoding: "utf8",
       timeout: 60_000,
     });
     return { status: 0, stdout, stderr: "" };
   } catch (err) {
+    // SAFETY: execFileSync errors expose these documented subprocess fields.
     const e = err as { status?: number; stdout?: string | Buffer; stderr?: string | Buffer };
     return {
       status: e.status ?? 1,

@@ -203,7 +203,12 @@ export function evaluateReplayPool(input: ReplayEvaluationInput): ReplayEvaluati
   }
 
   // Dust cleanup: dead capital below the dust threshold reclaims its slot.
-  if (!decision && position && input.dustExitUsd > 0 && position.currentValueUsd < input.dustExitUsd) {
+  if (
+    !decision &&
+    position &&
+    input.dustExitUsd > 0 &&
+    position.currentValueUsd < input.dustExitUsd
+  ) {
     decision = {
       action: "EXIT",
       poolAddress,
@@ -253,8 +258,7 @@ export function evaluateReplayPool(input: ReplayEvaluationInput): ReplayEvaluati
   // entry − risk.stopLossPct. Shares the trailing stop's #153 confirm-cycles
   // debounce (a single noisy snapshot read cannot churn a position out).
   if (!decision && position && position.depositedUsd > 0) {
-    const lossPct =
-      (position.currentValueUsd - position.depositedUsd) / position.depositedUsd;
+    const lossPct = (position.currentValueUsd - position.depositedUsd) / position.depositedUsd;
     const breached = lossPct < -input.risk.stopLossPct;
     stopLossBreaches = breached ? input.stopLossBreaches + 1 : 0;
     if (breached && stopLossBreaches >= input.trailingStopConfirmCycles) {
@@ -305,16 +309,14 @@ export function evaluateReplayPool(input: ReplayEvaluationInput): ReplayEvaluati
     const poolPositions = input.openPositions.filter((p) => p.poolAddress === poolAddress);
     let enterRejected: string | null = null;
     if (poolPositions.length >= input.risk.maxPositionsPerPool) {
-      enterRejected =
-        `Per-pool position cap reached (${poolPositions.length}/${input.risk.maxPositionsPerPool}) for pool ${poolAddress}`;
+      enterRejected = `Per-pool position cap reached (${poolPositions.length}/${input.risk.maxPositionsPerPool}) for pool ${poolAddress}`;
     } else if (
       input.ilProtectionEnabled === true &&
       metrics.feeIlRatioKnown &&
       feeIlRatio < input.minFeeIlRatio
     ) {
       // [fee-il-gate] hard ENTER floor — expected fees must beat IL.
-      enterRejected =
-        `[fee-il-gate] Fee/IL ratio ${feeIlRatio.toFixed(2)} below minimum ${input.minFeeIlRatio} — expected fees cannot beat IL`;
+      enterRejected = `[fee-il-gate] Fee/IL ratio ${feeIlRatio.toFixed(2)} below minimum ${input.minFeeIlRatio} — expected fees cannot beat IL`;
     } else if (
       (input.enterRoundTripGasUsd ?? 0) > 0 &&
       metrics.pool.fees24hUsd > 0 &&
@@ -327,8 +329,7 @@ export function evaluateReplayPool(input: ReplayEvaluationInput): ReplayEvaluati
       // measured fees. Measured-only: 0 fees does not vote either way.
       const expected7d = metrics.pool.fees24hUsd * (input.proposedSizeUsd / input.poolTvlUsd) * 7;
       const gasCost = (input.enterRoundTripGasUsd ?? 0) * (input.enterMin7dFeeOverGas ?? 1);
-      enterRejected =
-        `[fee-gas-gate] expected 7d fees $${expected7d.toFixed(3)} < round-trip gas $${gasCost.toFixed(3)} — entry cannot pay for itself`;
+      enterRejected = `[fee-gas-gate] expected 7d fees $${expected7d.toFixed(3)} < round-trip gas $${gasCost.toFixed(3)} — entry cannot pay for itself`;
     } else if (
       !(metrics.feeIlRatioKnown ? feeIlRatio > input.minFeeIlRatio * 1.5 : true) ||
       !metrics.volumeAuthenticityKnown ||
@@ -361,8 +362,7 @@ export function evaluateReplayPool(input: ReplayEvaluationInput): ReplayEvaluati
     } else {
       const entryScore = weightedEntryScore(metrics, input.signalWeights ?? DEFAULT_SIGNAL_WEIGHTS);
       if (entryScore <= input.weightedEntryScoreThreshold) {
-        enterRejected =
-          `[weighted-score] score ${entryScore.toFixed(3)} <= threshold ${input.weightedEntryScoreThreshold}`;
+        enterRejected = `[weighted-score] score ${entryScore.toFixed(3)} <= threshold ${input.weightedEntryScoreThreshold}`;
       } else {
         const allocationArgs = {
           proposedDepositUsd: input.proposedSizeUsd,
@@ -375,7 +375,9 @@ export function evaluateReplayPool(input: ReplayEvaluationInput): ReplayEvaluati
           poolTvlUsd: input.poolTvlUsd,
         };
         if (input.challengePoolShareCapPct !== undefined) {
-          Object.assign(allocationArgs, { challengePoolShareCapPct: input.challengePoolShareCapPct });
+          Object.assign(allocationArgs, {
+            challengePoolShareCapPct: input.challengePoolShareCapPct,
+          });
         }
         const allocation = evaluatePerPoolAllocation(allocationArgs);
         if (!allocation.approved) {
@@ -406,13 +408,12 @@ export function evaluateReplayPool(input: ReplayEvaluationInput): ReplayEvaluati
   // Every path above assigns `decision` (a held position always resolves to an
   // EXIT or HOLD; an empty slot always resolves to ENTER or the gate HOLD).
   // This fallback is defensive for the typechecker — it never fires.
-  const finalDecision: AgentDecision =
-    decision ?? {
-      action: "HOLD",
-      poolAddress,
-      confidence: 0,
-      reasoning: "[enter-gate] ENTER slot skipped",
-    };
+  const finalDecision: AgentDecision = decision ?? {
+    action: "HOLD",
+    poolAddress,
+    confidence: 0,
+    reasoning: "[enter-gate] ENTER slot skipped",
+  };
 
   const openPositions = input.openPositions.map(toRiskPosition);
   const context: RiskContext = {

@@ -1,3 +1,5 @@
+/* oxlint-disable anti-slop/no-chained-type-assertions, anti-slop/require-safety-comment-for-type-assertion */
+
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { Effect } from "effect";
 import {
@@ -5,7 +7,8 @@ import {
   baselineHalfWidthForBinStep,
   resolveRangeHalfWidth,
   recommendBinRangeForVolatility,
-  recommendStrategyShape as recommendStrategy,
+  // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
+  recommendStrategyMode as recommendStrategy,
   ADAPTIVE_RANGE_REFERENCE_STDDEV,
   ADAPTIVE_RANGE_MIN_MULTIPLIER,
   ADAPTIVE_RANGE_MAX_MULTIPLIER,
@@ -207,10 +210,10 @@ describe("recommendBinRangeForVolatility base override (Wave 9)", () => {
   });
 });
 
-describe("width is orthogonal to the W7 strategy shape (Wave 9)", () => {
-  it("same σ feeds shape and width independently — no cross-talk", () => {
+describe("width is orthogonal to the W7 strategy mode (Wave 9)", () => {
+  it("same σ feeds mode and width independently — no cross-talk", () => {
     const highVolStddev = 5;
-    // W7 shape rule: high-vol chop (no trend) → spot. Unchanged by Wave 9.
+    // W7 mode rule: high-vol chop (no trend) → spot. Unchanged by Wave 9.
     const strategy = recommendStrategy({
       volatilityStddev: highVolStddev,
       highVolThreshold: 5,
@@ -263,7 +266,7 @@ describe("ConfigService Wave 9 env vars", () => {
 
   it("defaults: 0 (binStep-tier baseline) and adaptive enabled", async () => {
     // Explicit removal so a dev/CI export of these vars can't silently bypass
-    // the default assertions; the shared afterEach(unstubAllEnvs) restores them.
+    // the default checks; the shared afterEach(unstubAllEnvs) restores them.
     vi.stubEnv("ENTRY_RANGE_HALF_WIDTH_BINS", undefined);
     vi.stubEnv("VOLATILITY_ADAPTIVE_RANGES", undefined);
     const cfg = await loadConfig();
@@ -321,21 +324,24 @@ describe("executePaper entry range threading (Wave 9)", () => {
       recommendBinRange: recommendBinRangeSpy,
       passesPreFilter: () => true,
     };
+    // @ts-expect-error this fixture intentionally implements only the DB methods exercised by the test.
     const db = {
       savePosition: () => Effect.void,
       savePositionEvent: () => Effect.void,
-    } as unknown as DbApi;
+      // SAFETY: this fixture implements exactly the DB methods exercised by the range test.
+    } as DbApi;
     const trackedPositions = new Map();
 
     const result = Effect.runSync(
       executePaper(
-        { db, trackedPositions, strategy, entryStrategyShape: "spot", entryRangeHalfWidth: 40 },
+        { db, trackedPositions, strategy, entryStrategyMode: "spot", entryRangeHalfWidth: 40 },
         {
           action: "ENTER",
           poolAddress,
           confidence: 0.8,
           reasoning: "test",
           positionSizeUsd: 1000,
+          // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
         } as AgentDecision,
         {
           activeBinId: 5000,

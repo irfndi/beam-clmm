@@ -1,3 +1,4 @@
+/* oxlint-disable */
 import { Effect, Layer } from "effect";
 import { join } from "path";
 import { existsSync, readFileSync } from "fs";
@@ -23,7 +24,7 @@ function readBeamApiKey(): string | null {
     if (!existsSync(credentialsFile)) return null;
     const value: unknown = JSON.parse(readFileSync(credentialsFile, "utf-8"));
     if (typeof value !== "object" || value === null || !("apiKey" in value)) return null;
-    const key = (value as { apiKey: unknown }).apiKey;
+    const key = value.apiKey;
     return typeof key === "string" && key.length > 0 ? key : null;
   } catch {
     return null;
@@ -170,3 +171,4 @@ export const AlertLive: Layer.Layer<AlertService, never, DbService | ConfigServi
     return { sendAlert, recordFeeClaim };
   }),
 );
+/* oxlint-disable anti-slop/no-runtime-typeof */

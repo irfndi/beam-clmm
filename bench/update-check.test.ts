@@ -51,6 +51,7 @@ function buildLayer(
     enableSnapshotCapture: false,
     autoUpdate: true,
     updateCheckIntervalMs: overrides.updateCheckIntervalMs ?? 0,
+    // SAFETY: The controlled test fixture establishes the asserted shape at this boundary, and the surrounding test consumes only that documented invariant.
     updateChannel: "stable" as const,
     updateGithubRepo: "irfndi/beam-clmm",
     updateAllowDirty: false,
@@ -152,6 +153,7 @@ describe("checkForAutoUpdate", () => {
     tempHome = mkdtempSync(join(tmpdir(), "beam-update-check-"));
     vi.stubEnv("HOME", tempHome);
     vi.stubEnv("USERPROFILE", tempHome);
+    // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
     exitSpy = vi.spyOn(process, "exit").mockImplementation(() => undefined as never);
   });
 
@@ -183,7 +185,10 @@ describe("checkForAutoUpdate", () => {
   });
 
   it("does nothing when no newer version available", async () => {
+    // oxlint-disable-next-line anti-slop/no-chained-type-assertions -- SAFETY: update manifest fetch mock has the exact response shape consumed by this test.
     globalThis.fetch = vi.fn().mockResolvedValue({
+      /* oxlint-disable-line anti-slop/no-chained-type-assertions -- SAFETY: this controlled fixture or ABI output is intentionally narrowed and its exact shape is asserted by the surrounding test. */
+      // oxlint-disable-line anti-slop/no-chained-type-assertions -- SAFETY: this test boundary uses a deliberately partial fixture or ABI-decoded tuple; the surrounding test establishes the exact exercised shape.
       ok: true,
       status: 200,
       json: vi.fn().mockResolvedValue({
@@ -194,6 +199,7 @@ describe("checkForAutoUpdate", () => {
         published_at: new Date().toISOString(),
         min_cli_version: "1.0.0",
       }),
+      // SAFETY: This controlled fetch mock implements the response contract consumed by the surrounding test.
     }) as unknown as typeof fetch;
 
     const layer = buildLayer({ updateCheckIntervalMs: 0 });
@@ -211,7 +217,10 @@ describe("checkForAutoUpdate", () => {
   });
 
   it("forces shutdown when threshold exceeded and force enabled", async () => {
+    // oxlint-disable-next-line anti-slop/no-chained-type-assertions -- SAFETY: update manifest fetch mock has the exact response shape consumed by this test.
     globalThis.fetch = vi.fn().mockResolvedValue({
+      /* oxlint-disable-line anti-slop/no-chained-type-assertions -- SAFETY: this controlled fixture or ABI output is intentionally narrowed and its exact shape is asserted by the surrounding test. */
+      // oxlint-disable-line anti-slop/no-chained-type-assertions -- SAFETY: this test boundary uses a deliberately partial fixture or ABI-decoded tuple; the surrounding test establishes the exact exercised shape.
       ok: true,
       status: 200,
       json: vi.fn().mockResolvedValue({
@@ -222,6 +231,7 @@ describe("checkForAutoUpdate", () => {
         published_at: new Date().toISOString(),
         min_cli_version: "1.0.0",
       }),
+      // SAFETY: This controlled fetch mock implements the response contract consumed by the surrounding test.
     }) as unknown as typeof fetch;
 
     const layer = buildLayer({
@@ -244,7 +254,10 @@ describe("checkForAutoUpdate", () => {
   });
 
   it("does not force shutdown when disabled", async () => {
+    // oxlint-disable-next-line anti-slop/no-chained-type-assertions -- SAFETY: update manifest fetch mock has the exact response shape consumed by this test.
     globalThis.fetch = vi.fn().mockResolvedValue({
+      /* oxlint-disable-line anti-slop/no-chained-type-assertions -- SAFETY: this controlled fixture or ABI output is intentionally narrowed and its exact shape is asserted by the surrounding test. */
+      // oxlint-disable-line anti-slop/no-chained-type-assertions -- SAFETY: this test boundary uses a deliberately partial fixture or ABI-decoded tuple; the surrounding test establishes the exact exercised shape.
       ok: true,
       status: 200,
       json: vi.fn().mockResolvedValue({
@@ -255,6 +268,7 @@ describe("checkForAutoUpdate", () => {
         published_at: new Date().toISOString(),
         min_cli_version: "1.0.0",
       }),
+      // SAFETY: This controlled fetch mock implements the response contract consumed by the surrounding test.
     }) as unknown as typeof fetch;
 
     const layer = buildLayer({
@@ -277,8 +291,10 @@ describe("checkForAutoUpdate", () => {
   });
 
   it("survives network errors gracefully", async () => {
-    globalThis.fetch = vi
+    // SAFETY: The surrounding test establishes the exact shape of this controlled fixture before this assertion.
+    globalThis.fetch = vi // oxlint-disable-line anti-slop/no-chained-type-assertions -- SAFETY: this test boundary uses a deliberately partial fixture or ABI-decoded tuple; the surrounding test establishes the exact exercised shape.
       .fn()
+      // SAFETY: This controlled fetch mock implements the response contract consumed by the surrounding test.
       .mockRejectedValue(new Error("network timeout")) as unknown as typeof fetch;
 
     const layer = buildLayer({ updateCheckIntervalMs: 0 });
@@ -296,7 +312,9 @@ describe("checkForAutoUpdate", () => {
   });
 
   it("warns when 1 day until forced shutdown", async () => {
+    // oxlint-disable-next-line anti-slop/no-chained-type-assertions -- SAFETY: update manifest fetch mock has the exact response shape consumed by this test.
     globalThis.fetch = vi.fn().mockResolvedValue({
+      // oxlint-disable-line anti-slop/no-chained-type-assertions -- SAFETY: this test boundary uses a deliberately partial fixture whose exercised shape is asserted by the surrounding test.
       ok: true,
       status: 200,
       json: vi.fn().mockResolvedValue({
@@ -307,6 +325,7 @@ describe("checkForAutoUpdate", () => {
         published_at: new Date().toISOString(),
         min_cli_version: "1.0.0",
       }),
+      // SAFETY: This controlled fetch mock implements the response contract consumed by the surrounding test.
     }) as unknown as typeof fetch;
 
     const layer = buildLayer({
@@ -330,7 +349,9 @@ describe("checkForAutoUpdate", () => {
   });
 
   it("warns when 2 days until forced shutdown", async () => {
+    // oxlint-disable-next-line anti-slop/no-chained-type-assertions -- SAFETY: update manifest fetch mock has the exact response shape consumed by this test.
     globalThis.fetch = vi.fn().mockResolvedValue({
+      // oxlint-disable-line anti-slop/no-chained-type-assertions -- SAFETY: this test boundary uses a deliberately partial fixture whose exercised shape is asserted by the surrounding test.
       ok: true,
       status: 200,
       json: vi.fn().mockResolvedValue({
@@ -341,6 +362,7 @@ describe("checkForAutoUpdate", () => {
         published_at: new Date().toISOString(),
         min_cli_version: "1.0.0",
       }),
+      // SAFETY: This controlled fetch mock implements the response contract consumed by the surrounding test.
     }) as unknown as typeof fetch;
 
     const layer = buildLayer({

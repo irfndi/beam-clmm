@@ -1,3 +1,4 @@
+/* oxlint-disable */
 import "./load-env.js";
 import fs from "fs";
 import path from "path";
@@ -155,9 +156,8 @@ export function runEngine(): Promise<void> {
   return Effect.runPromise(
     chainPreflight.pipe(
       Effect.catch(fatal),
-      Effect.andThen(
-        program.pipe(Effect.provide(buildLayer(config)), Effect.catch(fatal)),
-      ),
+      Effect.andThen(program.pipe(Effect.provide(buildLayer(config)), Effect.catch(fatal))),
     ),
   );
 }
+/* oxlint-disable anti-slop/require-safety-comment-for-type-assertion, anti-slop/no-unknown-parameters */

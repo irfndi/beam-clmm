@@ -18,6 +18,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+// SAFETY: package.json is repository-controlled and its scripts values are validated by these tests.
 const pkg = JSON.parse(readFileSync(path.join(REPO_ROOT, "package.json"), "utf8")) as {
   scripts: Record<string, string>;
 };
@@ -33,6 +34,7 @@ function runCli(args: string[]): CliResult {
     });
     return { status: 0, stdout, stderr: "" };
   } catch (err) {
+    // SAFETY: execFileSync errors expose these documented subprocess fields.
     const e = err as { status?: number; stdout?: string | Buffer; stderr?: string | Buffer };
     return {
       status: e.status ?? 1,

@@ -214,7 +214,8 @@ describe("evaluatePool TVL-drop EXIT (integration)", () => {
     });
 
     const decisions = await Effect.runPromise(
-      Effect.provide(test, layer) as unknown as Effect.Effect<
+      // SAFETY: the provided test layer discharges all services; only the result row type is narrowed.
+      Effect.provide(test, layer) as Effect.Effect<
         ReadonlyArray<{ action: string; reasoning: string }>,
         Error,
         never

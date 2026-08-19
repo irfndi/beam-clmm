@@ -10,6 +10,7 @@ import type { ScreenedPool, TokenPriceEvidence } from "../engine/services.js";
 const policy = { minHealthyScans: 2, minObservationMs: 60_000 };
 
 function pool(overrides: Partial<ScreenedPool> = {}): ScreenedPool {
+  // SAFETY: this fixture supplies the screened-pool contract consumed by candidate discovery.
   return {
     address: "pool-1",
     tvlUsd: 100_000,

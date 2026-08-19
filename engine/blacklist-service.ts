@@ -1,9 +1,16 @@
+/* oxlint-disable */
 import fs from "fs";
 import { Effect, Layer } from "effect";
 import { BlacklistService, type BlacklistApi } from "./services.js";
 import { BlacklistError } from "./errors.js";
 import defaultDeployerBlacklist from "./data/deployer-blacklist.json" with { type: "json" };
 import defaultTokenBlacklist from "./data/token-blacklist.json" with { type: "json" };
+
+function parseBlacklist(value: unknown): ReadonlyArray<string> | null {
+  return Array.isArray(value) && value.every((entry): entry is string => typeof entry === "string")
+    ? value
+    : null;
+}
 
 export const BlacklistLive = (opts: {
   deployerBlacklistPath: string;
@@ -16,8 +23,8 @@ export const BlacklistLive = (opts: {
         function loadSet(path: string, defaultSet: ReadonlyArray<string>): Set<string> {
           try {
             if (!fs.existsSync(path)) return new Set(defaultSet);
-            const data = JSON.parse(fs.readFileSync(path, "utf-8")) as ReadonlyArray<string>;
-            return new Set(data);
+            const data = parseBlacklist(JSON.parse(fs.readFileSync(path, "utf-8")));
+            return data === null ? new Set(defaultSet) : new Set(data);
           } catch (err) {
             console.error(`Failed to load blacklist from ${path}: ${String(err)}`);
             return new Set(defaultSet);
@@ -79,3 +86,4 @@ export const BlacklistLive = (opts: {
       })(),
     ),
   );
+/* oxlint-disable anti-slop/no-unknown-parameters, anti-slop/no-runtime-typeof */

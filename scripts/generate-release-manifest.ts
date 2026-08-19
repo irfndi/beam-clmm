@@ -4,8 +4,47 @@ import { fileURLToPath } from "url";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
+interface PackageJson {
+  readonly version?: string;
+}
+
+interface ReleaseManifest {
+  version: string;
+  channel: ReleaseChannel;
+  commit?: string;
+  tarball_url: string;
+  sha256_url: string;
+  published_at: string;
+  min_cli_version: string;
+  bundles: Record<string, { url: string; sha256_url: string }>;
+}
+
 const version = process.env.VERSION ?? "";
-const channel = (process.env.CHANNEL ?? "stable") as "stable" | "beta" | "dev" | "canary";
+type ReleaseChannel = "stable" | "beta" | "dev" | "canary";
+const channelValue = process.env.CHANNEL ?? "stable";
+const channels = [
+  "stable",
+  "beta",
+  "dev",
+  "canary",
+] as const satisfies ReadonlyArray<ReleaseChannel>;
+function isReleaseChannel(value: string): value is ReleaseChannel {
+  return includesString(channels, value);
+}
+
+function includesString(values: readonly string[], value: string): boolean {
+  return values.includes(value);
+}
+
+function packageVersion(value: PackageJson | null): string | null {
+  return value?.version && value.version.length > 0 ? value.version : null;
+}
+
+if (!isReleaseChannel(channelValue)) {
+  console.error(`Invalid channel: ${channelValue}`);
+  process.exit(1);
+}
+const channel: ReleaseChannel = channelValue;
 const r2Base = (
   process.env.R2_BASE_URL ?? "https://pub-2f55c98709e74d1d900b89ec20f8f1fc.r2.dev"
 ).replace(/\/+$/, "");
@@ -30,13 +69,10 @@ if (!/^[0-9A-Za-z][0-9A-Za-z._+-]*$/.test(version)) {
   process.exit(1);
 }
 
-if (!["stable", "beta", "dev", "canary"].includes(channel)) {
-  console.error(`Invalid channel: ${channel}`);
-  process.exit(1);
-}
-
 if (!keyPrefix) {
-  console.error("R2_KEY_PREFIX resolved to an empty string; refusing to emit a manifest with an empty key path");
+  console.error(
+    "R2_KEY_PREFIX resolved to an empty string; refusing to emit a manifest with an empty key path",
+  );
   process.exit(1);
 }
 
@@ -81,35 +117,26 @@ const tarballUrl = `${r2Base}/${keyPrefix}/beam-v${version}.tar.gz`;
 // that can consume this manifest; deriving it here keeps the two from drifting.
 let minCliVersion = "0.0.0";
 try {
-const pkg = JSON.parse(fs.readFileSync(path.join(repoRoot, "package.json"), "utf-8")) as Readonly<{
-    version?: string;
-  }>;
-  // The value comes from parsed package.json — a runtime typeof is the
-  // parse-at-boundary contract for an optional string field.
-  if (typeof pkg.version === "string" && pkg.version) minCliVersion = pkg.version;
+  // SAFETY: packageVersion reads only the optional string version field.
+  const pkg = JSON.parse(
+    fs.readFileSync(path.join(repoRoot, "package.json"), "utf-8"),
+  ) as PackageJson;
+  const parsedVersion = packageVersion(pkg);
+  if (parsedVersion !== null) minCliVersion = parsedVersion;
 } catch {
   // fall back to "0.0.0" if package.json is unreadable
 }
 
-const manifest = {
+const manifest: ReleaseManifest = {
   version,
   channel,
-  ...(commit ? { commit } : {}),
   tarball_url: tarballUrl,
   sha256_url: `${tarballUrl}.sha256`,
   published_at: new Date().toISOString(),
   min_cli_version: minCliVersion,
   bundles,
-} satisfies {
-  version: string;
-  channel: string;
-  commit?: string;
-  tarball_url: string;
-  sha256_url: string;
-  published_at: string;
-  min_cli_version: string;
-  bundles: Record<string, { url: string; sha256_url: string }>;
 };
+if (commit) manifest.commit = commit;
 
 fs.writeFileSync(outFile, JSON.stringify(manifest, null, 2) + "\n");
 console.log(`Wrote ${outFile} with bundles: ${Object.keys(bundles).join(", ") || "none"}`);

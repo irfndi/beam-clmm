@@ -33,11 +33,14 @@
  *     unverifiable) from "genuine honeypot" (fail).
  */
 
+// oxlint-disable anti-slop/no-unknown-parameters, anti-slop/no-unsafe-dictionary-type, anti-slop/no-runtime-typeof -- raw RPC results are normalized at this probe boundary.
 import {
   type Address,
   type Hex,
   type PublicClient,
   decodeErrorResult,
+  isAddress,
+  isHex,
   keccak256,
   numberToHex,
 } from "viem";
@@ -141,7 +144,10 @@ export interface TokenRiskReport {
 }
 
 export interface TokenRiskProber {
-  assess(token: Address, options?: { readonly sellRoute?: SellRouteSpec }): Promise<TokenRiskReport>;
+  assess(
+    token: Address,
+    options?: { readonly sellRoute?: SellRouteSpec },
+  ): Promise<TokenRiskReport>;
 }
 
 // ─── Constants ───────────────────────────────────────────────────────────────
@@ -232,6 +238,10 @@ interface ResolvedImpl {
   readonly code: Hex;
 }
 
+function isHexValue(value: unknown): value is Hex {
+  return typeof value === "string" && isHex(value);
+}
+
 function isNonZero(value: Hex | null): boolean {
   if (!value || value === "0x" || value === "0x0") return false;
   return value !== `0x${"0".repeat(64)}`;
@@ -287,10 +297,9 @@ function encodeTransferFrom(from: Address, to: Address, amount: bigint): Hex {
   return `0x${TRANSFER_FROM_SELECTOR.slice(2)}${from
     .toLowerCase()
     .slice(2)
-    .padStart(64, "0")}${to.toLowerCase().slice(2).padStart(64, "0")}${numberToHex(
-    amount,
-    { size: 32 },
-  ).slice(2)}`;
+    .padStart(64, "0")}${to.toLowerCase().slice(2).padStart(64, "0")}${numberToHex(amount, {
+    size: 32,
+  }).slice(2)}`;
 }
 
 function extractRevertReason(returnData: Hex | null | undefined): string {
@@ -331,45 +340,60 @@ function sumOutLeg(
 
 async function getCodeSafe(client: PublicClient, address: Address): Promise<Hex | null> {
   try {
-    const res = (await client.request({
+    const res = await client.request({
       method: "eth_getCode",
       params: [address, "latest"],
-    })) as unknown;
-    return typeof res === "string" && res.startsWith("0x") ? (res as Hex) : null;
+    });
+    return isHex(res) ? res : null;
   } catch {
     return null;
   }
 }
 
-async function getStorageAtSafe(client: PublicClient, address: Address, slot: Hex): Promise<Hex | null> {
+async function getStorageAtSafe(
+  client: PublicClient,
+  address: Address,
+  slot: Hex,
+): Promise<Hex | null> {
   try {
-    const res = (await client.request({
+    const res = await client.request({
       method: "eth_getStorageAt",
       params: [address, slot, "latest"],
-    })) as unknown;
-    return typeof res === "string" && res.startsWith("0x") ? (res as Hex) : null;
+    });
+    return isHex(res) ? res : null;
   } catch {
     return null;
   }
 }
 
 /** Resolve the code that actually implements the token's logic. */
-async function resolveImplementation(client: PublicClient, token: Address): Promise<ResolvedImpl | null> {
+async function resolveImplementation(
+  client: PublicClient,
+  token: Address,
+): Promise<ResolvedImpl | null> {
   const code = await getCodeSafe(client, token);
   if (!code || code === "0x") return null;
 
   const implSlot = await getStorageAtSafe(client, token, ERC1967_IMPLEMENTATION_SLOT);
   if (implSlot && isNonZero(implSlot)) {
-    const implementation = `0x${implSlot.slice(26)}` as Address;
-    const implCode = await getCodeSafe(client, implementation);
-    if (implCode && implCode !== "0x") return { kind: "erc1967", implementation, code: implCode };
+    const implementation = `0x${implSlot.slice(26)}`;
+    // SAFETY: ERC-1967 stores a 32-byte left-padded address; slicing the final
+    // 20 bytes yields the address encoded by the proxy storage slot.
+    if (isAddress(implementation)) {
+      const implCode = await getCodeSafe(client, implementation);
+      if (implCode && implCode !== "0x") return { kind: "erc1967", implementation, code: implCode };
+    }
   }
 
   const markerIndex = code.indexOf(MINIMAL_PROXY_MARKER.slice(2));
   if (markerIndex >= 0) {
-    const implementation = `0x${code.slice(markerIndex + 22, markerIndex + 62)}` as Address;
-    const implCode = await getCodeSafe(client, implementation);
-    if (implCode && implCode !== "0x") return { kind: "eip1167", implementation, code: implCode };
+    const implementation = `0x${code.slice(markerIndex + 22, markerIndex + 62)}`;
+    // SAFETY: EIP-1167 fixes the implementation operand at exactly 20 bytes
+    // immediately after the 10-byte delegate marker.
+    if (isAddress(implementation)) {
+      const implCode = await getCodeSafe(client, implementation);
+      if (implCode && implCode !== "0x") return { kind: "eip1167", implementation, code: implCode };
+    }
   }
   return null;
 }
@@ -417,20 +441,49 @@ async function simulateCalls(
   stateOverrides: StateOverride,
 ): Promise<readonly SimCallResult[] | null> {
   try {
-    const res = (await client.request({
+    const res = await client.request({
       method: "eth_simulateV1",
       // op-geth accepts the second (block-tag) param — verified live on 4663.
-      params: [{ blockStateCalls: [{ blockOverrides: {}, calls: [...calls], stateOverrides }] }, "latest"],
-    })) as unknown;
-    const blocks = Array.isArray(res) ? (res as Array<{ calls?: unknown }>) : null;
+      params: [
+        { blockStateCalls: [{ blockOverrides: {}, calls: [...calls], stateOverrides }] },
+        "latest",
+      ],
+    });
+    const blocks = Array.isArray(res) ? res : null;
     const blockCalls = blocks?.[0]?.calls;
     if (!Array.isArray(blockCalls)) return null;
     return blockCalls.map((entry) => {
-      const raw = entry as { returnData?: unknown; status?: unknown; logs?: unknown };
+      if (typeof entry !== "object" || entry === null) {
+        return { returnData: "0x", status: "0x1" as const, logs: [] };
+      }
+      // SAFETY: the preceding object check establishes the RPC call result is
+      // a JSON object; its fields remain individually validated below.
+      const raw = entry as Record<string, unknown>;
+      const logs: SimLog[] = [];
+      if (Array.isArray(raw["logs"])) {
+        for (const candidate of raw["logs"]) {
+          if (typeof candidate !== "object" || candidate === null) continue;
+          // SAFETY: the preceding object check establishes a JSON log object;
+          // address, topics, and data are validated before constructing SimLog.
+          const log = candidate as Record<string, unknown>;
+          const address = log["address"];
+          const topics = log["topics"];
+          const data = log["data"];
+          if (
+            typeof address === "string" &&
+            isAddress(address) &&
+            isHexValue(data) &&
+            Array.isArray(topics) &&
+            topics.every((topic): topic is Hex => isHexValue(topic))
+          ) {
+            logs.push({ address, topics, data });
+          }
+        }
+      }
       return {
-        returnData: typeof raw.returnData === "string" ? (raw.returnData as Hex) : "0x",
+        returnData: isHexValue(raw["returnData"]) ? raw["returnData"] : "0x",
         status: raw.status === "0x0" ? "0x0" : "0x1",
-        logs: Array.isArray(raw.logs) ? (raw.logs as SimLog[]) : [],
+        logs,
       };
     });
   } catch {
@@ -443,20 +496,27 @@ async function ethCallRaw(
   tx: { readonly from?: Address; readonly to: Address; readonly data: Hex },
 ): Promise<{ readonly ok: boolean; readonly data: Hex | null }> {
   try {
-    const res = (await client.request({
+    const res = await client.request({
       method: "eth_call",
       params: [tx, "latest"],
-    })) as unknown;
-    return { ok: true, data: typeof res === "string" ? (res as Hex) : null };
+    });
+    return { ok: true, data: isHex(res) ? res : null };
   } catch {
     return { ok: false, data: null };
   }
 }
 
-async function readAddress(client: PublicClient, to: Address, selector: Hex): Promise<Address | null> {
+async function readAddress(
+  client: PublicClient,
+  to: Address,
+  selector: Hex,
+): Promise<Address | null> {
   const res = await ethCallRaw(client, { to, data: selector });
   if (!res.ok || !res.data || res.data === "0x" || res.data.length < 66) return null;
-  return `0x${res.data.slice(26)}` as Address;
+  const address = `0x${res.data.slice(26)}`;
+  // SAFETY: ABI address return values are 32-byte words; the final 20 bytes
+  // are the address payload after the length check above.
+  return isAddress(address) ? address : null;
 }
 
 async function readDecimals(client: PublicClient, token: Address): Promise<bigint> {
@@ -487,7 +547,12 @@ async function checkSanity(
     return {
       status: "fail",
       detail: "no contract code at address",
-      data: { codeSource: "none", codeBytes: 0, methodsPresent: { balanceOf: false, transfer: false }, staticcallOk: false },
+      data: {
+        codeSource: "none",
+        codeBytes: 0,
+        methodsPresent: { balanceOf: false, transfer: false },
+        staticcallOk: false,
+      },
     };
   }
   const scanCode = impl ? impl.code : code;
@@ -495,7 +560,9 @@ async function checkSanity(
     balanceOf: scanCode.includes(BALANCE_OF_SELECTOR.slice(2)),
     transfer: scanCode.includes(TRANSFER_SELECTOR.slice(2)),
   };
-  const staticcallOk = (await ethCallRaw(client, { to: token, data: encodeBalanceOf(PROBE_ADDRESS) })).ok;
+  const staticcallOk = (
+    await ethCallRaw(client, { to: token, data: encodeBalanceOf(PROBE_ADDRESS) })
+  ).ok;
   const data: SanityDetail = {
     codeSource: impl ? impl.kind : "token",
     codeBytes: (code.length - 2) / 2,
@@ -515,7 +582,11 @@ async function checkSanity(
   return { status: "pass", detail: `ERC20 sanity ok (${data.codeBytes} code bytes)`, data };
 }
 
-async function checkTax(client: PublicClient, token: Address, maxTax: number): Promise<CheckResult<TaxDetail>> {
+async function checkTax(
+  client: PublicClient,
+  token: Address,
+  maxTax: number,
+): Promise<CheckResult<TaxDetail>> {
   const sent = 10n ** (await readDecimals(client, token));
   const stateOverride = await buildFundingState(client, token, [PROBE_ADDRESS], sent, []);
   const results = await simulateCalls(
@@ -536,17 +607,26 @@ async function checkTax(client: PublicClient, token: Address, maxTax: number): P
     };
   }
   if (results.length < 4) {
-    return { status: "fail", detail: "simulation returned incomplete results", data: { sent, received: null, taxPct: null, funded: false, revertReason: null } };
+    return {
+      status: "fail",
+      detail: "simulation returned incomplete results",
+      data: { sent, received: null, taxPct: null, funded: false, revertReason: null },
+    };
   }
   const [fundedCall, b0Call, transferCall, b1Call] = results;
   if (!fundedCall || !b0Call || !transferCall || !b1Call) {
-    return { status: "fail", detail: "simulation returned incomplete results", data: { sent, received: null, taxPct: null, funded: false, revertReason: null } };
+    return {
+      status: "fail",
+      detail: "simulation returned incomplete results",
+      data: { sent, received: null, taxPct: null, funded: false, revertReason: null },
+    };
   }
   const funded = toBigInt(fundedCall.returnData) >= sent;
   if (!funded) {
     return {
       status: "warn",
-      detail: "could not fund probe address (non-standard storage layout); transfer tax unverifiable",
+      detail:
+        "could not fund probe address (non-standard storage layout); transfer tax unverifiable",
       data: { sent, received: null, taxPct: null, funded: false, revertReason: null },
     };
   }
@@ -629,7 +709,8 @@ async function checkTransferFrom(
   if (!funded) {
     return {
       status: "warn",
-      detail: "could not fund probe address (non-standard storage layout); transferFrom unverifiable",
+      detail:
+        "could not fund probe address (non-standard storage layout); transferFrom unverifiable",
       data: base,
     };
   }
@@ -685,7 +766,11 @@ async function checkUpgradable(impl: ResolvedImpl | null): Promise<CheckResult<U
       data: { isProxy: true, kind: impl.kind, implementation: impl.implementation },
     };
   }
-  return { status: "pass", detail: "not a proxy", data: { isProxy: false, kind: null, implementation: null } };
+  return {
+    status: "pass",
+    detail: "not a proxy",
+    data: { isProxy: false, kind: null, implementation: null },
+  };
 }
 
 async function checkSellRoute(
@@ -705,7 +790,13 @@ async function checkSellRoute(
     revertReason: null,
     expectedOutToken: expectedOutToken ?? null,
   };
-  const stateOverride = await buildFundingState(client, token, [PROBE_ADDRESS, poolAddress], amountIn, [poolAddress]);
+  const stateOverride = await buildFundingState(
+    client,
+    token,
+    [PROBE_ADDRESS, poolAddress],
+    amountIn,
+    [poolAddress],
+  );
   const results = await simulateCalls(
     client,
     [
@@ -778,7 +869,10 @@ function skippedChecks(reason: string): TokenRiskReport["checks"] {
   };
 }
 
-export function createTokenRiskProber(client: PublicClient, config: TokenRiskConfig): TokenRiskProber {
+export function createTokenRiskProber(
+  client: PublicClient,
+  config: TokenRiskConfig,
+): TokenRiskProber {
   const maxTax = config.maxTransferTaxPct ?? DEFAULT_MAX_TRANSFER_TAX_PCT;
   // Normalize the allowlist to lowercase once: assess() compares
   // token.toLowerCase() against it, and callers pass checksummed addresses —
@@ -792,10 +886,22 @@ export function createTokenRiskProber(client: PublicClient, config: TokenRiskCon
   return {
     async assess(token, options) {
       if (allowlist.has(token.toLowerCase())) {
-        return { token, verdict: "ok", allowlisted: true, disabled: false, checks: skippedChecks("allowlisted mint") };
+        return {
+          token,
+          verdict: "ok",
+          allowlisted: true,
+          disabled: false,
+          checks: skippedChecks("allowlisted mint"),
+        };
       }
       if (!config.enabled) {
-        return { token, verdict: "ok", allowlisted: false, disabled: true, checks: skippedChecks("risk assessment disabled") };
+        return {
+          token,
+          verdict: "ok",
+          allowlisted: false,
+          disabled: true,
+          checks: skippedChecks("risk assessment disabled"),
+        };
       }
       // Resolved once; shared by sanity (code scan) and upgradable (proxy detection).
       const impl = await resolveImplementation(client, token).catch(() => null);
@@ -809,7 +915,13 @@ export function createTokenRiskProber(client: PublicClient, config: TokenRiskCon
         transferFrom: await runCheck(() => checkTransferFrom(client, token)),
         sellRoute: await runCheck(() => checkSellRoute(client, token, options?.sellRoute)),
       };
-      return { token, verdict: compositeVerdict(checks), allowlisted: false, disabled: false, checks };
+      return {
+        token,
+        verdict: compositeVerdict(checks),
+        allowlisted: false,
+        disabled: false,
+        checks,
+      };
     },
   };
 }

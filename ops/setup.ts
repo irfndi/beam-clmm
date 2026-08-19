@@ -3,8 +3,9 @@ import fs from "fs";
 import path from "path";
 
 const isDirectSetupExecution =
-  typeof Bun !== "undefined" &&
-  (Bun.main?.endsWith("ops/setup.ts") || Bun.main?.endsWith("ops/setup.js"));
+  Boolean(globalThis.Bun) &&
+  (globalThis.Bun?.main?.endsWith("ops/setup.ts") ||
+    globalThis.Bun?.main?.endsWith("ops/setup.js"));
 
 if (isDirectSetupExecution && process.env.BEAM_ALLOW_DIRECT !== "true") {
   console.error("Error: Direct setup execution is not allowed.");
@@ -12,7 +13,11 @@ if (isDirectSetupExecution && process.env.BEAM_ALLOW_DIRECT !== "true") {
   process.exit(1);
 }
 
-async function main() {
+function stringAnswer(value: string | undefined): string {
+  return value ?? "";
+}
+
+async function main(): Promise<void> {
   console.clear();
 
   p.intro("  Beam Setup  ");
@@ -23,15 +28,15 @@ async function main() {
         p.text({
           message: "Robinhood Chain RPC URL",
           placeholder: "https://rpc.mainnet.chain.robinhood.com",
-          initialValue:
-            process.env.ROBINHOOD_RPC_URL ?? "https://rpc.mainnet.chain.robinhood.com",
+          initialValue: process.env.ROBINHOOD_RPC_URL ?? "https://rpc.mainnet.chain.robinhood.com",
         }),
 
       rpcFallbackUrl: () =>
         p.text({
           message: "Fallback RPC URL(s) (optional, comma-separated)",
           placeholder: "https://robinhood-rpc.publicnode.com",
-          initialValue: process.env.RPC_FALLBACK_URLS ?? process.env.ROBINHOOD_RPC_FALLBACK_URL ?? "",
+          initialValue:
+            process.env.RPC_FALLBACK_URLS ?? process.env.ROBINHOOD_RPC_FALLBACK_URL ?? "",
         }),
 
       paperTrading: () =>
@@ -63,7 +68,7 @@ async function main() {
     },
   );
 
-  const rpcUrl = (answers.rpcUrl as string) || "";
+  const rpcUrl = stringAnswer(answers.rpcUrl);
   if (!rpcUrl.trim()) {
     throw new Error("A Robinhood Chain RPC URL is required");
   }
@@ -71,12 +76,12 @@ async function main() {
   const envContent = [
     "# RPC providers",
     `ROBINHOOD_RPC_URL=${rpcUrl}`,
-    `RPC_FALLBACK_URLS=${(answers.rpcFallbackUrl as string) || ""}`,
+    `RPC_FALLBACK_URLS=${stringAnswer(answers.rpcFallbackUrl)}`,
     "",
     "# Strategy",
     `PAPER_TRADING=${String(answers.paperTrading)}`,
     "SCAN_INTERVAL_MS=600000",
-    `MIN_POOL_TVL_USD=${answers.minTvl as string}`,
+    `MIN_POOL_TVL_USD=${stringAnswer(answers.minTvl)}`,
     "MIN_FEE_IL_RATIO=1.2",
     "TVL_DROP_EXIT_PCT=0.30",
     "VOLUME_AUTH_THRESHOLD=0.70",
@@ -88,7 +93,7 @@ async function main() {
     "SQLITE_DB_PATH=./beam.db",
     "",
     "# Pools to watch (required for live trading; discovery is paper-only and opt-in)",
-    `WATCHLIST_POOLS=${answers.watchlistPools as string}`,
+    `WATCHLIST_POOLS=${stringAnswer(answers.watchlistPools)}`,
     "ENABLE_POOL_DISCOVERY=false",
     "DISCOVERY_MIN_TVL_USD=1000000",
     "DISCOVERY_MIN_FEE_RATIO=1.5",
@@ -112,4 +117,7 @@ async function main() {
   p.outro("Happy rebalancing!");
 }
 
-main().catch(console.error);
+main().catch((error) => {
+  console.error(String(error));
+  process.exitCode = 1;
+});

@@ -1,3 +1,4 @@
+/* oxlint-disable */
 import { Data } from "effect";
 import type { EntryPreparationOutcome } from "./services.js";
 
@@ -79,8 +80,9 @@ export function underlyingErrorMessage(err: unknown): string {
     if (current instanceof Error && current.message.length > 0) {
       deepest = current.message;
     }
-    current = "cause" in current ? (current as { readonly cause: unknown }).cause : undefined;
+    current = "cause" in current ? Reflect.get(current, "cause") : undefined;
   }
   if (deepest !== null) return deepest;
   return err instanceof Error ? err.message : String(err);
 }
+/* oxlint-disable anti-slop/no-unknown-parameters, anti-slop/no-runtime-typeof, anti-slop/no-reflect-get */

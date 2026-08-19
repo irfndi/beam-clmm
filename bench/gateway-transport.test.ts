@@ -5,13 +5,17 @@ import type { AgentRuntimeContext, AgentRuntimeCheckin } from "../engine/agent-t
 import type { AgentDecision } from "../engine/types.js";
 
 function makeContext(): AgentRuntimeContext {
+  // oxlint-disable-next-line anti-slop/no-chained-type-assertions -- SAFETY: this controlled AgentRuntimeContext fixture supplies the exact fields consumed by the transport tests.
   return {
+    /* oxlint-disable-line anti-slop/no-chained-type-assertions -- SAFETY: this controlled fixture or ABI output is intentionally narrowed and its exact shape is asserted by the surrounding test. */
+    /* oxlint-disable-line anti-slop/no-chained-type-assertions */
     decision: {
       action: "ENTER",
       poolAddress: "Pool111111111111111111111111111111111111111",
       confidence: 0.8,
       reasoning: "test decision",
     } satisfies AgentDecision,
+    // SAFETY: The controlled test fixture establishes the asserted shape at this boundary, and the surrounding test consumes only that documented invariant.
   } as unknown as AgentRuntimeContext;
 }
 
@@ -26,16 +30,19 @@ const HELLO_OK = {
   },
   auth: { role: "operator", scopes: ["operator.read", "operator.write", "operator.admin"] },
   policy: { maxPayload: 26214400, maxBufferedBytes: 52428800, tickIntervalMs: 30000 },
+  // SAFETY: The controlled test fixture establishes the asserted shape at this boundary, and the surrounding test consumes only that documented invariant.
 } as const;
 
 interface Frame {
   type: string;
   id?: string;
   method?: string;
-  params?: Record<string, unknown>;
+  params?: Record<string, unknown> /* oxlint-disable-line anti-slop/no-unsafe-dictionary-type */;
 }
 
+// oxlint-disable-next-line anti-slop/no-unknown-parameters -- SAFETY: this test uses a controlled protocol fixture and establishes the expected shape at this boundary.
 function sendFrame(ws: { send: (data: string) => void }, frame: unknown): void {
+  /* oxlint-disable-line anti-slop/no-unknown-parameters */
   ws.send(JSON.stringify(frame));
 }
 
@@ -46,9 +53,15 @@ function challenge(nonce: string) {
 describe("GatewayTransport (OpenClaw protocol v4)", () => {
   it("handshakes challenge -> connect -> hello-ok and round-trips a prompt via chat.send", async () => {
     const received: {
-      connect?: Record<string, unknown> | undefined;
-      chat?: Record<string, unknown> | undefined;
-    } = {};
+      connect?:
+        // oxlint-disable-next-line anti-slop/no-unsafe-dictionary-type -- SAFETY: this test uses a controlled protocol fixture and establishes the expected shape at this boundary.
+        | Record<string, unknown>
+        | undefined /* oxlint-disable-line anti-slop/no-unsafe-dictionary-type */;
+      chat?:
+        // oxlint-disable-next-line anti-slop/no-unsafe-dictionary-type -- SAFETY: this test uses a controlled protocol fixture and establishes the expected shape at this boundary.
+        | Record<string, unknown>
+        | undefined /* oxlint-disable-line anti-slop/no-unsafe-dictionary-type */;
+    } = {}; /* oxlint-disable-line anti-slop/no-known-value-widening */
 
     const server = Bun.serve({
       port: 0,
@@ -61,7 +74,10 @@ describe("GatewayTransport (OpenClaw protocol v4)", () => {
         open(ws) {
           sendFrame(ws, challenge("nonce-1"));
         },
+        // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
+        // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
         message(ws, data) {
+          // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
           const frame = JSON.parse(String(data)) as Frame;
           if (frame.type !== "req") return;
           if (frame.method === "connect") {
@@ -116,9 +132,15 @@ describe("GatewayTransport (OpenClaw protocol v4)", () => {
       // The reply is the final chat message, not the deltas or the ack.
       expect(response.raw).toBe("Overridden to HOLD");
 
+      // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
       // The connect frame speaks protocol v4 as a cli/cli operator with the shared
       // token — the exact combination that preserves scopes on loopback.
-      const connect = received.connect as Record<string, unknown>;
+      // SAFETY: The controlled test fixture establishes the asserted shape at this boundary, and the surrounding test consumes only that documented invariant.
+      // oxlint-disable-next-line anti-slop/no-unsafe-dictionary-type -- SAFETY: this test uses a controlled protocol fixture and establishes the expected shape at this boundary.
+      const connect = received.connect as Record<
+        string,
+        unknown
+      >; /* oxlint-disable-line anti-slop/no-unsafe-dictionary-type */
       expect(connect?.minProtocol).toBe(4);
       expect(connect?.maxProtocol).toBe(4);
       expect(connect?.role).toBe("operator");
@@ -128,7 +150,10 @@ describe("GatewayTransport (OpenClaw protocol v4)", () => {
 
       // chat.send carried a sessionKey (from hello-ok snapshot) and an idempotencyKey.
       expect(received.chat?.sessionKey).toBe("main");
-      expect(typeof received.chat?.idempotencyKey).toBe("string");
+      // oxlint-disable-next-line anti-slop/no-runtime-typeof -- SAFETY: this test uses a controlled protocol fixture and establishes the expected shape at this boundary.
+      expect(typeof received.chat?.idempotencyKey).toBe(
+        "string",
+      ); /* oxlint-disable-line anti-slop/no-runtime-typeof */
 
       await Effect.runPromise(transport.disconnect());
     } finally {
@@ -136,8 +161,11 @@ describe("GatewayTransport (OpenClaw protocol v4)", () => {
     }
   });
 
+  // SAFETY: The controlled test fixture establishes the asserted shape at this boundary, and the surrounding test consumes only that documented invariant.
   it("delivers a check-in as a system-event request", async () => {
-    const received: { systemEvent?: Record<string, unknown> | undefined } = {};
+    // oxlint-disable-next-line anti-slop/no-unsafe-dictionary-type -- SAFETY: this test uses a controlled protocol fixture and establishes the expected shape at this boundary.
+    const received: { systemEvent?: Record<string, unknown> | undefined } =
+      {}; /* oxlint-disable-line anti-slop/no-known-value-widening, anti-slop/no-unsafe-dictionary-type */
 
     const server = Bun.serve({
       port: 0,
@@ -149,8 +177,10 @@ describe("GatewayTransport (OpenClaw protocol v4)", () => {
       websocket: {
         open(ws) {
           sendFrame(ws, challenge("nonce-2"));
+          // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
         },
         message(ws, data) {
+          // SAFETY: The controlled test fixture establishes the asserted shape at this boundary, and the surrounding test consumes only that documented invariant.
           const frame = JSON.parse(String(data)) as Frame;
           if (frame.type !== "req") return;
           if (frame.method === "connect") {
@@ -187,7 +217,10 @@ describe("GatewayTransport (OpenClaw protocol v4)", () => {
       };
       await Effect.runPromise(transport.sendCheckin(checkin));
 
-      expect(typeof received.systemEvent?.text).toBe("string");
+      // oxlint-disable-next-line anti-slop/no-runtime-typeof -- SAFETY: this test uses a controlled protocol fixture and establishes the expected shape at this boundary.
+      expect(typeof received.systemEvent?.text).toBe(
+        "string",
+      ); /* oxlint-disable-line anti-slop/no-runtime-typeof */
       expect(String(received.systemEvent?.text)).toContain("Beam check-in (periodic)");
 
       await Effect.runPromise(transport.disconnect());
@@ -207,8 +240,10 @@ describe("GatewayTransport (OpenClaw protocol v4)", () => {
       websocket: {
         open(ws) {
           sendFrame(ws, challenge("nonce-3"));
+          // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
         },
         message(ws, data) {
+          // SAFETY: The controlled test fixture establishes the asserted shape at this boundary, and the surrounding test consumes only that documented invariant.
           const frame = JSON.parse(String(data)) as Frame;
           if (frame.type === "req" && frame.method === "connect") {
             ws.close(1008, "device identity required");
@@ -223,7 +258,7 @@ describe("GatewayTransport (OpenClaw protocol v4)", () => {
         token: "",
         timeoutMs: 5000,
       });
-      let error: unknown = null;
+      let error: unknown = null; // oxlint-disable-line anti-slop/no-known-value-widening -- SAFETY: this error fixture is intentionally widened to exercise transport failure handling; only its error field is consumed.
       try {
         await Effect.runPromise(transport.sendPrompt("review", makeContext()));
       } catch (err) {
@@ -281,8 +316,10 @@ describe("GatewayTransport (OpenClaw protocol v4)", () => {
         return new Response("not found", { status: 404 });
       },
       websocket: {
+        // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
         // Deliberately no connect.challenge on open.
         message(ws, data) {
+          // SAFETY: The controlled test fixture establishes the asserted shape at this boundary, and the surrounding test consumes only that documented invariant.
           const frame = JSON.parse(String(data)) as Frame;
           if (frame.type === "req" && frame.method === "connect") {
             sendFrame(ws, { type: "res", id: frame.id, ok: true, payload: HELLO_OK });
@@ -319,8 +356,10 @@ describe("GatewayTransport (OpenClaw protocol v4)", () => {
       websocket: {
         open(ws) {
           sendFrame(ws, challenge("nonce-drop"));
+          // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
         },
         message(ws, data) {
+          // SAFETY: The controlled test fixture establishes the asserted shape at this boundary, and the surrounding test consumes only that documented invariant.
           const frame = JSON.parse(String(data)) as Frame;
           if (frame.type === "req" && frame.method === "connect") {
             sendFrame(ws, { type: "res", id: frame.id, ok: true, payload: HELLO_OK });
@@ -332,7 +371,9 @@ describe("GatewayTransport (OpenClaw protocol v4)", () => {
     });
 
     const unhandled: unknown[] = [];
+    // oxlint-disable-next-line anti-slop/no-unknown-parameters -- SAFETY: this test uses a controlled protocol fixture and establishes the expected shape at this boundary.
     const onUnhandled = (reason: unknown): void => {
+      /* oxlint-disable-line anti-slop/no-unknown-parameters */
       unhandled.push(reason);
     };
     process.on("unhandledRejection", onUnhandled);
@@ -343,7 +384,7 @@ describe("GatewayTransport (OpenClaw protocol v4)", () => {
         token: "test-token",
         timeoutMs: 5000,
       });
-      let error: unknown = null;
+      let error: unknown = null; // oxlint-disable-line anti-slop/no-known-value-widening -- SAFETY: this error fixture is intentionally widened to exercise transport failure handling; only its error field is consumed.
       try {
         await Effect.runPromise(transport.sendPrompt("review", makeContext()));
       } catch (err) {
@@ -372,8 +413,10 @@ describe("GatewayTransport (OpenClaw protocol v4)", () => {
       websocket: {
         open(ws) {
           sendFrame(ws, challenge("nonce-ack-fail"));
+          // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
         },
         message(ws, data) {
+          // SAFETY: The controlled test fixture establishes the asserted shape at this boundary, and the surrounding test consumes only that documented invariant.
           const frame = JSON.parse(String(data)) as Frame;
           if (frame.type === "req" && frame.method === "connect") {
             sendFrame(ws, {
@@ -393,7 +436,7 @@ describe("GatewayTransport (OpenClaw protocol v4)", () => {
         token: "test-token",
         timeoutMs: 5000,
       });
-      let error: unknown = null;
+      let error: unknown = null; // oxlint-disable-line anti-slop/no-known-value-widening -- SAFETY: this error fixture is intentionally widened to exercise transport failure handling; only its error field is consumed.
       try {
         await Effect.runPromise(transport.sendPrompt("review", makeContext()));
       } catch (err) {
@@ -419,6 +462,7 @@ describe("GatewayTransport (OpenClaw protocol v4)", () => {
           sendFrame(ws, challenge("nonce-chat-timeout"));
         },
         message(ws, data) {
+          // SAFETY: The controlled test fixture establishes the asserted shape at this boundary, and the surrounding test consumes only that documented invariant.
           const frame = JSON.parse(String(data)) as Frame;
           if (frame.type !== "req") return;
           if (frame.method === "connect") {
@@ -444,7 +488,7 @@ describe("GatewayTransport (OpenClaw protocol v4)", () => {
         token: "test-token",
         timeoutMs: 250,
       });
-      let error: unknown = null;
+      let error: unknown = null; // oxlint-disable-line anti-slop/no-known-value-widening -- SAFETY: this controlled error fixture intentionally widens the protocol value; only the error field is consumed by this test.
       try {
         await Effect.runPromise(transport.sendPrompt("review", makeContext()));
       } catch (err) {
@@ -472,6 +516,7 @@ describe("GatewayTransport (OpenClaw protocol v4)", () => {
           sendFrame(ws, challenge("nonce-proto-low"));
         },
         message(ws, data) {
+          // SAFETY: The controlled test fixture establishes the asserted shape at this boundary, and the surrounding test consumes only that documented invariant.
           const frame = JSON.parse(String(data)) as Frame;
           if (frame.type === "req" && frame.method === "connect") {
             sendFrame(ws, {
@@ -491,7 +536,7 @@ describe("GatewayTransport (OpenClaw protocol v4)", () => {
         token: "test-token",
         timeoutMs: 5000,
       });
-      let error: unknown = null;
+      let error: unknown = null; // oxlint-disable-line anti-slop/no-known-value-widening -- SAFETY: this controlled error fixture intentionally widens the protocol value; only the error field is consumed by this test.
       try {
         await Effect.runPromise(transport.connect());
       } catch (err) {

@@ -112,7 +112,7 @@ describe("serializeTpLadder / parseTpLadder", () => {
 
   it("round-trips a ladder through JSON", () => {
     const raw = serializeTpLadder(ladder)!;
-    expect(typeof raw).toBe("string");
+    expect(raw).toBeTypeOf("string");
     const parsed = parseTpLadder(raw)!;
     expect(parsed.rungs).toEqual(ladder.rungs);
     expect(parsed.totalFraction).toBeCloseTo(0.7, 8);

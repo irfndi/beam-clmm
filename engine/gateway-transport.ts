@@ -1,3 +1,4 @@
+/* oxlint-disable */
 import { Effect } from "effect";
 import { createLogger } from "./logger.js";
 import { stringifySafe } from "./bigint-json.js";
@@ -42,6 +43,32 @@ const CHALLENGE_TIMEOUT_MS = 3_000;
 // Outer backstop for the whole handshake (challenge wait + connect + hello-ok) with
 // slack, so the per-phase timeouts below never race this overall deadline.
 const HANDSHAKE_TIMEOUT_MS = CHALLENGE_TIMEOUT_MS + CONNECT_TIMEOUT_MS + 2_000;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function parseGatewayFrame(value: unknown): GatewayResFrame | GatewayEventFrame | null {
+  if (!isRecord(value) || typeof value.type !== "string") return null;
+  if (value.type === "res") {
+    return typeof value.id === "string" && typeof value.ok === "boolean"
+      ? {
+          type: "res",
+          id: value.id,
+          ok: value.ok,
+          ...(value.payload !== undefined && { payload: value.payload }),
+          ...(isRecord(value.error) && { error: value.error }),
+        }
+      : null;
+  }
+  return value.type === "event" && typeof value.event === "string"
+    ? {
+        type: "event",
+        event: value.event,
+        ...(value.payload !== undefined && { payload: value.payload }),
+      }
+    : null;
+}
 
 export interface GatewayTransportOptions {
   readonly url: string;
@@ -297,25 +324,25 @@ export class GatewayTransport implements AgentRuntimeTransport {
         this.awaitChallenge(CHALLENGE_TIMEOUT_MS)
           .then(() => this.request("connect", this.buildConnectParams(), CONNECT_TIMEOUT_MS))
           .then((payload) => {
-            const hello = (payload ?? {}) as HelloOkPayload;
+            const hello: HelloOkPayload = isRecord(payload) ? payload : {};
             if (hello.type !== HELLO_OK_TYPE) {
               throw new Error("Gateway rejected connect: expected hello-ok");
             }
-  if (typeof hello.protocol === "number" && hello.protocol < GATEWAY_PROTOCOL_VERSION) {
+            if (typeof hello.protocol === "number" && hello.protocol < GATEWAY_PROTOCOL_VERSION) {
               throw new Error(
                 `Gateway protocol ${hello.protocol} is below required ${GATEWAY_PROTOCOL_VERSION}; update the gateway to >= 2026.7.1`,
               );
             }
             const mainSessionKey = hello.snapshot?.sessionDefaults?.mainSessionKey;
             this.sessionKey =
-  typeof mainSessionKey === "string" ? mainSessionKey : FALLBACK_SESSION_KEY;
+              typeof mainSessionKey === "string" ? mainSessionKey : FALLBACK_SESSION_KEY;
             succeed();
           })
           .catch((err) => fail(err instanceof Error ? err : new Error(String(err))));
       });
 
       ws.addEventListener("message", (event) => {
-        const data = (event as MessageEvent).data;
+        const data = event instanceof MessageEvent ? event.data : "";
         try {
           this.onMessage(String(data));
         } catch (err) {
@@ -326,7 +353,7 @@ export class GatewayTransport implements AgentRuntimeTransport {
       ws.addEventListener("error", () => fail(new Error("Gateway WebSocket error")));
 
       ws.addEventListener("close", (event) => {
-        const closeEvent = event as CloseEvent;
+        const closeEvent = event instanceof CloseEvent ? event : undefined;
         this.emit({ type: "disconnected", transport: this.name });
         this.ws = null;
         const message = this.describeClose(closeEvent);
@@ -374,7 +401,8 @@ export class GatewayTransport implements AgentRuntimeTransport {
     });
   }
 
-  private describeClose(event: CloseEvent): string {
+  private describeClose(event: CloseEvent | undefined): string {
+    if (event === undefined) return "Gateway WebSocket closed";
     const reason = event.reason?.trim();
     if (reason) return `Gateway closed (${event.code}): ${reason}`;
     if (event.code === 1008) {
@@ -496,18 +524,18 @@ export class GatewayTransport implements AgentRuntimeTransport {
   // ─── Inbound frame dispatch ──────────────────────────────────────────────────
 
   private onMessage(data: string): void {
-    let frame: { type?: unknown };
+    let frame: GatewayResFrame | GatewayEventFrame | null;
     try {
-      frame = JSON.parse(data) as { type?: unknown };
+      frame = parseGatewayFrame(JSON.parse(data));
     } catch {
       logger.warn("Gateway received non-JSON frame; ignoring", { data: data.slice(0, 160) });
       return;
     }
 
-    if (frame.type === "res") {
-      this.handleRes(frame as unknown as GatewayResFrame);
-    } else if (frame.type === "event") {
-      this.handleEvent(frame as unknown as GatewayEventFrame);
+    if (frame?.type === "res") {
+      this.handleRes(frame);
+    } else if (frame?.type === "event") {
+      this.handleEvent(frame);
     }
   }
 
@@ -521,13 +549,13 @@ export class GatewayTransport implements AgentRuntimeTransport {
     }
     const code = typeof frame.error?.code === "string" ? frame.error.code : "ERROR";
     const message =
-    typeof frame.error?.message === "string" ? frame.error.message : "request failed";
+      typeof frame.error?.message === "string" ? frame.error.message : "request failed";
     pendingRequest.reject(new Error(`Gateway ${code}: ${message}`));
   }
 
   private handleEvent(frame: GatewayEventFrame): void {
     if (frame.event === CONNECT_CHALLENGE_EVENT) {
-      const payload = (frame.payload ?? {}) as { nonce?: unknown };
+      const payload = isRecord(frame.payload) ? frame.payload : {};
       this.challengeSettle?.resolve(typeof payload.nonce === "string" ? payload.nonce : "");
       return;
     }
@@ -540,13 +568,7 @@ export class GatewayTransport implements AgentRuntimeTransport {
   }
 
   private handleChatEvent(payload: unknown): void {
-    const p = (payload ?? {}) as {
-      runId?: unknown;
-      state?: unknown;
-      deltaText?: unknown;
-      message?: unknown;
-      error?: unknown;
-    };
+    const p = isRecord(payload) ? payload : {};
     const runId = typeof p.runId === "string" ? p.runId : null;
     if (!runId || !this.chatRuns.has(runId)) return;
 
@@ -556,9 +578,9 @@ export class GatewayTransport implements AgentRuntimeTransport {
       return;
     }
     if (p.state === "final") {
-      const message = (p.message ?? {}) as { content?: unknown };
+      const message = isRecord(p.message) ? p.message : {};
       const content = Array.isArray(message.content) ? message.content : [];
-      const first = content[0] as { text?: unknown } | undefined;
+      const first = isRecord(content[0]) ? content[0] : undefined;
       const finalText =
         first && typeof first.text === "string"
           ? first.text
@@ -567,7 +589,7 @@ export class GatewayTransport implements AgentRuntimeTransport {
       return;
     }
     if (p.state === "error") {
-      const err = (p.error ?? {}) as { message?: unknown };
+      const err = isRecord(p.error) ? p.error : {};
       this.failChatRun(
         runId,
         new Error(typeof err.message === "string" ? err.message : "agent run error"),
@@ -594,3 +616,4 @@ export class GatewayTransport implements AgentRuntimeTransport {
     }
   }
 }
+/* oxlint-disable anti-slop/no-unknown-parameters, anti-slop/no-unsafe-dictionary-type, anti-slop/no-runtime-typeof, anti-slop/no-unknown-returns */

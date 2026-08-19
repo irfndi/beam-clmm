@@ -31,11 +31,32 @@ export interface ChallengePoolScore {
 export function challengePoolScore(pool: PoolState): ChallengePoolScore {
   const reasons: string[] = [];
   const tvl = pool.tvlUsd;
-  if (tvl < 1_000) return { score: 0, tier: "none", reasons: ["tvl<$1k"], yieldPerDayPct: 0, drawdown24h: pool.drawdown24h ?? 0 };
+  if (tvl < 1_000)
+    return {
+      score: 0,
+      tier: "none",
+      reasons: ["tvl<$1k"],
+      yieldPerDayPct: 0,
+      drawdown24h: pool.drawdown24h ?? 0,
+    };
   const yieldPct = tvl > 0 ? (pool.fees24hUsd / tvl) * 100 : 0;
-  if (yieldPct <= 0) return { score: 0, tier: "none", reasons: ["no measured fees"], yieldPerDayPct: 0, drawdown24h: pool.drawdown24h ?? 0 };
+  if (yieldPct <= 0)
+    return {
+      score: 0,
+      tier: "none",
+      reasons: ["no measured fees"],
+      yieldPerDayPct: 0,
+      drawdown24h: pool.drawdown24h ?? 0,
+    };
   const dd = pool.drawdown24h ?? 0;
-  if (dd < -5) return { score: 0, tier: "none", reasons: [`dd ${dd.toFixed(1)}% < -5%`], yieldPerDayPct: yieldPct, drawdown24h: dd };
+  if (dd < -5)
+    return {
+      score: 0,
+      tier: "none",
+      reasons: [`dd ${dd.toFixed(1)}% < -5%`],
+      yieldPerDayPct: yieldPct,
+      drawdown24h: dd,
+    };
 
   // Squared penalty below zero drawdown: dd=-4% → ×0.96² ≈ ×0.92 (vs ×0.96
   // before — high-yield memes used to outrank zero-IL anchors on the weak
@@ -66,14 +87,7 @@ export function challengePoolScore(pool: PoolState): ChallengePoolScore {
 
   // S requires BOTH high score AND a stable pair (the ~0-IL anchor sleeve);
   // high-yield memes land in A.
-  const tier =
-    score >= 15 && hasStableLeg
-      ? "S"
-      : score >= 10
-        ? "A"
-        : score >= 4
-          ? "B"
-          : "none";
+  const tier = score >= 15 && hasStableLeg ? "S" : score >= 10 ? "A" : score >= 4 ? "B" : "none";
   if (tier === "none") reasons.push(`score ${score.toFixed(1)} < 4`);
   return { score, tier, reasons, yieldPerDayPct: yieldPct, drawdown24h: dd };
 }
@@ -157,10 +171,16 @@ export function challengeRotationSignal(
     const tvl = pool.tvlUsd;
     const yieldPct = tvl > 0 ? (pool.fees24hUsd / tvl) * 100 : 0;
     if (yieldPct < avgYieldPerDayPct * YIELD_COLLAPSE_EXIT_FRACTION) {
-      return { action: "exit", reason: `yield ${yieldPct.toFixed(2)}%/d < 50% of ${avgYieldPerDayPct.toFixed(2)}%/d avg` };
+      return {
+        action: "exit",
+        reason: `yield ${yieldPct.toFixed(2)}%/d < 50% of ${avgYieldPerDayPct.toFixed(2)}%/d avg`,
+      };
     }
     if (yieldPct < avgYieldPerDayPct * YIELD_DECAY_EXIT_FRACTION) {
-      return { action: "exit", reason: `yield ${yieldPct.toFixed(2)}%/d < 70% of ${avgYieldPerDayPct.toFixed(2)}%/d avg` };
+      return {
+        action: "exit",
+        reason: `yield ${yieldPct.toFixed(2)}%/d < 70% of ${avgYieldPerDayPct.toFixed(2)}%/d avg`,
+      };
     }
   }
   return { action: "hold", reason: "in range" };

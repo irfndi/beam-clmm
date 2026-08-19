@@ -9,8 +9,11 @@ import {
 import type { PoolState } from "../engine/types.js";
 
 const BASE_FEE_RATE = 0.0025;
+type JsonValue = string | number | boolean | null | JsonObject | JsonValue[];
+type JsonObject = { readonly [key: string]: JsonValue };
 
 function pool(overrides: Partial<PoolState> = {}): PoolState {
+  // SAFETY: the fixture supplies the PoolState fields consumed by Gecko enrichment.
   return {
     address: "0xpool",
     activeBinId: 5000,
@@ -32,7 +35,7 @@ function pool(overrides: Partial<PoolState> = {}): PoolState {
 // ─── parseGeckoPoolStats ──────────────────────────────────────────────────────
 
 describe("parseGeckoPoolStats", () => {
-  const attrs = (a: Record<string, unknown>): unknown => ({ data: { attributes: a } });
+  const attrs = (a: JsonObject) => ({ data: { attributes: a } });
 
   it("parses a valid payload with string numeric fields and derives fees from baseFeeRate", () => {
     const raw = attrs({

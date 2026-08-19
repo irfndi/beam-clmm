@@ -6,13 +6,11 @@ import { DbService } from "../engine/services.js";
 import type { SettlementJobRecord } from "../engine/types.js";
 
 function run<T, R>(effect: Effect.Effect<T, Error, R>, layer: Layer.Layer<R, never, never>): T {
+  // SAFETY: the provided layer discharges the effect environment.
   return Effect.runSync(Effect.provide(effect, layer) as Effect.Effect<T, Error, never>);
 }
 
-function makePosition(
-  poolAddress: string,
-  paperExitedAt: number | null = null,
-): PositionRecord {
+function makePosition(poolAddress: string, paperExitedAt: number | null = null): PositionRecord {
   return {
     positionId: `paper-${poolAddress}`,
     poolAddress,
@@ -292,7 +290,9 @@ describe("DbService — setMetadataBatch (Gemini review)", () => {
         const result = yield* db
           .setMetadataBatch([
             { key: "first", value: "would_persist_if_no_rollback" },
-            { key: Symbol("bad") as unknown as string, value: "triggers_failure" },
+            // SAFETY: a non-string key deliberately exercises the rollback path.
+            // SAFETY: a non-string key deliberately exercises the rollback path.
+            { key: Symbol("bad") as never, value: "triggers_failure" },
             { key: "third", value: "never_reached" },
           ])
           .pipe(Effect.result);

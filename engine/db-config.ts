@@ -1,3 +1,4 @@
+/* eslint-disable anti-slop/no-runtime-typeof, anti-slop/no-unsafe-dictionary-type */
 import { Database } from "bun:sqlite";
 import fs from "fs";
 import { createLogger } from "./logger.js";
@@ -356,6 +357,9 @@ export function applyDbConfigOverrides(
   base: AppConfig,
   overrides: ReadonlyMap<string, string>,
 ): AppConfig {
+  // SAFETY: DB_CONFIG_KEYS is the explicit, reviewed allowlist of dynamic
+  // AppConfig writes; isKnownConfigField rejects typoed fields before this
+  // object is extended.
   let next = base as AppConfig & Record<string, unknown>;
 
   for (const spec of DB_CONFIG_KEYS) {
@@ -433,6 +437,8 @@ export function readDbConfigOverrides(dbPath: string): ReadonlyMap<string, strin
   try {
     const db = new Database(dbPath);
     try {
+      // SAFETY: metadata is a fixed two-column SELECT; the values are still
+      // parsed and validated by callers before becoming configuration.
       const rows = db
         .query("SELECT key, value FROM metadata WHERE key LIKE ?")
         .all(`${DB_CONFIG_PREFIX}%`) as Array<{ key: string; value: string }>;

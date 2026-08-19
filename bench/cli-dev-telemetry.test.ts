@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
+// oxlint-disable-next-line anti-slop/no-module-mocking -- isolates the telemetry boundary from CLI startup.
 vi.mock("../cli/api.js", () => ({
   pingInstall: vi.fn(),
   requireRegistered: vi.fn(),
@@ -7,6 +8,7 @@ vi.mock("../cli/api.js", () => ({
 
 // Keep the engine out of this unit test — dev.ts imports runEngine at module
 // scope, and loading the real module wires up the entire engine.
+// oxlint-disable-next-line anti-slop/no-module-mocking -- prevents engine startup during this CLI unit test.
 vi.mock("../engine/run-engine.js", () => ({
   runEngine: vi.fn(),
 }));
@@ -22,6 +24,7 @@ describe("cli/dev telemetry degrade", () => {
 
   beforeEach(() => {
     warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    // SAFETY: the test replaces process.exit with a throwing sentinel.
     exitSpy = vi.spyOn(process, "exit").mockImplementation((() => {
       throw new Error("process.exit called");
     }) as never);

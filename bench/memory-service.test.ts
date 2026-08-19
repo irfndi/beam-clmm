@@ -378,6 +378,7 @@ describe("MemoryLive expiry + pruneExpired", () => {
         Effect.gen(function* () {
           const memory = yield* MemoryService;
           const dbService = yield* DbService;
+          // SAFETY: the service exposes the Bun SQLite database used by this fixture.
           const raw = dbService.db as Database;
           const now = Date.now();
           // Expired 10 days ago (created 100 days ago, well past the 60d warning TTL).
@@ -409,6 +410,7 @@ describe("MemoryLive expiry + pruneExpired", () => {
         Effect.gen(function* () {
           const memory = yield* MemoryService;
           const dbService = yield* DbService;
+          // SAFETY: the service exposes the Bun SQLite database used by this fixture.
           const raw = dbService.db as Database;
           const now = Date.now();
           yield* Effect.promise(() =>
@@ -469,6 +471,7 @@ describe("MemoryLive degraded mode (vec_memory absent)", () => {
         Effect.gen(function* () {
           const memory = yield* MemoryService;
           const dbService = yield* DbService;
+          // SAFETY: the service exposes the Bun SQLite database used by this fixture.
           const raw = dbService.db as Database;
           // Knock the vector table out from under the live service. Every memory
           // op guards on hasVecMemoryTable(db) and degrades to a no-op/[].

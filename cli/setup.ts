@@ -5,6 +5,14 @@ import { pingInstall, requireRegistered, type BeamCredentials } from "./api.js";
 import { ensureBeamConfigDir, getBeamEnvPath, getBeamDbPath } from "../engine/paths.js";
 import { mergeEnvContent } from "./env-merge.js";
 
+function stringAnswer(value: string | undefined): string {
+  return value ?? "";
+}
+
+function booleanAnswer(value: boolean | undefined, fallback: boolean): boolean {
+  return value ?? fallback;
+}
+
 export const setupCommand = new Command("setup")
   .description("Configure Beam trading agent")
   .option("--non-interactive", "Run without prompts (for agents/CI)")
@@ -34,12 +42,16 @@ export const setupCommand = new Command("setup")
         options.rpcUrl ||
         process.env.ROBINHOOD_RPC_URL ||
         "https://rpc.mainnet.chain.robinhood.com";
-      rpcFallbackUrl = options.rpcFallbackUrl || process.env.RPC_FALLBACK_URLS || process.env.ROBINHOOD_RPC_FALLBACK_URL || "";
+      rpcFallbackUrl =
+        options.rpcFallbackUrl ||
+        process.env.RPC_FALLBACK_URLS ||
+        process.env.ROBINHOOD_RPC_FALLBACK_URL ||
+        "";
       // Read wallet key from file if provided, otherwise from env
       if (options.walletKeyFile) {
         try {
           walletKey = fs.readFileSync(options.walletKeyFile, "utf-8").trim();
-        } catch (err) {
+        } catch {
           console.error(`Error: Could not read wallet key file: ${options.walletKeyFile}`);
           process.exit(1);
         }
@@ -74,7 +86,8 @@ export const setupCommand = new Command("setup")
             p.text({
               message: "Fallback RPC URL(s) (optional, comma-separated)",
               placeholder: "https://robinhood-rpc.publicnode.com",
-              initialValue: process.env.RPC_FALLBACK_URLS ?? process.env.ROBINHOOD_RPC_FALLBACK_URL ?? "",
+              initialValue:
+                process.env.RPC_FALLBACK_URLS ?? process.env.ROBINHOOD_RPC_FALLBACK_URL ?? "",
             }),
 
           walletKey: () =>
@@ -105,15 +118,15 @@ export const setupCommand = new Command("setup")
         },
       );
 
-      rpcUrl = (answers.rpcUrl as string) || "";
-      rpcFallbackUrl = (answers.rpcFallbackUrl as string) || "";
+      rpcUrl = stringAnswer(answers.rpcUrl);
+      rpcFallbackUrl = stringAnswer(answers.rpcFallbackUrl);
       if (!rpcUrl.trim()) {
         p.cancel("A Robinhood Chain RPC URL is required.");
         process.exit(1);
       }
-      walletKey = (answers.walletKey as string) || "";
-      watchlistPools = (answers.watchlistPools as string) || "";
-      paperTrading = answers.paperTrading as boolean;
+      walletKey = stringAnswer(answers.walletKey);
+      watchlistPools = stringAnswer(answers.watchlistPools);
+      paperTrading = booleanAnswer(answers.paperTrading, true);
 
       // Validate: live trading requires wallet key
       if (!paperTrading && !walletKey.trim()) {

@@ -1,5 +1,8 @@
 import { describe, it, expect } from "vitest";
-import { DLMMStrategy, recommendStrategyShape as recommendStrategy } from "../engine/strategy-service.js";
+import {
+  DLMMStrategy,
+  recommendStrategyMode as recommendStrategy,
+} from "../engine/strategy-service.js";
 import type { PoolState, BinArray } from "../engine/types.js";
 
 function makePool(overrides: Partial<PoolState> = {}): PoolState {
@@ -78,6 +81,7 @@ describe("DLMMStrategy", () => {
     });
 
     it("flags outlier fee rate (too high)", () => {
+      // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
       // 90% fee/volume is well above the 10% band → still flagged as outlier.
       const pool = makePool({ volume24hUsd: 100_000, fees24hUsd: 90_000 });
       const result = DLMMStrategy.checkVolumeAuthenticity(pool, true);
@@ -274,23 +278,23 @@ describe("DLMMStrategy", () => {
     });
   });
 
-  describe("recommendStrategyShape (ENTRY_STRATEGY_TYPE=auto regime pick)", () => {
+  describe("recommendStrategyMode (ENTRY_STRATEGY_TYPE=auto regime pick)", () => {
     it("picks curve for a calm, mean-reverting pool (low vol, no trend)", () => {
-      expect(
-        recommendStrategy({ volatilityStddev: 1, highVolThreshold: 5, netDriftBins: 0 }),
-      ).toBe("curve");
+      expect(recommendStrategy({ volatilityStddev: 1, highVolThreshold: 5, netDriftBins: 0 })).toBe(
+        "curve",
+      );
     });
 
     it("picks spot for a high-volatility pool without a dominant trend", () => {
-      expect(
-        recommendStrategy({ volatilityStddev: 6, highVolThreshold: 5, netDriftBins: 2 }),
-      ).toBe("spot");
+      expect(recommendStrategy({ volatilityStddev: 6, highVolThreshold: 5, netDriftBins: 2 })).toBe(
+        "spot",
+      );
     });
 
     it("picks bidask when the trend dominates the noise", () => {
-      expect(
-        recommendStrategy({ volatilityStddev: 1, highVolThreshold: 5, netDriftBins: 5 }),
-      ).toBe("bidask");
+      expect(recommendStrategy({ volatilityStddev: 1, highVolThreshold: 5, netDriftBins: 5 })).toBe(
+        "bidask",
+      );
     });
 
     it("lets a dominant trend override the high-vol spot pick", () => {
@@ -301,15 +305,15 @@ describe("DLMMStrategy", () => {
     });
 
     it("picks curve when no regime signal exists yet (fresh bin history)", () => {
-      expect(
-        recommendStrategy({ volatilityStddev: 0, highVolThreshold: 5, netDriftBins: 0 }),
-      ).toBe("curve");
+      expect(recommendStrategy({ volatilityStddev: 0, highVolThreshold: 5, netDriftBins: 0 })).toBe(
+        "curve",
+      );
     });
 
     it("requires at least 3 bins of drift for a trend even in dead-calm pools", () => {
-      expect(
-        recommendStrategy({ volatilityStddev: 0, highVolThreshold: 5, netDriftBins: 2 }),
-      ).toBe("curve");
+      expect(recommendStrategy({ volatilityStddev: 0, highVolThreshold: 5, netDriftBins: 2 })).toBe(
+        "curve",
+      );
     });
   });
 });

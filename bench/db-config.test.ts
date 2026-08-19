@@ -14,6 +14,7 @@ import type { AppConfig } from "../engine/config-service.js";
 
 /** AppConfig-shaped base carrying every DB-tunable declared field (so the typo guard sees a realistic resolved config). */
 function baseConfig(): AppConfig {
+  // SAFETY: this fixture only exercises DB-config fields; defaults fill the remaining AppConfig fields.
   return {
     minPoolTvlUsd: 50_000,
     volumeAuthThreshold: 0.7,
@@ -54,7 +55,7 @@ function baseConfig(): AppConfig {
     idleRedeployEnabled: false,
     idleRedeployThresholdUsd: 500,
     idleRedeployMaxSizeUsd: 2_000,
-  } as unknown as AppConfig;
+  } as AppConfig;
 }
 
 // Bun auto-loads `.env` into process.env, and this repo's own .env sets many of

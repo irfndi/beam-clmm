@@ -35,23 +35,31 @@ function liveResponse(priceStr: string, expo: number, publishSec: number) {
   };
 }
 
-function fetchReturning(body: unknown, status = 200): FetchLike {
+type JsonValue =
+  | string
+  | number
+  | boolean
+  | null
+  | JsonValue[]
+  | { readonly [key: string]: JsonValue };
+
+function fetchReturning(body: JsonValue, status = 200): FetchLike {
   return (_url, init) => {
     lastInit = init;
     return Promise.resolve(new Response(JSON.stringify(body), { status }));
   };
 }
 
-function fetchRejecting(error: unknown): FetchLike {
+function fetchRejecting(error: Error | string): FetchLike {
   return () => Promise.reject(error);
 }
 
 let lastInit: RequestInit | undefined;
 let lastUrl: string | undefined;
 
-function fetchCapturing(body: unknown, status = 200): FetchLike {
+function fetchCapturing(body: JsonValue, status = 200): FetchLike {
   return (url, init) => {
-    lastUrl = String(url as unknown);
+    lastUrl = url instanceof URL ? url.href : url instanceof Request ? url.url : url;
     lastInit = init;
     return Promise.resolve(new Response(JSON.stringify(body), { status }));
   };
@@ -198,6 +206,7 @@ describe("fetchPythPriceUsd", () => {
       apiKey: "test-pyth-key",
       fetchImpl: fetchCapturing(liveResponse("1234567", -6, NOW_SEC)),
     });
+    // SAFETY: the request mock supplies HeadersInit with string-valued entries.
     const headers = (lastInit?.headers ?? {}) as Record<string, string>;
     expect(headers["Authorization"]).toBe("Bearer test-pyth-key");
   });
@@ -206,6 +215,7 @@ describe("fetchPythPriceUsd", () => {
     await fetchPythPriceUsd(PYTH_FEED_IDS.SOL, {
       fetchImpl: fetchCapturing(liveResponse("1234567", -6, NOW_SEC)),
     });
+    // SAFETY: the request mock supplies HeadersInit with string-valued entries.
     let headers = (lastInit?.headers ?? {}) as Record<string, string>;
     expect(headers["Authorization"]).toBeUndefined();
 
@@ -213,6 +223,7 @@ describe("fetchPythPriceUsd", () => {
       apiKey: "   ",
       fetchImpl: fetchCapturing(liveResponse("99985012", -8, NOW_SEC)),
     });
+    // SAFETY: the request mock supplies HeadersInit with string-valued entries.
     headers = (lastInit?.headers ?? {}) as Record<string, string>;
     expect(headers["Authorization"]).toBeUndefined();
   });

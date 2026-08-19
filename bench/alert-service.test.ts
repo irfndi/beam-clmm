@@ -33,17 +33,62 @@ function makeAlertLayer(dbPath: string, overrides: Partial<AppConfig> = {}) {
 
 interface CapturedPost {
   url: string;
-  body: Record<string, unknown>;
+  body: AlertPostBody;
   authorization: string | null;
+}
+
+interface AlertPostBody {
+  type?: string;
+  severity?: string;
+  message?: string;
+  poolAddress?: string;
+}
+
+type AlertJsonValue = string | number | boolean | null | AlertJsonObject | AlertJsonValue[];
+type AlertJsonObject = { readonly [key: string]: AlertJsonValue };
+
+function isStringValue(value: AlertJsonValue | undefined): value is string {
+  return Object.prototype.toString.call(value) === "[object String]";
+}
+
+function parseAlertPostBody(value: AlertJsonObject): AlertPostBody {
+  // SAFETY: JSON.parse produces a plain object here; fields are validated below.
+  const body = value as AlertJsonObject;
+  const fields = ["type", "severity", "message", "poolAddress"] as const;
+  const result: AlertPostBody = {};
+  for (const field of fields) {
+    const item = body[field];
+    if (item !== undefined && !isStringValue(item)) {
+      throw new Error(`alert field ${field} must be a string`);
+    }
+    if (isStringValue(item)) {
+      switch (field) {
+        case "type":
+          result.type = item;
+          break;
+        case "severity":
+          result.severity = item;
+          break;
+        case "message":
+          result.message = item;
+          break;
+        case "poolAddress":
+          result.poolAddress = item;
+          break;
+      }
+    }
+  }
+  return result;
 }
 
 function capturePosts(status = 200) {
   const posts: CapturedPost[] = [];
-  const restore = mockFetch((url: unknown, init: { body?: string; headers?: unknown } = {}) => {
-    const headers = new Headers(init.headers as Record<string, string> | undefined);
+  const restore = mockFetch((url: string | URL, init: RequestInit = {}) => {
+    const headers = new Headers(init.headers);
     posts.push({
       url: String(url),
-      body: JSON.parse(init.body ?? "{}") as Record<string, unknown>,
+      // SAFETY: the fetch mock receives the service's JSON string request body.
+      body: parseAlertPostBody(JSON.parse((init.body as string | undefined) ?? "{}")),
       authorization: headers.get("Authorization"),
     });
     return Promise.resolve(new Response(JSON.stringify({ id: "x", delivered: false }), { status }));

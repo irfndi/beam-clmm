@@ -36,6 +36,68 @@ const MANIFEST_SCRIPT = path.join(REPO_ROOT, "scripts", "generate-release-manife
 const R2_BASE = "https://r2.test.example";
 const PLATFORMS = ["linux-x64", "linux-arm64", "darwin-x64", "darwin-arm64"];
 
+type JsonValue = string | number | boolean | null | JsonObject | JsonValue[];
+type JsonObject = { readonly [key: string]: JsonValue };
+type Bundle = { url: string; sha256_url?: string; signature_url?: string };
+type BundleMap = Map<string, Bundle>;
+
+function isJsonObject(value: JsonValue): value is JsonObject {
+  return Object.prototype.toString.call(value) === "[object Object]";
+}
+
+function parseJsonObject(text: string): JsonObject {
+  // SAFETY: JSON.parse output is validated by isJsonObject before use.
+  const parsed = JSON.parse(text) as JsonValue;
+  if (!isJsonObject(parsed)) throw new Error("manifest must be a JSON object");
+  return parsed;
+}
+
+function readBundles(value: JsonValue | undefined): BundleMap {
+  if (value === undefined) throw new Error("manifest bundles are missing");
+  if (!isJsonObject(value)) throw new Error("manifest bundles must be an object");
+  const bundles = new Map<string, Bundle>();
+  for (const [platform, raw] of Object.entries(value)) {
+    if (!isJsonObject(raw) || Object.prototype.toString.call(raw.url) !== "[object String]") {
+      throw new Error(`invalid bundle for ${platform}`);
+    }
+    const sha256Url = raw.sha256_url;
+    const signatureUrl = raw.signature_url;
+    if (
+      sha256Url !== undefined &&
+      Object.prototype.toString.call(sha256Url) !== "[object String]"
+    ) {
+      throw new Error(`invalid checksum URL for ${platform}`);
+    }
+    if (
+      signatureUrl !== undefined &&
+      Object.prototype.toString.call(signatureUrl) !== "[object String]"
+    ) {
+      throw new Error(`invalid signature URL for ${platform}`);
+    }
+    const bundle: Bundle = { url: readString(raw.url) };
+    if (sha256Url !== undefined) bundle.sha256_url = readString(sha256Url);
+    if (signatureUrl !== undefined) bundle.signature_url = readString(signatureUrl);
+    bundles.set(platform, bundle);
+  }
+  return bundles;
+}
+
+function isStringJson(value: JsonValue | undefined): value is string {
+  return Object.prototype.toString.call(value) === "[object String]";
+}
+
+function readString(value: JsonValue | undefined): string {
+  if (!isStringJson(value)) {
+    throw new Error("manifest field must be a string");
+  }
+  return value;
+}
+
+function readOptionalString(value: JsonValue | undefined): string | undefined {
+  if (value === undefined) return undefined;
+  return readString(value);
+}
+
 let sandbox: string;
 
 beforeAll(() => {
@@ -50,7 +112,7 @@ interface ManifestResult {
   status: number;
   stdout: string;
   stderr: string;
-  manifest: Record<string, unknown> | null;
+  manifest: JsonObject | null;
   dir: string;
 }
 
@@ -63,15 +125,16 @@ function runManifest(opts: {
   for (const file of opts.files) {
     writeFileSync(path.join(dir, file), "fixture");
   }
+  // SAFETY: process.env is copied into a child-process environment and all test overrides are strings.
   const env = {
-    ...(process.env as Record<string, string>),
+    ...process.env,
     VERSION: opts.version,
     R2_BASE_URL: R2_BASE,
     OUT_FILE: "manifest.json",
-    ...(opts.requireAllBundles !== undefined
-      ? { REQUIRE_ALL_BUNDLES: String(opts.requireAllBundles) }
-      : {}),
-  } satisfies Record<string, string>;
+  } as NodeJS.ProcessEnv;
+  if (opts.requireAllBundles !== undefined) {
+    env.REQUIRE_ALL_BUNDLES = String(opts.requireAllBundles);
+  }
   const res = spawnSync(process.execPath, [MANIFEST_SCRIPT], {
     cwd: dir,
     env,
@@ -83,8 +146,7 @@ function runManifest(opts: {
   const stderr = String(res.stderr ?? "");
   const manifestFile = path.join(dir, "manifest.json");
   const manifest = existsSync(manifestFile)
-    ?
-      (JSON.parse(readFileSync(manifestFile, "utf8")) as Record<string, unknown>)
+    ? parseJsonObject(readFileSync(manifestFile, "utf8"))
     : null;
   return { status, stdout, stderr, manifest, dir };
 }
@@ -121,12 +183,12 @@ describe("scripts/generate-release-manifest.ts — bundle filtering", () => {
     const m = res.manifest!;
     expect(m.version).toBe("1.2.3");
     expect(m.channel).toBe("stable");
-    const bundles = m.bundles as Record<string, { url: string; sha256_url: string }>;
-    expect(Object.keys(bundles).sort()).toEqual([...PLATFORMS].sort());
-    expect(bundles["linux-x64"]!.url).toBe(
+    const bundles = readBundles(m.bundles);
+    expect(Array.from(bundles.keys()).sort()).toEqual([...PLATFORMS].sort());
+    expect(bundles.get("linux-x64")!.url).toBe(
       `${R2_BASE}/releases/v1.2.3/beam-v1.2.3-linux-x64.tar.gz`,
     );
-    expect(bundles["linux-x64"]!.sha256_url).toBe(
+    expect(bundles.get("linux-x64")!.sha256_url).toBe(
       `${R2_BASE}/releases/v1.2.3/beam-v1.2.3-linux-x64.tar.gz.sha256`,
     );
     expect(m.tarball_url).toBe(`${R2_BASE}/releases/v1.2.3/beam-v1.2.3.tar.gz`);
@@ -137,8 +199,8 @@ describe("scripts/generate-release-manifest.ts — bundle filtering", () => {
     const version = "1.2.3+build.5";
     const res = runManifest({ version, files: happyPathFiles(version), requireAllBundles: false });
     expect(res.status).toBe(0);
-    const bundles = res.manifest!.bundles as Record<string, { url: string }>;
-    expect(bundles["linux-x64"]!.url).toBe(
+    const bundles = readBundles(res.manifest!.bundles);
+    expect(bundles.get("linux-x64")!.url).toBe(
       `${R2_BASE}/releases/v${version}/beam-v${version}-linux-x64.tar.gz`,
     );
   });
@@ -155,8 +217,8 @@ describe("scripts/generate-release-manifest.ts — bundle filtering", () => {
     });
     expect(res.status).toBe(0);
     expect(res.stderr).toContain("Missing checksum");
-    const bundles = res.manifest!.bundles as Record<string, string>;
-    expect(Object.keys(bundles)).toEqual(["darwin-arm64"]);
+    const bundles = readBundles(res.manifest!.bundles);
+    expect(Array.from(bundles.keys())).toEqual(["darwin-arm64"]);
   });
 
   it("exits 1 when REQUIRE_ALL_BUNDLES platforms are missing", () => {
@@ -182,13 +244,14 @@ describe("scripts/generate-release-manifest.ts — artifact correspondence", () 
     const res = runManifest({ version, files: happyPathFiles(version) });
     expect(res.status).toBe(0);
     const m = res.manifest!;
-    const advertised: Array<[string, string]> = [["tarball_url", String(m.tarball_url)]];
-    if (m.sha256_url) advertised.push(["sha256_url", m.sha256_url as string]);
-    if (m.signature_url) advertised.push(["signature_url", m.signature_url as string]);
-    for (const bundle of Object.values(
-      m.bundles as Record<string, { url: string; sha256_url: string }>,
-    )) {
-      advertised.push(["bundle.url", bundle.url], ["bundle.sha256_url", bundle.sha256_url]);
+    const advertised: Array<[string, string]> = [["tarball_url", readString(m.tarball_url)]];
+    const sha256Url = readOptionalString(m.sha256_url);
+    const signatureUrl = readOptionalString(m.signature_url);
+    if (sha256Url !== undefined) advertised.push(["sha256_url", sha256Url]);
+    if (signatureUrl !== undefined) advertised.push(["signature_url", signatureUrl]);
+    for (const bundle of readBundles(m.bundles).values()) {
+      expect(bundle.sha256_url).toBeDefined();
+      advertised.push(["bundle.url", bundle.url], ["bundle.sha256_url", bundle.sha256_url!]);
     }
     for (const [key, url] of advertised) {
       const basename = url.split("/").pop()!;
@@ -202,6 +265,7 @@ describe("scripts/generate-release-manifest.ts — artifact correspondence", () 
 
 describe("version-source consistency", () => {
   it("package.json version matches the latest CHANGELOG heading", () => {
+    // SAFETY: package.json is repository-controlled and its version is validated below.
     const pkg = JSON.parse(readFileSync(path.join(REPO_ROOT, "package.json"), "utf8")) as {
       version: string;
     };
@@ -212,12 +276,13 @@ describe("version-source consistency", () => {
   });
 
   it("manifest min_cli_version is satisfiable by the current package version", () => {
+    // SAFETY: package.json is repository-controlled and its version is validated below.
     const pkg = JSON.parse(readFileSync(path.join(REPO_ROOT, "package.json"), "utf8")) as {
       version: string;
     };
     const res = runManifest({ version: pkg.version, files: happyPathFiles(pkg.version) });
     expect(res.status).toBe(0);
-    const minCliVersion = String(res.manifest!.min_cli_version);
+    const minCliVersion = readString(res.manifest!.min_cli_version);
     expect(semver.gte(pkg.version, minCliVersion)).toBe(true);
   });
 });

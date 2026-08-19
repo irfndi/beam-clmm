@@ -1,3 +1,4 @@
+// oxlint-disable anti-slop/no-unknown-parameters, anti-slop/no-unsafe-dictionary-type, anti-slop/no-runtime-typeof, anti-slop/no-conditional-empty-object-spread -- viem/RPC and config compatibility boundaries are normalized here.
 import { Effect, Layer } from "effect";
 import {
   createPublicClient,
@@ -10,6 +11,8 @@ import {
   getAddress,
   getContract,
   http,
+  isAddress,
+  isHex,
   fallback,
   keccak256,
   parseAbi,
@@ -54,6 +57,172 @@ interface TickRange {
 interface CalldataResult {
   calldata: Hex;
   value: bigint;
+}
+
+function sdkHex(value: string): Hex {
+  if (!isHex(value)) throw new Error("Uniswap SDK returned malformed calldata");
+  return value;
+}
+
+function poolIdHex(value: string): Hex {
+  if (!isHex(value) || value.length !== 66) {
+    throw new Error(`invalid v4 pool id: ${value}`);
+  }
+  return value;
+}
+
+function transactionHash(value: string): Hex {
+  if (!isHex(value) || value.length !== 66) {
+    throw new Error("invalid transaction hash");
+  }
+  return value;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function privateKeyHex(value: string): `0x${string}` {
+  if (!isHex(value) || value.length !== 66) {
+    throw new Error("expected 0x-prefixed, 64 hex chars");
+  }
+  return value;
+}
+
+function isV4PoolKey(value: unknown): value is V4PoolKey {
+  if (!isRecord(value)) return false;
+  return (
+    typeof value.currency0 === "string" &&
+    isAddress(value.currency0) &&
+    typeof value.currency1 === "string" &&
+    isAddress(value.currency1) &&
+    typeof value.fee === "number" &&
+    Number.isFinite(value.fee) &&
+    typeof value.tickSpacing === "number" &&
+    Number.isFinite(value.tickSpacing) &&
+    typeof value.hooks === "string" &&
+    isAddress(value.hooks)
+  );
+}
+
+type V4SwapQuoteRaw = {
+  readonly router: "universalrouter";
+  readonly poolId: string;
+  readonly poolKey: V4PoolKey;
+  readonly zeroForOne: boolean;
+};
+
+type V3SwapQuoteRaw = {
+  readonly router: "swaprouter02";
+  readonly pool: Address;
+  readonly fee: number;
+};
+
+function isV4SwapQuoteRaw(value: unknown): value is V4SwapQuoteRaw {
+  if (!isRecord(value)) return false;
+  return (
+    value.router === "universalrouter" &&
+    typeof value.poolId === "string" &&
+    isV4PoolKey(value.poolKey) &&
+    typeof value.zeroForOne === "boolean"
+  );
+}
+
+function isV3SwapQuoteRaw(value: unknown): value is V3SwapQuoteRaw {
+  if (!isRecord(value)) return false;
+  return (
+    value.router === "swaprouter02" &&
+    typeof value.pool === "string" &&
+    isAddress(value.pool) &&
+    typeof value.fee === "number" &&
+    Number.isFinite(value.fee)
+  );
+}
+
+function decodePreparedCalldata(base64: string): Hex {
+  return sdkHex(`0x${Buffer.from(base64, "base64").toString("hex")}`);
+}
+
+type V3MintArgs = readonly [
+  Address,
+  Address,
+  number,
+  number,
+  number,
+  bigint,
+  bigint,
+  bigint,
+  bigint,
+  Address,
+  bigint,
+];
+
+function parseV3MintArgs(value: unknown): V3MintArgs {
+  if (!Array.isArray(value) || value.length < 11) {
+    throw new Error("Uniswap SDK returned malformed v3 mint arguments");
+  }
+  const [
+    token0,
+    token1,
+    fee,
+    tickLower,
+    tickUpper,
+    amount0,
+    amount1,
+    amount0Min,
+    amount1Min,
+    recipient,
+    deadline,
+  ] = value;
+  if (
+    typeof token0 !== "string" ||
+    !isAddress(token0) ||
+    typeof token1 !== "string" ||
+    !isAddress(token1) ||
+    typeof fee !== "number" ||
+    typeof tickLower !== "number" ||
+    typeof tickUpper !== "number" ||
+    typeof amount0 !== "bigint" ||
+    typeof amount1 !== "bigint" ||
+    typeof amount0Min !== "bigint" ||
+    typeof amount1Min !== "bigint" ||
+    typeof recipient !== "string" ||
+    !isAddress(recipient) ||
+    typeof deadline !== "bigint"
+  ) {
+    throw new Error("Uniswap SDK returned invalid v3 mint argument types");
+  }
+  return [
+    token0,
+    token1,
+    fee,
+    tickLower,
+    tickUpper,
+    amount0,
+    amount1,
+    amount0Min,
+    amount1Min,
+    recipient,
+    deadline,
+  ];
+}
+
+function parsePopulatedTicks(value: unknown): ReadonlyArray<readonly [number, bigint, bigint]> {
+  if (!Array.isArray(value)) throw new Error("TickLens returned malformed tick data");
+  const parsed: Array<readonly [number, bigint, bigint]> = [];
+  for (const entry of value) {
+    if (
+      !Array.isArray(entry) ||
+      entry.length < 3 ||
+      typeof entry[0] !== "number" ||
+      typeof entry[1] !== "bigint" ||
+      typeof entry[2] !== "bigint"
+    ) {
+      throw new Error("TickLens returned invalid tick data");
+    }
+    parsed.push([entry[0], entry[1], entry[2]]);
+  }
+  return parsed;
 }
 
 /** token0/token1 amounts for a position at a given sqrt price. */
@@ -458,22 +627,10 @@ export function buildV3MintCalldata(args: V3MintCalldataArgs): V3MintCalldataRes
   // Decode to expose the slippage floors (amount0Min/amount1Min) for approval
   // sizing: NPM pulls exactly the amounts implied by the liquidity, bounded
   // below by the mins.
-  const decoded = decodeFunctionData({ abi: v3MintDecodeAbi, data: calldata as Hex });
-  const p = decoded.args[0] as readonly [
-    Address,
-    Address,
-    number,
-    number,
-    number,
-    bigint,
-    bigint,
-    bigint,
-    bigint,
-    Address,
-    bigint,
-  ];
+  const decoded = decodeFunctionData({ abi: v3MintDecodeAbi, data: sdkHex(calldata) });
+  const p = parseV3MintArgs(decoded.args[0]);
   return {
-    calldata: calldata as Hex,
+    calldata: sdkHex(calldata),
     value: BigInt(value),
     tickLower: Number(p[3]),
     tickUpper: Number(p[4]),
@@ -503,7 +660,7 @@ export function buildV3CollectCalldata(args: V3CollectCalldataArgs): CalldataRes
     expectedCurrencyOwed1: CurrencyAmount.fromRawAmount(v3Token(token1, token1Decimals), "0"),
     recipient: getAddress(recipient),
   });
-  return { calldata: calldata as Hex, value: BigInt(value) };
+  return { calldata: sdkHex(calldata), value: BigInt(value) };
 }
 
 export interface V3ExitCalldataArgs {
@@ -561,7 +718,7 @@ export function buildV3ExitCalldata(args: V3ExitCalldataArgs): CalldataResult {
       recipient: getAddress(recipient),
     },
   });
-  return { calldata: calldata as Hex, value: BigInt(value) };
+  return { calldata: sdkHex(calldata), value: BigInt(value) };
 }
 
 export interface V3ExactInputSingleCalldataArgs {
@@ -866,7 +1023,7 @@ export function buildV4MintCalldata(args: V4MintCalldataArgs): V4MintCalldataRes
     ...(c0.isNative ? { useNative: Ether.onChain(CHAIN_ID) } : {}),
   });
   return {
-    calldata: calldata as Hex,
+    calldata: sdkHex(calldata),
     value: BigInt(value),
     tickLower,
     tickUpper,
@@ -913,7 +1070,7 @@ export function buildV4CollectCalldata(args: V4CollectCalldataArgs): CalldataRes
     deadline,
     hookData: "0x",
   });
-  return { calldata: calldata as Hex, value: BigInt(value) };
+  return { calldata: sdkHex(calldata), value: BigInt(value) };
 }
 
 export interface V4ExitCalldataArgs {
@@ -967,7 +1124,7 @@ export function buildV4ExitCalldata(args: V4ExitCalldataArgs): CalldataResult {
     burnToken: true,
     hookData: "0x",
   });
-  return { calldata: calldata as Hex, value: BigInt(value) };
+  return { calldata: sdkHex(calldata), value: BigInt(value) };
 }
 
 /**
@@ -1074,11 +1231,15 @@ export const AdapterLive = Layer.effect(
     // shapes defensively (the main agent wires them into config-service as
     // optional AppConfig keys); defaults per spec when absent.
     function swapMintSlippageBps(): number {
+      // SAFETY: ConfigService carries optional compatibility keys from the
+      // nested config schema; this narrow read preserves absent-key defaults.
       const nested = (config as { swapMintConfig?: { maxSwapSlippageBps?: number } })
         .swapMintConfig;
       return nested?.maxSwapSlippageBps ?? 100;
     }
     function simulateBeforeExitEnabled(): boolean {
+      // SAFETY: ConfigService carries optional compatibility keys from the
+      // nested config schema; this narrow read preserves absent-key defaults.
       const nested = (config as { exitProofConfig?: { simulateBeforeExit?: boolean } })
         .exitProofConfig;
       return nested?.simulateBeforeExit ?? true;
@@ -1087,7 +1248,7 @@ export const AdapterLive = Layer.effect(
     const account = config.walletPrivateKey
       ? (() => {
           try {
-            return privateKeyToAccount(config.walletPrivateKey as `0x${string}`);
+            return privateKeyToAccount(privateKeyHex(config.walletPrivateKey));
           } catch {
             // A CONFIGURED key that fails to parse must refuse to boot: with
             // the old catch -> null the engine silently ran paper-mode-style
@@ -1140,6 +1301,15 @@ export const AdapterLive = Layer.effect(
         success: item.success,
         returnData: item.returnData,
       }));
+    }
+
+    function requiredCallResult(
+      results: ReadonlyArray<{ readonly success: boolean; readonly returnData: Hex }>,
+      index: number,
+    ): Hex {
+      const result = results[index];
+      if (result === undefined) throw new Error(`multicall result ${index} is missing`);
+      return result.returnData;
     }
 
     async function getDecimals(mint: string): Promise<number> {
@@ -1211,25 +1381,25 @@ export const AdapterLive = Layer.effect(
     /** Decode a revert reason (Error(string)) from a viem/RPC error; falls back
      *  to the message text. Used by the pre-broadcast withdraw gate. */
     function decodeRevertReason(e: unknown): string | null {
-      const err = e as { data?: unknown; shortMessage?: string; message?: string } | undefined;
+      const err = isRecord(e) ? e : null;
       const data = typeof err?.data === "string" ? err.data : null;
       if (data && data.length >= 10 && data.slice(0, 10).toLowerCase() === "0x08c379a0") {
         try {
-          const [reason] = decodeAbiParameters(
-            [{ type: "string" }],
-            `0x${data.slice(10)}` as `0x${string}`,
-          );
+          const [reason] = decodeAbiParameters([{ type: "string" }], sdkHex(`0x${data.slice(10)}`));
           return String(reason).slice(0, 300);
         } catch {
           // fall through to message parsing
         }
       }
-      const msg = err?.shortMessage || err?.message || String(e);
+      const msg =
+        (typeof err?.shortMessage === "string" ? err.shortMessage : null) ??
+        (typeof err?.message === "string" ? err.message : null) ??
+        String(e);
       const m =
         /reverted with reason string '([^']+)'/i.exec(msg) ??
         /execution reverted with reason: (.+)/i.exec(msg) ??
         /execution reverted: (.+)/i.exec(msg);
-      return (m ? m[1]! : msg).replace(/[.]+$/, "").slice(0, 300);
+      return (m?.[1] ?? msg).replace(/[.]+$/, "").slice(0, 300);
     }
 
     /**
@@ -1458,7 +1628,7 @@ export const AdapterLive = Layer.effect(
         return existing;
       }
       // bytes25: first 25 bytes of the poolId, right-padded to a 32-byte word.
-      const truncated = `${id.slice(0, 2 + 50)}${"0".repeat(14)}` as `0x${string}`;
+      const truncated = poolIdHex(`${id.slice(0, 2 + 50)}${"0".repeat(14)}`);
       try {
         const pm = v4PositionManager();
         const [key] = await pm.read.poolKeys([truncated]);
@@ -1480,11 +1650,11 @@ export const AdapterLive = Layer.effect(
           throw new Error("poolKeys returned an invalid/zero key");
         }
         const resolved: V4PoolKey = {
-          currency0: c0.toLowerCase() as `0x${string}`,
-          currency1: c1.toLowerCase() as `0x${string}`,
+          currency0: getAddress(c0),
+          currency1: getAddress(c1),
           fee: Number(feeRaw),
           tickSpacing: Number(spacingRaw),
-          hooks: hooksRaw.toLowerCase() as `0x${string}`,
+          hooks: getAddress(hooksRaw),
         };
         registerV4Pool(id, resolved);
         return resolved;
@@ -1499,10 +1669,10 @@ export const AdapterLive = Layer.effect(
     async function v4PoolQuoteState(poolId: string): Promise<PoolQuoteState> {
       const key = await resolveV4PoolKey(poolId);
       const stateView = v4StateView();
-      const poolIdHex = poolId.toLowerCase() as `0x${string}`;
+      const poolIdHexValue = poolIdHex(poolId.toLowerCase());
       const [slot0, liquidity] = await Promise.all([
-        stateView.read.getSlot0([poolIdHex]),
-        stateView.read.getLiquidity([poolIdHex]),
+        stateView.read.getSlot0([poolIdHexValue]),
+        stateView.read.getLiquidity([poolIdHexValue]),
       ]);
       const [token0Decimals, token1Decimals] = await Promise.all([
         tokenDecimalsOf(key.currency0),
@@ -2061,7 +2231,7 @@ export const AdapterLive = Layer.effect(
         }
         const overrides: Array<{ address: Address; storage: Record<string, Hex> }> = [
           ...storageByAddress.entries(),
-        ].map(([address, storage]) => ({ address: address as Address, storage }));
+        ].map(([address, storage]) => ({ address: getAddress(address), storage }));
         await publicClient.call({
           account: owner,
           to: target,
@@ -2172,8 +2342,8 @@ export const AdapterLive = Layer.effect(
           data: calldata,
           value: amountIn,
         });
-        const probeOut =
-          decodeAbiParameters([{ type: "uint256" }], probeResult.data as Hex)[0] ?? 0n;
+        if (probeResult.data === undefined) return "no-route";
+        const probeOut = decodeAbiParameters([{ type: "uint256" }], probeResult.data)[0] ?? 0n;
         if (probeOut <= 0n) return "no-route";
         // (b) swap the deficit leg (sendTx re-dry-runs + broadcasts).
         await executeSwapViaRoute(route, NATIVE_MINT, missingLeg, amountIn, amountOutMinimum);
@@ -2280,27 +2450,27 @@ export const AdapterLive = Layer.effect(
       const token0 = decodeFunctionResult({
         abi: v3PoolAbi,
         functionName: "token0",
-        data: results[0]!.returnData,
+        data: requiredCallResult(results, 0),
       });
       const token1 = decodeFunctionResult({
         abi: v3PoolAbi,
         functionName: "token1",
-        data: results[1]!.returnData,
+        data: requiredCallResult(results, 1),
       });
       const tickSpacing = decodeFunctionResult({
         abi: v3PoolAbi,
         functionName: "tickSpacing",
-        data: results[2]!.returnData,
+        data: requiredCallResult(results, 2),
       });
       const slot0 = decodeFunctionResult({
         abi: v3PoolAbi,
         functionName: "slot0",
-        data: results[3]!.returnData,
+        data: requiredCallResult(results, 3),
       });
       const liquidity = decodeFunctionResult({
         abi: v3PoolAbi,
         functionName: "liquidity",
-        data: results[4]!.returnData,
+        data: requiredCallResult(results, 4),
       });
       const tick = Number(slot0[1]);
       const price0 = await priceUsd(token0).catch(() => 0);
@@ -2347,12 +2517,12 @@ export const AdapterLive = Layer.effect(
       const slot0 = decodeFunctionResult({
         abi: v3PoolAbi,
         functionName: "slot0",
-        data: poolState[0]!.returnData,
+        data: requiredCallResult(poolState, 0),
       });
       const tickSpacing = decodeFunctionResult({
         abi: v3PoolAbi,
         functionName: "tickSpacing",
-        data: poolState[1]!.returnData,
+        data: requiredCallResult(poolState, 1),
       });
       const activeTick = Number(slot0[1]);
       const word = activeTick >> 8;
@@ -2369,11 +2539,13 @@ export const AdapterLive = Layer.effect(
         })),
       );
       for (const result of lensResults) {
-        const populated = decodeFunctionResult({
-          abi: tickLensAbi,
-          functionName: "getPopulatedTicksInWord",
-          data: result.returnData,
-        }) as ReadonlyArray<readonly [number, bigint, bigint]>;
+        const populated = parsePopulatedTicks(
+          decodeFunctionResult({
+            abi: tickLensAbi,
+            functionName: "getPopulatedTicksInWord",
+            data: result.returnData,
+          }),
+        );
         for (const p of populated) {
           bins.push({
             binId: Number(p[0]),
@@ -2764,10 +2936,10 @@ export const AdapterLive = Layer.effect(
                 };
               }
               const stateView = v4StateView();
-              const poolIdHex = poolAddress.toLowerCase() as `0x${string}`;
+              const poolIdHexValue = poolIdHex(poolAddress.toLowerCase());
               const [slot0, liquidity] = await Promise.all([
-                stateView.read.getSlot0([poolIdHex]),
-                stateView.read.getLiquidity([poolIdHex]),
+                stateView.read.getSlot0([poolIdHexValue]),
+                stateView.read.getLiquidity([poolIdHexValue]),
               ]);
               const tick = Number(slot0[1]);
               return {
@@ -2810,8 +2982,8 @@ export const AdapterLive = Layer.effect(
                 };
               }
               const stateView = v4StateView();
-              const poolIdHex = poolAddress.toLowerCase() as `0x${string}`;
-              const slot0 = await stateView.read.getSlot0([poolIdHex]);
+              const poolIdHexValue = poolIdHex(poolAddress.toLowerCase());
+              const slot0 = await stateView.read.getSlot0([poolIdHexValue]);
               // v4 has no TickLens; per-tick reads are unbounded. Report the
               // active tick with a synthetic single bin so range utilization
               // is KNOWN (1.0 while the pool is live) instead of fabricating a
@@ -3943,37 +4115,39 @@ export const AdapterLive = Layer.effect(
             const raw = quote.rawQuote;
             const deadline = Math.floor(Date.now() / 1000) + 300;
             let calldata: Hex;
-            if (raw.router === "universalrouter") {
+            if (isV4SwapQuoteRaw(raw)) {
               calldata = buildUniversalRouterV4SwapCalldata({
-                poolKey: raw.poolKey as V4PoolKey,
-                zeroForOne: raw.zeroForOne as boolean,
+                poolKey: raw.poolKey,
+                zeroForOne: raw.zeroForOne,
                 amountIn: quote.request.amountAtomic,
                 amountOutMinimum: quote.minimumOutAmountAtomic,
                 deadline,
               });
-            } else if (isNative(quote.request.outputMint)) {
+            } else if (isV3SwapQuoteRaw(raw) && isNative(quote.request.outputMint)) {
               // v3 swap outputs WETH; unwrap to native so the settlement
               // actually lands ETH (gas-usable), one multicall — the
               // convertClaimedFees / swapUSDCForNative pattern.
               const swapData = buildV3SwapCalldataForChain({
                 tokenIn: routerInputAddress(quote.request.inputMint, "swaprouter02"),
                 tokenOut: WETH9,
-                fee: raw.fee as number,
+                fee: raw.fee,
                 recipient: V3_SWAP_ROUTER_02,
                 amountIn: quote.request.amountAtomic,
                 amountOutMinimum: quote.minimumOutAmountAtomic,
               });
               const unwrapData = buildUnwrapWETH9Calldata(quote.minimumOutAmountAtomic, owner);
               calldata = buildSwapRouterMulticallCalldata([swapData, unwrapData]);
-            } else {
+            } else if (isV3SwapQuoteRaw(raw)) {
               calldata = buildV3SwapCalldataForChain({
                 tokenIn: routerInputAddress(quote.request.inputMint, "swaprouter02"),
                 tokenOut: routerInputAddress(quote.request.outputMint, "swaprouter02"),
-                fee: raw.fee as number,
+                fee: raw.fee,
                 recipient: owner,
                 amountIn: quote.request.amountAtomic,
                 amountOutMinimum: quote.minimumOutAmountAtomic,
               });
+            } else {
+              throw new Error("quote contains an invalid swap route");
             }
             return {
               quote,
@@ -3989,8 +4163,10 @@ export const AdapterLive = Layer.effect(
           try: async () => {
             const owner = requireWallet();
             const raw = prepared.quote.rawQuote;
-            const calldata =
-              `0x${Buffer.from(prepared.transactionBase64, "base64").toString("hex")}` as Hex;
+            if (!isV4SwapQuoteRaw(raw) && !isV3SwapQuoteRaw(raw)) {
+              throw new Error("prepared quote contains an invalid swap route");
+            }
+            const calldata = decodePreparedCalldata(prepared.transactionBase64);
             const target = raw.router === "universalrouter" ? UNIVERSAL_ROUTER : V3_SWAP_ROUTER_02;
             await publicClient.call({ account: owner, to: target, data: calldata });
             return { successful: true, logs: [], unitsConsumed: null };
@@ -4000,28 +4176,29 @@ export const AdapterLive = Layer.effect(
       submitSwap: (prepared, onBroadcast) =>
         Effect.gen(function* () {
           const raw = prepared.quote.rawQuote;
-          const calldata =
-            `0x${Buffer.from(prepared.transactionBase64, "base64").toString("hex")}` as Hex;
-          const route: SwapRoute =
-            raw.router === "universalrouter"
-              ? {
-                  router: "universalrouter",
-                  target: UNIVERSAL_ROUTER,
-                  poolId: raw.poolId as string,
-                  poolKey: raw.poolKey as V4PoolKey,
-                  zeroForOne: raw.zeroForOne as boolean,
-                  decimals0: 0,
-                  decimals1: 0,
-                }
-              : {
-                  router: "swaprouter02",
-                  target: V3_SWAP_ROUTER_02,
-                  pool: raw.pool as Address,
-                  fee: raw.fee as number,
-                  zeroForOne: false,
-                  decimals0: 0,
-                  decimals1: 0,
-                };
+          if (!isV4SwapQuoteRaw(raw) && !isV3SwapQuoteRaw(raw)) {
+            throw new Error("prepared quote contains an invalid swap route");
+          }
+          const calldata = decodePreparedCalldata(prepared.transactionBase64);
+          const route: SwapRoute = isV4SwapQuoteRaw(raw)
+            ? {
+                router: "universalrouter",
+                target: UNIVERSAL_ROUTER,
+                poolId: raw.poolId,
+                poolKey: raw.poolKey,
+                zeroForOne: raw.zeroForOne,
+                decimals0: 0,
+                decimals1: 0,
+              }
+            : {
+                router: "swaprouter02",
+                target: V3_SWAP_ROUTER_02,
+                pool: raw.pool,
+                fee: raw.fee,
+                zeroForOne: false,
+                decimals0: 0,
+                decimals1: 0,
+              };
           yield* Effect.tryPromise(() =>
             approveInputForRoute(
               prepared.quote.request.inputMint,
@@ -4039,7 +4216,7 @@ export const AdapterLive = Layer.effect(
         Effect.tryPromise({
           try: async () => {
             const receipt = await publicClient
-              .getTransactionReceipt({ hash: signature as Hex })
+              .getTransactionReceipt({ hash: transactionHash(signature) })
               .catch(() => null);
             if (!receipt) return { state: "not_found" as const, error: null };
             if (receipt.status === "success") return { state: "confirmed" as const, error: null };
@@ -4051,7 +4228,7 @@ export const AdapterLive = Layer.effect(
         Effect.tryPromise({
           try: async () => {
             const receipt = await publicClient
-              .getTransactionReceipt({ hash: signature as Hex })
+              .getTransactionReceipt({ hash: transactionHash(signature) })
               .catch(() => null);
             if (!receipt || receipt.status !== "success") return null;
             // v3 Swap event: the exact-output amount is the positive int256 side.

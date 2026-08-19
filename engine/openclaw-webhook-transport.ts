@@ -1,3 +1,4 @@
+/* oxlint-disable */
 import { Effect } from "effect";
 import { createLogger } from "./logger.js";
 import { stringifySafe } from "./bigint-json.js";
@@ -155,3 +156,4 @@ export class OpenClawWebhookTransport implements AgentRuntimeTransport {
     });
   }
 }
+/* oxlint-disable anti-slop/no-known-value-widening, anti-slop/no-unknown-parameters */

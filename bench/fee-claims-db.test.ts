@@ -4,8 +4,8 @@ import { Effect, Layer } from "effect";
 import { DbLive } from "../engine/db-service.js";
 import { DbService } from "../engine/services.js";
 
-function run<T, E, R, E2, R2>(effect: Effect.Effect<T, E, R>, layer: Layer.Layer<R, E2, R2>): T {
-  return Effect.runSync((Effect.provide as any)(effect, layer) as Effect.Effect<T, Error, never>);
+function run<T, E, R, E2>(effect: Effect.Effect<T, E, R>, layer: Layer.Layer<R, E2, never>): T {
+  return Effect.runSync(Effect.provide(effect, layer));
 }
 
 function makeFeeClaim(

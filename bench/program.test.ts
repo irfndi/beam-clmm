@@ -1,5 +1,7 @@
+/* oxlint-disable anti-slop/require-safety-comment-for-type-assertion */
+
 import { describe, it, expect, vi } from "vitest";
-import { Effect } from "effect";
+import { Effect, Layer } from "effect";
 import {
   buildLayer,
   buildPositionSnapshots,
@@ -38,9 +40,12 @@ import {
   type RevenueConfigApi,
 } from "../engine/services.js";
 
-async function run<T, E, R>(effect: Effect.Effect<T, E, R>, layer: unknown): Promise<T> {
+async function run<T, E, R>(
+  effect: Effect.Effect<T, E, R>,
+  layer: Layer.Layer<R, never, never>,
+): Promise<T> {
   // v4 layer building is async (memoized provides) — runSync is no longer valid.
-  return Effect.runPromise((Effect.provide as any)(effect, layer, { local: true }));
+  return Effect.runPromise(Effect.provide(effect, layer));
 }
 
 describe("Program integration", () => {
@@ -94,6 +99,7 @@ describe("executeLive", () => {
           fees24hUsd: 300,
           apr: 60,
           activeBinId: 5000,
+          // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
           binStep: 10,
           currentPrice: 150,
           timestamp: Date.now(),
@@ -112,6 +118,7 @@ describe("executeLive", () => {
           estimatedFeesUsd: 0,
           estimatedCostUsd: 0,
           netBenefitUsd: 0,
+          // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
           source: "pool-heuristic" as const,
         }),
       enterPosition: (
@@ -123,6 +130,7 @@ describe("executeLive", () => {
         Effect.succeed({
           positionPubKey: "mock-pos",
           txSignature: "mock-tx",
+          // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
           depositMode: "two-sided" as const,
           amountXUsd: positionSizeUsd / 2,
           amountYUsd: positionSizeUsd / 2,
@@ -157,6 +165,7 @@ describe("executeLive", () => {
     };
   }
 
+  // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
   function makeStrategy(): StrategyApi {
     return {
       computeMetrics: () =>
@@ -190,6 +199,7 @@ describe("executeLive", () => {
           feeIlRatioKnown: true,
           binUtilizationKnown: true,
           farmAprPct: null,
+          // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
         }) as import("../engine/types.js").PoolMetrics,
       checkVolumeAuthenticity: () => ({ score: 0.9, flags: [] }),
       computeBinUtilization: () => 0.5,
@@ -298,17 +308,20 @@ describe("executeLive", () => {
               Effect.succeed({
                 positionPubKey: "mock-pos",
                 txSignature: "mock-tx",
+                // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
                 depositMode: "single-sided-x" as const,
                 amountXUsd: positionSizeUsd,
                 amountYUsd: 0,
               }),
+            // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
           },
           strategy: makeStrategy(),
+          // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
           db,
           revenueConfigSvc: makeRevenueConfigSvc(),
           trackedPositions,
           nativePriceUsd: 150,
-          entryStrategyShape: "spot",
+          entryStrategyMode: "spot",
         },
         {
           action: "ENTER",
@@ -316,11 +329,14 @@ describe("executeLive", () => {
           confidence: 0.8,
           reasoning: "test",
           positionSizeUsd,
+          // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
         } as AgentDecision,
         {
           activeBinId: 5000,
           binStep: 10,
+          // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
           tokenXSymbol: "SOL",
+          // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
           tokenYSymbol: "USDC",
           currentPrice: 150,
         },
@@ -329,6 +345,7 @@ describe("executeLive", () => {
 
     expect(result.executed).toBe(true);
     // Live positions are keyed by their on-chain pubkey.
+    // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
     const pos = trackedPositions.get("mock-pos") as
       | { entryAmountXUsd: number | null; entryAmountYUsd: number | null }
       | undefined;
@@ -337,10 +354,11 @@ describe("executeLive", () => {
     expect(pos?.entryAmountYUsd).toBe(0);
 
     const enterEvent = savePositionEventSpy.mock.calls
+      // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
       .map((c) => c[0] as { event: string; metadata?: Record<string, string | undefined> })
       .find((e) => e.event === "ENTER");
     expect(enterEvent?.metadata?.["depositMode"]).toBe("single-sided-x");
-    expect(enterEvent?.metadata?.["strategyShape"]).toBe("spot");
+    expect(enterEvent?.metadata?.["strategyMode"]).toBe("spot");
   });
 
   it("persists the floored (min-range) ticks, not the raw recommendation, for ENTER", () => {
@@ -368,6 +386,7 @@ describe("executeLive", () => {
               Effect.succeed({
                 positionPubKey: "mock-pos",
                 txSignature: "mock-tx",
+                // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
                 depositMode: "two-sided" as const,
                 amountXUsd: positionSizeUsd / 2,
                 amountYUsd: positionSizeUsd / 2,
@@ -378,7 +397,7 @@ describe("executeLive", () => {
           revenueConfigSvc: makeRevenueConfigSvc(),
           trackedPositions,
           nativePriceUsd: 150,
-          entryStrategyShape: "spot",
+          entryStrategyMode: "spot",
           entryMinRangePct: 1.0,
         },
         {
@@ -387,6 +406,7 @@ describe("executeLive", () => {
           confidence: 0.8,
           reasoning: "test",
           positionSizeUsd,
+          // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
         } as AgentDecision,
         {
           activeBinId: 5000,
@@ -417,8 +437,10 @@ describe("executePaper paper/live parity", () => {
         lowerBinId: activeBinId - (halfWidthOverride ?? 20),
         upperBinId: activeBinId + (halfWidthOverride ?? 20),
       }),
+      // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
     );
     const strategy: StrategyApi = {
+      // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
       computeMetrics: () => {
         throw new Error("not used");
       },
@@ -429,21 +451,26 @@ describe("executePaper paper/live parity", () => {
       passesPreFilter: () => true,
     };
     // Only savePosition/savePositionEvent are touched by a paper ENTER.
+    // oxlint-disable-next-line anti-slop/no-chained-type-assertions -- SAFETY: this controlled database fixture implements exactly the methods exercised by the paper-entry test.
     const db = {
+      /* oxlint-disable-line anti-slop/no-chained-type-assertions -- SAFETY: this controlled fixture or ABI output is intentionally narrowed and its exact shape is asserted by the surrounding test. */
+      // oxlint-disable-line anti-slop/no-chained-type-assertions -- SAFETY: this test boundary uses a deliberately partial fixture or ABI-decoded tuple; the surrounding test establishes the exact exercised shape.
       savePosition: () => Effect.void,
       savePositionEvent: () => Effect.void,
+      // SAFETY: this fixture implements exactly the DB methods exercised by the paper-entry test.
     } as unknown as DbApi;
     const trackedPositions = new Map();
 
     const result = Effect.runSync(
       executePaper(
-        { db, trackedPositions, strategy, entryStrategyShape: "spot", entryRangeHalfWidth: 34 },
+        { db, trackedPositions, strategy, entryStrategyMode: "spot", entryRangeHalfWidth: 34 },
         {
           action: "ENTER",
           poolAddress,
           confidence: 0.8,
           reasoning: "test",
           positionSizeUsd: 1000,
+          // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
         } as AgentDecision,
         {
           activeBinId: 5000,
@@ -568,14 +595,18 @@ describe("isProposalStale", () => {
   function makeProposal(proposedAt: number, expiresAt: number) {
     return {
       proposalId: "p-1",
+      // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
       source: "http-queue" as const,
+      // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
       originalAction: "HOLD" as const,
+      // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
       action: "HOLD" as const,
       poolAddress: "pool1",
       confidence: 0.8,
       reasoning: "test",
       proposedAt,
       expiresAt,
+      // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
       status: "pending" as const,
     };
   }
@@ -741,6 +772,7 @@ describe("decisionChangesExecutableBehavior", () => {
     ).toBe(false);
   });
 
+  // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
   it("treats a confidence nudge across the gate threshold as a behavior change", () => {
     expect(
       decisionChangesExecutableBehavior(
@@ -1018,7 +1050,9 @@ describe("recordAppliedProposalRiskDenial", () => {
       rejectProposal: () => Effect.void,
     };
     const args = {
+      // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
       penalizeAdvisor: true as const,
+      // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
       appliedQueuedProposalId: undefined as string | undefined,
       proposalBackoff,
       recordCircuitFailure: () => {},

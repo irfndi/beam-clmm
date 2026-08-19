@@ -273,10 +273,12 @@ export async function runAsync<T, E>(effect: Effect.Effect<T, E, never>): Promis
 
 // ─── Fetch mock ──────────────────────────────────────────────────────────────
 
-export function mockFetch(impl: unknown): () => void {
+export type FetchMock = (...args: never[]) => Promise<Response>;
+
+export function mockFetch(impl: FetchMock): () => void {
   const original = globalThis.fetch;
-  globalThis.fetch = vi.fn(impl as typeof fetch) as unknown as typeof globalThis.fetch;
+  vi.stubGlobal("fetch", impl);
   return () => {
-    globalThis.fetch = original;
+    vi.stubGlobal("fetch", original);
   };
 }

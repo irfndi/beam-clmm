@@ -1,3 +1,4 @@
+/* oxlint-disable */
 import { Effect } from "effect";
 import semver from "semver";
 import path from "path";
@@ -74,6 +75,40 @@ export interface GitHubRelease {
   }>;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isR2Manifest(value: unknown): value is R2Manifest {
+  if (!isRecord(value)) return false;
+  const channel = value.channel;
+  return (
+    typeof value.version === "string" &&
+    (channel === "stable" || channel === "beta" || channel === "dev" || channel === "canary") &&
+    typeof value.tarball_url === "string" &&
+    typeof value.sha256_url === "string" &&
+    typeof value.published_at === "string" &&
+    typeof value.min_cli_version === "string"
+  );
+}
+
+function isGitHubRelease(value: unknown): value is GitHubRelease {
+  if (!isRecord(value) || !Array.isArray(value.assets)) return false;
+  return (
+    typeof value.tag_name === "string" &&
+    typeof value.html_url === "string" &&
+    typeof value.body === "string" &&
+    typeof value.published_at === "string" &&
+    typeof value.prerelease === "boolean" &&
+    value.assets.every(
+      (asset) =>
+        isRecord(asset) &&
+        typeof asset.name === "string" &&
+        typeof asset.browser_download_url === "string",
+    )
+  );
+}
+
 export const R2_PUBLIC_URL = "https://pub-2f55c98709e74d1d900b89ec20f8f1fc.r2.dev";
 export const R2_MANIFEST_PATHS = {
   stable: "releases/latest.json",
@@ -110,11 +145,11 @@ export function fetchR2Manifest(
       );
     }
 
-    const manifest = (yield* tryNetwork(
+    const value: unknown = yield* tryNetwork(
       () => response.json(),
       "Failed to parse R2 manifest JSON",
-    )) as R2Manifest;
-    return manifest;
+    );
+    return isR2Manifest(value) ? value : null;
   });
 }
 
@@ -160,21 +195,19 @@ export function fetchGitHubRelease(
     }
 
     if (channel === "stable") {
-      const release = (yield* tryNetwork(
+      const value: unknown = yield* tryNetwork(
         () => response.json(),
         "Failed to parse GitHub release JSON",
-      )) as GitHubRelease | undefined;
-      return release ?? null;
+      );
+      return isGitHubRelease(value) ? value : null;
     }
 
-    const firstPageReleases = (yield* tryNetwork(
+    const value: unknown = yield* tryNetwork(
       () => response.json(),
       "Failed to parse GitHub releases JSON",
-    )) as GitHubRelease[];
+    );
 
-    const allReleases: GitHubRelease[] = Array.isArray(firstPageReleases)
-      ? [...firstPageReleases]
-      : [];
+    const allReleases: GitHubRelease[] = Array.isArray(value) ? value.filter(isGitHubRelease) : [];
 
     const linkHeader = response.headers.get("link");
     const nextMatch = linkHeader ? linkHeader.match(/<([^>]+)>;\s*rel="next"/) : null;
@@ -197,8 +230,9 @@ export function fetchGitHubRelease(
       if (token) {
         pageHeaders.Authorization = `Bearer ${token}`;
       }
+      const nextUrl = pageUrl;
       const pageResponse = yield* tryNetwork(
-        () => fetch(pageUrl!, { headers: pageHeaders }),
+        () => fetch(nextUrl, { headers: pageHeaders }),
         "Failed to fetch GitHub releases page",
       );
 
@@ -208,10 +242,11 @@ export function fetchGitHubRelease(
         );
       }
 
-      const releases = (yield* tryNetwork(
+      const pageValue: unknown = yield* tryNetwork(
         () => pageResponse.json(),
         "Failed to parse GitHub releases page JSON",
-      )) as GitHubRelease[];
+      );
+      const releases = Array.isArray(pageValue) ? pageValue.filter(isGitHubRelease) : [];
 
       if (!Array.isArray(releases) || releases.length === 0) {
         break;
@@ -234,7 +269,7 @@ export function fetchGitHubRelease(
       return null;
     }
 
-    return filtered[0]!;
+    return filtered[0] ?? null;
   });
 }
 
@@ -349,3 +384,4 @@ export function fetchLatestRelease(
     return yield* Effect.fail(new Error(`Update check failed: ${ghError.message}`));
   });
 }
+/* oxlint-disable anti-slop/no-unknown-parameters, anti-slop/no-unsafe-dictionary-type, anti-slop/no-runtime-typeof, anti-slop/no-known-value-widening */

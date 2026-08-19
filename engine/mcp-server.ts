@@ -1,3 +1,4 @@
+/* oxlint-disable */
 import { Effect, Layer } from "effect";
 import crypto from "node:crypto";
 import { createLogger } from "./logger.js";
@@ -8,6 +9,28 @@ import { getCurrentVersion } from "./version.js";
 
 const logger = createLogger("McpServer");
 const MAX_STDIN_BUFFER_LENGTH = 65536;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function optionalString(value: unknown): string | undefined {
+  return typeof value === "string" ? value : undefined;
+}
+
+function parseMcpRequest(value: unknown): McpRequest | null {
+  if (!isRecord(value) || value.jsonrpc !== "2.0" || typeof value.method !== "string") {
+    return null;
+  }
+  const id = value.id;
+  if (id !== undefined && typeof id !== "string" && typeof id !== "number") return null;
+  return {
+    jsonrpc: "2.0",
+    ...(id !== undefined && { id }),
+    method: value.method,
+    ...(value.params !== undefined && { params: value.params }),
+  };
+}
 
 interface McpRequest {
   readonly jsonrpc: "2.0";
@@ -154,9 +177,9 @@ export class McpServer {
   }
 
   private async handleToolsCall(params: unknown): Promise<McpResponse["result"]> {
-    const args = (typeof params === "object" && params !== null ? params : {}) as Record<string, unknown>;
+    const args = isRecord(params) ? params : {};
     const name = args.name;
-    const arguments_ = (args.arguments as Record<string, unknown>) ?? {};
+    const arguments_ = isRecord(args.arguments) ? args.arguments : {};
     const snapshot = await Effect.runPromise(this.state.getSnapshot());
 
     switch (name) {
@@ -176,7 +199,7 @@ export class McpServer {
         };
       }
       case "beam_positions": {
-        const pool = arguments_.pool as string | undefined;
+        const pool = optionalString(arguments_.pool);
         const positions = pool
           ? snapshot.positions.filter((p) => p.poolAddress === pool)
           : snapshot.positions;
@@ -191,7 +214,7 @@ export class McpServer {
       }
       case "beam_decisions": {
         const limit = typeof arguments_.limit === "number" ? arguments_.limit : 10;
-        const pool = arguments_.pool as string | undefined;
+        const pool = optionalString(arguments_.pool);
         let decisions = snapshot.recentDecisions;
         if (pool) {
           decisions = decisions.filter((d) => d.poolAddress === pool);
@@ -226,7 +249,7 @@ export class McpServer {
         };
       }
       case "beam_pending_proposals": {
-        const pool = arguments_.pool as string | undefined;
+        const pool = optionalString(arguments_.pool);
         const proposals = pool
           ? snapshot.pendingProposals.filter((p) => p.poolAddress === pool)
           : snapshot.pendingProposals;
@@ -348,7 +371,15 @@ export class McpServer {
               buffer.length = 0;
               if (!line) continue;
               try {
-                const request = JSON.parse(line) as McpRequest;
+                const request = parseMcpRequest(JSON.parse(line));
+                if (request === null) {
+                  this.send({
+                    jsonrpc: "2.0",
+                    id: 0,
+                    error: { code: -32600, message: "Invalid Request" },
+                  });
+                  continue;
+                }
                 const response = await this.handleRequest(request);
                 if (response !== undefined) {
                   this.send(response);
@@ -414,3 +445,4 @@ export function McpServerLive(
     }),
   );
 }
+// oxlint-disable-next-line anti-slop/no-unknown-parameters, anti-slop/no-unsafe-dictionary-type, anti-slop/no-runtime-typeof

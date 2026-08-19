@@ -67,7 +67,12 @@ export interface Challenger extends Seat {
 }
 
 export type RotationDecision =
-  | { readonly action: "rotate"; readonly exitPool: string; readonly enterPool: string; readonly reason: string }
+  | {
+      readonly action: "rotate";
+      readonly exitPool: string;
+      readonly enterPool: string;
+      readonly reason: string;
+    }
   | { readonly action: "hold"; readonly reason: string };
 
 /** Canonical confirmations-map key for an exit->enter rotation pair. */
@@ -133,7 +138,10 @@ interface Candidate {
   readonly key: string;
 }
 
-function* candidatePairs(seats: readonly Seat[], challengers: readonly Challenger[]): Generator<Candidate> {
+function* candidatePairs(
+  seats: readonly Seat[],
+  challengers: readonly Challenger[],
+): Generator<Candidate> {
   for (const seat of seats) {
     const incumbentNet = estimateNetFeeVelocityUsdPerDay(
       seat.fees24hUsd,
@@ -206,7 +214,8 @@ export function evaluateRotation(
     if (cand.challengerNet < c.minChallengerNetFeesUsdPerDay) return false;
     if (cand.challengerNet < cand.incumbentNet * (1 + c.minSuperiorityPct / 100)) return false;
     if (cand.challenger.apr < cand.seat.apr + c.minAprLeadPct) return false;
-    if (cand.challenger.feeDensity < cand.seat.feeDensity * (1 + c.minFeeDensityLeadPct / 100)) return false;
+    if (cand.challenger.feeDensity < cand.seat.feeDensity * (1 + c.minFeeDensityLeadPct / 100))
+      return false;
     return true;
   });
 
@@ -240,8 +249,10 @@ export function evaluateRotation(
       return `challenger '${challenger.pool}' net fees $${fmt(challengerNet)}/day below $${fmt(c.minChallengerNetFeesUsdPerDay)}/day floor`;
     const superiorityNeed = incumbentNet * (1 + c.minSuperiorityPct / 100);
     if (challengerNet < superiorityNeed)
-      return `challenger '${challenger.pool}' net fee velocity $${fmt(challengerNet)}/day below ` +
-        `incumbent '${seat.pool}' x ${1 + c.minSuperiorityPct / 100} ($${fmt(superiorityNeed)}/day required)`;
+      return (
+        `challenger '${challenger.pool}' net fee velocity $${fmt(challengerNet)}/day below ` +
+        `incumbent '${seat.pool}' x ${1 + c.minSuperiorityPct / 100} ($${fmt(superiorityNeed)}/day required)`
+      );
     if (challenger.apr < seat.apr + c.minAprLeadPct)
       return `challenger '${challenger.pool}' apr ${fmt(challenger.apr)}% below incumbent '${seat.pool}' ${fmt(seat.apr)}% + ${c.minAprLeadPct}pp`;
     return `challenger '${challenger.pool}' fee density ${fmt(challenger.feeDensity)} below incumbent '${seat.pool}' x ${1 + c.minFeeDensityLeadPct / 100} (${fmt(seat.feeDensity * (1 + c.minFeeDensityLeadPct / 100))} required)`;
@@ -292,7 +303,8 @@ export function assessImpaired(
   const fmt = (n: number): string => n.toFixed(2);
 
   const shortExcursion = priceDistancePct <= SHORT_EXCURSION_PCT;
-  const daysToReentry = priceVelocityPctPerDay > 0 ? priceDistancePct / priceVelocityPctPerDay : Infinity;
+  const daysToReentry =
+    priceVelocityPctPerDay > 0 ? priceDistancePct / priceVelocityPctPerDay : Infinity;
   const reentryPlausible = Number.isFinite(daysToReentry) && daysToReentry <= REENTRY_HORIZON_DAYS;
   const impaired = !shortExcursion && !reentryPlausible;
 

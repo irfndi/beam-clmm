@@ -14,6 +14,14 @@ interface TierInfo {
   features: string[];
 }
 
+interface Credentials {
+  readonly apiKey: string;
+}
+
+function isCredentials(value: Credentials | null): value is Credentials {
+  return value !== null && Object.prototype.toString.call(value.apiKey) === "[object String]";
+}
+
 const TIER_INFO = {
   free: {
     name: "Free",
@@ -41,16 +49,26 @@ const TIER_INFO = {
   },
 } satisfies Record<string, TierInfo>;
 
-function getCredentials() {
+type Tier = keyof typeof TIER_INFO;
+
+function isTier(value: string): value is Tier {
+  return Object.prototype.hasOwnProperty.call(TIER_INFO, value);
+}
+
+function getCredentials(): Credentials | null {
   if (!fs.existsSync(CREDENTIALS_FILE)) {
     return null;
   }
   try {
-    return JSON.parse(fs.readFileSync(CREDENTIALS_FILE, "utf-8"));
-  } catch (err) {
+    // SAFETY: isCredentials validates the API key before returning the record.
+    const parsed = JSON.parse(fs.readFileSync(CREDENTIALS_FILE, "utf-8")) as Credentials | null;
+    if (isCredentials(parsed)) return parsed;
+  } catch {
     console.error("Error: Failed to parse credentials file. Run 'beam register' first.");
     process.exit(1);
   }
+  console.error("Error: Credentials file is missing an API key. Run 'beam register' first.");
+  process.exit(1);
 }
 
 export const subscriptionCommand = new Command("subscription")
@@ -78,7 +96,7 @@ export const subscriptionCommand = new Command("subscription")
       }
 
       const { tier, walletSol, referralCount, credits, platformFeeRate } = result.data;
-      const info = (TIER_INFO[tier as keyof typeof TIER_INFO] ?? TIER_INFO.free)!;
+      const info = isTier(tier) ? TIER_INFO[tier] : TIER_INFO.free;
 
       console.log(`Tier: ${info.name}`);
       console.log(`Wallet: $${walletSol.toFixed(2)}`);
@@ -103,12 +121,12 @@ export const subscriptionCommand = new Command("subscription")
           process.exit(1);
         }
 
-        if (!TIER_INFO[tier as keyof typeof TIER_INFO]) {
+        if (!isTier(tier)) {
           console.error(`Error: Unknown tier '${tier}'. Available: pro, fund`);
           process.exit(1);
         }
 
-        const info = TIER_INFO[tier as keyof typeof TIER_INFO];
+        const info = TIER_INFO[tier];
 
         console.log(`Upgrade to ${info.name}`);
         console.log(`Monthly fee: ${info.monthlyFee}`);

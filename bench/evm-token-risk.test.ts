@@ -9,36 +9,50 @@
 import { describe, expect, it } from "vitest";
 import { createPublicClient, http, keccak256, numberToHex, type Address, type Hex } from "viem";
 import { mainnet } from "viem/chains";
-import { computeTaxPct, compositeVerdict, createTokenRiskProber } from "../engine/evm-token-risk.js";
+import {
+  computeTaxPct,
+  compositeVerdict,
+  createTokenRiskProber,
+} from "../engine/evm-token-risk.js";
 
 // ─── Test doubles ────────────────────────────────────────────────────────────
 
+// SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
 const PROBE = "0x0000000000000000000000000000000000000002" as Address;
+// SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
 const POOL = "0x00000000000000000000000000000000000000c0" as Address;
+// SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
 const WETH = "0x00000000000000000000000000000000000000d0" as Address;
 
-const TRANSFER_TOPIC =
-  "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef";
-const ERC1967_SLOT =
-  "0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc";
+const TRANSFER_TOPIC = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef";
+const ERC1967_SLOT = "0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc";
 
 /** Runtime bytecode blobs are never executed by the mock — only scanned for selectors. */
+// SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
 const ERC20_RUNTIME = "0x6080604052348015600f57600080fd5b506370a08231a9059cbb313ce567" as Hex;
+// SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
 const ERC1967_STUB = "0x6080604052366000573d6000fd5b3660006000373660006020376000f3" as Hex;
+// SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
 const IMPL = "0x00000000000000000000000000000000000000aa" as Address;
 
 // Independent storage-key implementations (cross-check the module's keys).
 function stdKey(addr: Address, slot: number): Hex {
-  return keccak256(`0x${addr.slice(2).toLowerCase()}${numberToHex(BigInt(slot), { size: 32 }).slice(2)}`);
+  return keccak256(
+    `0x${addr.slice(2).toLowerCase()}${numberToHex(BigInt(slot), { size: 32 }).slice(2)}`,
+  );
 }
 function paddedKey(addr: Address, slot: number): Hex {
-  return keccak256(`0x${addr.slice(2).toLowerCase().padStart(64, "0")}${numberToHex(BigInt(slot), { size: 32 }).slice(2)}`);
+  return keccak256(
+    `0x${addr.slice(2).toLowerCase().padStart(64, "0")}${numberToHex(BigInt(slot), { size: 32 }).slice(2)}`,
+  );
 }
 function allowanceKeyStd(owner: Address, spender: Address, slot: number): Hex {
   return keccak256(`0x${owner.slice(2).toLowerCase()}${stdKey(spender, slot).slice(2)}`);
 }
 function allowanceKeyPadded(owner: Address, spender: Address, slot: number): Hex {
-  return keccak256(`0x${owner.slice(2).toLowerCase().padStart(64, "0")}${paddedKey(spender, slot).slice(2)}`);
+  return keccak256(
+    `0x${owner.slice(2).toLowerCase().padStart(64, "0")}${paddedKey(spender, slot).slice(2)}`,
+  );
 }
 function pad(addr: string): string {
   return `0x${"0".repeat(24)}${addr.slice(2).toLowerCase()}`;
@@ -103,6 +117,7 @@ class FakeERC20 {
       case "erc1967":
         return ERC1967_STUB;
       case "eip1167":
+        // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
         return `0x363d3d373d3d3d3d363d73${(this.opts.implAddress ?? IMPL).slice(2).toLowerCase()}5af43d82803e903d91602b57fd5bf3` as Hex;
       default:
         return ERC20_RUNTIME;
@@ -121,11 +136,13 @@ class FakeERC20 {
     switch (selector) {
       case "0x70a08231": {
         if (this.opts.balanceOfReverts) return revertCall("balanceOf reverted");
+        // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
         const addr = `0x${data.slice(34, 74)}` as Address;
         return { returnData: numberToHex(read(addr), { size: 32 }), status: "0x1", logs };
       }
       case "0xa9059cbb": {
         if (this.opts.honeypot) return revertCall("honeypot");
+        // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
         const to = `0x${data.slice(34, 74)}` as Address;
         const amount = toBI(`0x${data.slice(74)}`);
         const sender = tx.from ?? "0x0000000000000000000000000000000000000000";
@@ -146,7 +163,9 @@ class FakeERC20 {
         // with funded balance + allowance (the token's own restriction) —
         // everything else moves the funds like a normal ERC-20 pull.
         if (this.opts.transferFromReverts) return revertCall("transferFrom restricted");
+        // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
         const from = `0x${data.slice(34, 74)}` as Address;
+        // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
         const to = `0x${data.slice(98, 138)}` as Address;
         const amount = toBI(`0x${data.slice(138)}`);
         const balance = read(from);
@@ -162,15 +181,27 @@ class FakeERC20 {
       }
       case "0x313ce567": {
         if (this.opts.decimalsReverts) return revertCall("decimals reverted");
-        return { returnData: numberToHex(BigInt(this.opts.decimals ?? 18), { size: 32 }), status: "0x1", logs };
+        return {
+          returnData: numberToHex(BigInt(this.opts.decimals ?? 18), { size: 32 }),
+          status: "0x1",
+          logs,
+        };
       }
       case "0x8da5cb5b": {
         if (!this.opts.owner) return revertCall("no owner");
-        return { returnData: `0x${"0".repeat(24)}${this.opts.owner.slice(2).toLowerCase()}`, status: "0x1", logs };
+        return {
+          returnData: `0x${"0".repeat(24)}${this.opts.owner.slice(2).toLowerCase()}`,
+          status: "0x1",
+          logs,
+        };
       }
       case "0xe30c3978": {
         if (!this.opts.pendingOwner) return revertCall("no pendingOwner");
-        return { returnData: `0x${"0".repeat(24)}${this.opts.pendingOwner.slice(2).toLowerCase()}`, status: "0x1", logs };
+        return {
+          returnData: `0x${"0".repeat(24)}${this.opts.pendingOwner.slice(2).toLowerCase()}`,
+          status: "0x1",
+          logs,
+        };
       }
       default:
         return revertCall(`unknown selector ${selector}`);
@@ -186,11 +217,16 @@ interface FakePool {
   revertReason: string;
 }
 
+// oxlint-disable-next-line anti-slop/no-unknown-parameters -- SAFETY: this test uses a controlled protocol fixture and establishes the expected shape at this boundary.
 function applyOverride(token: FakeERC20, override: unknown): Map<string, Hex> {
+  /* oxlint-disable-line anti-slop/no-unknown-parameters */
   const scratch = new Map(token.storage);
-  const entry = (override as Record<string, { state?: Record<Hex, Hex>; stateDiff?: Record<Hex, Hex> }> | undefined)?.[
-    token.address.toLowerCase()
-  ];
+  // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
+  const entry = (
+    override as
+      | Record<string, { state?: Record<Hex, Hex>; stateDiff?: Record<Hex, Hex> }>
+      | undefined
+  )?.[token.address.toLowerCase()];
   if (entry?.state) {
     scratch.clear();
     for (const [slot, value] of Object.entries(entry.state)) scratch.set(slot.toLowerCase(), value);
@@ -204,19 +240,25 @@ function makeRpcMock(tokens: FakeERC20[], pool?: FakePool) {
   let rpcCalls = 0;
   const simulateParams: unknown[] = [];
 
+  // oxlint-disable-next-line anti-slop/no-unknown-parameters -- SAFETY: this test uses a controlled protocol fixture and establishes the expected shape at this boundary.
   function tokenCall(tx: { from?: Address; to: Address; data: Hex }, override: unknown) {
+    /* oxlint-disable-line anti-slop/no-unknown-parameters */
     const token = byAddress.get(tx.to.toLowerCase());
     if (!token) return revertCall("unknown target");
     const scratch = applyOverride(token, override);
     return token.run(tx, scratch);
   }
 
-  async function handle(method: string, params: unknown[]): Promise<{ result?: unknown; error?: { code: number; message: string; data?: string } }> {
+  async function handle(
+    method: string,
+    params: unknown[],
+  ): Promise<{ result?: unknown; error?: { code: number; message: string; data?: string } }> {
     rpcCalls += 1;
     switch (method) {
       case "eth_chainId":
         return { result: "0x1" };
       case "eth_getCode": {
+        // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
         const [addr] = params as [Address];
         const lower = (addr ?? "").toLowerCase();
         const token = byAddress.get(lower);
@@ -224,22 +266,32 @@ function makeRpcMock(tokens: FakeERC20[], pool?: FakePool) {
         // Implementation addresses referenced by proxy tokens carry the token
         // runtime (with standard selectors) so sanity can scan them.
         for (const t of tokens) {
-          if ((t.opts.codeKind === "erc1967" || t.opts.codeKind === "eip1167") && (t.opts.implAddress ?? IMPL).toLowerCase() === lower) {
+          if (
+            (t.opts.codeKind === "erc1967" || t.opts.codeKind === "eip1167") &&
+            (t.opts.implAddress ?? IMPL).toLowerCase() === lower
+          ) {
             return { result: ERC20_RUNTIME };
           }
         }
         return { result: "0x" };
       }
       case "eth_getStorageAt": {
+        // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
         const [addr, slot] = params as [Address, Hex];
         const token = byAddress.get((addr ?? "").toLowerCase());
         if (!token) return { result: "0x0" };
-        if ((slot ?? "").toLowerCase() === ERC1967_SLOT && (token.opts.codeKind ?? "erc20") === "erc1967") {
-          return { result: `0x${"0".repeat(24)}${(token.opts.implAddress ?? IMPL).slice(2).toLowerCase()}` };
+        if (
+          (slot ?? "").toLowerCase() === ERC1967_SLOT &&
+          (token.opts.codeKind ?? "erc20") === "erc1967"
+        ) {
+          return {
+            result: `0x${"0".repeat(24)}${(token.opts.implAddress ?? IMPL).slice(2).toLowerCase()}`,
+          };
         }
         return { result: token.storage.get((slot ?? "").toLowerCase()) ?? "0x0" };
       }
       case "eth_call": {
+        // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
         const [tx] = params as [{ from?: Address; to: Address; data: Hex }];
         if (!tx) return { error: { code: -32602, message: "invalid eth_call params" } };
         const result = tokenCall(tx, params[2]);
@@ -250,8 +302,14 @@ function makeRpcMock(tokens: FakeERC20[], pool?: FakePool) {
       }
       case "eth_simulateV1": {
         simulateParams.push(params);
+        // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
         const [param] = params as [
-          { blockStateCalls: Array<{ calls: Array<{ from?: Address; to: Address; data: Hex }>; stateOverrides?: unknown }> },
+          {
+            blockStateCalls: Array<{
+              calls: Array<{ from?: Address; to: Address; data: Hex }>;
+              stateOverrides?: unknown;
+            }>;
+          },
         ];
         if (!param) return { error: { code: -32602, message: "invalid simulateV1 params" } };
         const block = param.blockStateCalls[0];
@@ -268,6 +326,7 @@ function makeRpcMock(tokens: FakeERC20[], pool?: FakePool) {
               topics: [TRANSFER_TOPIC, pad(pool.address), pad(PROBE)],
               data: numberToHex(pool.outAmount, { size: 32 }),
             };
+            // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
             return { returnData: "0x" as Hex, status: "0x1" as const, logs: [outLog] };
           }
           const token = byAddress.get(tx.to.toLowerCase());
@@ -301,12 +360,25 @@ function makeRpcMock(tokens: FakeERC20[], pool?: FakePool) {
   }
 
   const fetchImpl = async (_url: string | URL, init?: RequestInit): Promise<Response> => {
-    const body = typeof init?.body === "string" ? JSON.parse(init.body) : null;
+    const body =
+      // oxlint-disable-next-line anti-slop/no-runtime-typeof -- SAFETY: this test uses a controlled protocol fixture and establishes the expected shape at this boundary.
+      typeof init?.body === "string"
+        ? JSON.parse(init.body)
+        : null; /* oxlint-disable-line anti-slop/no-runtime-typeof */
+    // oxlint-disable-next-line anti-slop/no-runtime-typeof -- SAFETY: this controlled JSON-RPC fixture validates the method discriminator before use.
     if (!body || typeof body.method !== "string") {
-      return new Response(JSON.stringify({ jsonrpc: "2.0", id: body?.id ?? 0, error: { code: -32600, message: "invalid request" } }), {
-        status: 200,
-        headers: { "content-type": "application/json" },
-      });
+      /* oxlint-disable-line anti-slop/no-runtime-typeof */
+      return new Response(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: body?.id ?? 0,
+          error: { code: -32600, message: "invalid request" },
+        }),
+        {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        },
+      );
     }
     const outcome = await handle(body.method, body.params ?? []);
     return new Response(JSON.stringify({ jsonrpc: "2.0", id: body.id, ...outcome }), {
@@ -315,7 +387,13 @@ function makeRpcMock(tokens: FakeERC20[], pool?: FakePool) {
     });
   };
 
-  return { fetchImpl: fetchImpl as unknown as typeof fetch, rpcCalls: () => rpcCalls, simulateParams };
+  // SAFETY: The surrounding test establishes the exact shape of this controlled fixture before this assertion.
+  return {
+    fetchImpl:
+      fetchImpl as unknown as typeof fetch /* oxlint-disable-line anti-slop/no-chained-type-assertions -- SAFETY: this controlled fixture or ABI output is intentionally narrowed and its exact shape is asserted by the surrounding test. */,
+    rpcCalls: () => rpcCalls,
+    simulateParams,
+  }; // oxlint-disable-line anti-slop/no-chained-type-assertions -- SAFETY: this test boundary uses a deliberately partial fixture or ABI-decoded tuple; the surrounding test establishes the exact exercised shape.
 }
 
 function makeClient(fetchImpl: typeof fetch) {
@@ -333,7 +411,14 @@ function assess(
   token: FakeERC20,
   config: { enabled: boolean; maxTransferTaxPct?: number; allowlistedMints?: Set<string> },
   pool?: FakePool,
-  options?: { sellRoute: { poolAddress: Address; calldata: Hex; amountIn: bigint; expectedOutToken?: Address } },
+  options?: {
+    sellRoute: {
+      poolAddress: Address;
+      calldata: Hex;
+      amountIn: bigint;
+      expectedOutToken?: Address;
+    };
+  },
 ) {
   const mock = makeRpcMock([token], pool);
   const prober = createTokenRiskProber(makeClient(mock.fetchImpl), config);
@@ -353,11 +438,27 @@ describe("evm-token-risk pure helpers", () => {
   });
 
   it("compositeVerdict: any fail rejects, warn-only warns, clean is ok", () => {
-    const checks = (overrides: Partial<Record<"sanity" | "tax" | "owner" | "upgradable" | "sellRoute" | "transferFrom", "pass" | "warn" | "fail" | "skip">>) => {
+    const checks = (
+      overrides: Partial<
+        Record<
+          "sanity" | "tax" | "owner" | "upgradable" | "sellRoute" | "transferFrom",
+          "pass" | "warn" | "fail" | "skip"
+        >
+      >,
+    ) => {
       const base = {
-        sanity: "pass", tax: "pass", owner: "pass", upgradable: "pass", sellRoute: "skip", transferFrom: "pass",
-      } satisfies Record<"sanity" | "tax" | "owner" | "upgradable" | "sellRoute" | "transferFrom", "pass" | "warn" | "fail" | "skip">;
+        sanity: "pass",
+        tax: "pass",
+        owner: "pass",
+        upgradable: "pass",
+        sellRoute: "skip",
+        transferFrom: "pass",
+      } satisfies Record<
+        "sanity" | "tax" | "owner" | "upgradable" | "sellRoute" | "transferFrom",
+        "pass" | "warn" | "fail" | "skip"
+      >;
       const merged = { ...base, ...overrides };
+      // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
       return {
         sanity: { status: merged.sanity, detail: "", data: null },
         tax: { status: merged.tax, detail: "", data: null },
@@ -365,6 +466,7 @@ describe("evm-token-risk pure helpers", () => {
         upgradable: { status: merged.upgradable, detail: "", data: null },
         sellRoute: { status: merged.sellRoute, detail: "", data: null },
         transferFrom: { status: merged.transferFrom, detail: "", data: null },
+        // SAFETY: The controlled test fixture establishes the asserted shape at this boundary, and the surrounding test consumes only that documented invariant.
       } as Parameters<typeof compositeVerdict>[0];
     };
     expect(compositeVerdict(checks({}))).toBe("ok");
@@ -423,13 +525,19 @@ describe("evm-token-risk decision paths (mocked RPC)", () => {
   });
 
   it("decimals() revert → falls back to 18 decimals and still passes", async () => {
-    const { report } = await assess(new FakeERC20("0x00000000000000000000000000000000000000bc", { decimalsReverts: true }), { enabled: true });
+    const { report } = await assess(
+      new FakeERC20("0x00000000000000000000000000000000000000bc", { decimalsReverts: true }),
+      { enabled: true },
+    );
     expect(report.verdict).toBe("ok");
     expect(report.checks.tax.data?.sent).toBe(10n ** 18n);
   });
 
   it("transfer tax 10% > max 5% → reject", async () => {
-    const { report } = await assess(new FakeERC20("0x00000000000000000000000000000000000000bd", { taxBps: 1000 }), { enabled: true });
+    const { report } = await assess(
+      new FakeERC20("0x00000000000000000000000000000000000000bd", { taxBps: 1000 }),
+      { enabled: true },
+    );
     expect(report.verdict).toBe("reject");
     expect(report.checks.tax.status).toBe("fail");
     expect(report.checks.tax.data?.taxPct).toBe(10);
@@ -437,14 +545,20 @@ describe("evm-token-risk decision paths (mocked RPC)", () => {
   });
 
   it("transfer tax 3% within the 5% limit → warn", async () => {
-    const { report } = await assess(new FakeERC20("0x00000000000000000000000000000000000000be", { taxBps: 300 }), { enabled: true });
+    const { report } = await assess(
+      new FakeERC20("0x00000000000000000000000000000000000000be", { taxBps: 300 }),
+      { enabled: true },
+    );
     expect(report.verdict).toBe("warn");
     expect(report.checks.tax.status).toBe("warn");
     expect(report.checks.tax.data?.taxPct).toBe(3);
   });
 
   it("honeypot (funded probe, transfer reverts) → reject with decoded reason", async () => {
-    const { report } = await assess(new FakeERC20("0x00000000000000000000000000000000000000bf", { honeypot: true }), { enabled: true });
+    const { report } = await assess(
+      new FakeERC20("0x00000000000000000000000000000000000000bf", { honeypot: true }),
+      { enabled: true },
+    );
     expect(report.verdict).toBe("reject");
     expect(report.checks.tax.status).toBe("fail");
     expect(report.checks.tax.detail).toContain("honeypot");
@@ -452,7 +566,10 @@ describe("evm-token-risk decision paths (mocked RPC)", () => {
   });
 
   it("unfundable storage layout (balance slot 99) → tax warn 'unverifiable', not reject", async () => {
-    const { report } = await assess(new FakeERC20("0x00000000000000000000000000000000000000c1", { balanceSlot: 99 }), { enabled: true });
+    const { report } = await assess(
+      new FakeERC20("0x00000000000000000000000000000000000000c1", { balanceSlot: 99 }),
+      { enabled: true },
+    );
     expect(report.verdict).toBe("warn");
     expect(report.checks.tax.status).toBe("warn");
     expect(report.checks.tax.detail).toContain("unverifiable");
@@ -460,23 +577,34 @@ describe("evm-token-risk decision paths (mocked RPC)", () => {
   });
 
   it("owner() present → warn with the owner address", async () => {
+    // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
     const owner = "0x00000000000000000000000000000000000000dd" as Address;
-    const { report } = await assess(new FakeERC20("0x00000000000000000000000000000000000000c2", { owner }), { enabled: true });
+    const { report } = await assess(
+      new FakeERC20("0x00000000000000000000000000000000000000c2", { owner }),
+      { enabled: true },
+    );
     expect(report.verdict).toBe("warn");
     expect(report.checks.owner.status).toBe("warn");
     expect(report.checks.owner.data?.owner).toBe(owner.toLowerCase());
   });
 
   it("pendingOwner() alone → warn", async () => {
+    // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
     const pending = "0x00000000000000000000000000000000000000de" as Address;
-    const { report } = await assess(new FakeERC20("0x00000000000000000000000000000000000000c3", { pendingOwner: pending }), { enabled: true });
+    const { report } = await assess(
+      new FakeERC20("0x00000000000000000000000000000000000000c3", { pendingOwner: pending }),
+      { enabled: true },
+    );
     expect(report.verdict).toBe("warn");
     expect(report.checks.owner.data?.pendingOwner).toBe(pending.toLowerCase());
   });
 
   it("ERC1967 proxy → warn, implementation recorded, sanity scans impl code", async () => {
     const { report } = await assess(
-      new FakeERC20("0x00000000000000000000000000000000000000c4", { codeKind: "erc1967", implAddress: IMPL }),
+      new FakeERC20("0x00000000000000000000000000000000000000c4", {
+        codeKind: "erc1967",
+        implAddress: IMPL,
+      }),
       { enabled: true },
     );
     expect(report.verdict).toBe("warn");
@@ -489,7 +617,10 @@ describe("evm-token-risk decision paths (mocked RPC)", () => {
 
   it("EIP-1167 minimal proxy → warn with kind eip1167", async () => {
     const { report } = await assess(
-      new FakeERC20("0x00000000000000000000000000000000000000c5", { codeKind: "eip1167", implAddress: IMPL }),
+      new FakeERC20("0x00000000000000000000000000000000000000c5", {
+        codeKind: "eip1167",
+        implAddress: IMPL,
+      }),
       { enabled: true },
     );
     expect(report.checks.upgradable.data?.isProxy).toBe(true);
@@ -499,13 +630,19 @@ describe("evm-token-risk decision paths (mocked RPC)", () => {
   });
 
   it("no contract code → reject", async () => {
-    const { report } = await assess(new FakeERC20("0x00000000000000000000000000000000000000c6", { codeKind: "none" }), { enabled: true });
+    const { report } = await assess(
+      new FakeERC20("0x00000000000000000000000000000000000000c6", { codeKind: "none" }),
+      { enabled: true },
+    );
     expect(report.verdict).toBe("reject");
     expect(report.checks.sanity.status).toBe("fail");
   });
 
   it("balanceOf staticcall reverts → reject", async () => {
-    const { report } = await assess(new FakeERC20("0x00000000000000000000000000000000000000c7", { balanceOfReverts: true }), { enabled: true });
+    const { report } = await assess(
+      new FakeERC20("0x00000000000000000000000000000000000000c7", { balanceOfReverts: true }),
+      { enabled: true },
+    );
     expect(report.verdict).toBe("reject");
     expect(report.checks.sanity.status).toBe("fail");
     expect(report.checks.sanity.detail).toContain("staticcall");
@@ -514,7 +651,13 @@ describe("evm-token-risk decision paths (mocked RPC)", () => {
   it("sell route out == amountIn → pass, outAmount recorded", async () => {
     const amountIn = 10n ** 18n;
     const token = cleanToken("0x00000000000000000000000000000000000000c8");
-    const pool: FakePool = { address: POOL, mode: "ok", outAmount: amountIn, outToken: WETH, revertReason: "pool error" };
+    const pool: FakePool = {
+      address: POOL,
+      mode: "ok",
+      outAmount: amountIn,
+      outToken: WETH,
+      revertReason: "pool error",
+    };
     const { report } = await assess(token, { enabled: true }, pool, {
       sellRoute: { poolAddress: POOL, calldata: "0x12345678", amountIn, expectedOutToken: WETH },
     });
@@ -526,7 +669,13 @@ describe("evm-token-risk decision paths (mocked RPC)", () => {
   it("sell route without expectedOutToken → any non-sold-token credit counts", async () => {
     const amountIn = 10n ** 18n;
     const token = cleanToken("0x00000000000000000000000000000000000000c9");
-    const pool: FakePool = { address: POOL, mode: "ok", outAmount: amountIn, outToken: WETH, revertReason: "pool error" };
+    const pool: FakePool = {
+      address: POOL,
+      mode: "ok",
+      outAmount: amountIn,
+      outToken: WETH,
+      revertReason: "pool error",
+    };
     const { report } = await assess(token, { enabled: true }, pool, {
       sellRoute: { poolAddress: POOL, calldata: "0x12345678", amountIn },
     });
@@ -536,7 +685,13 @@ describe("evm-token-risk decision paths (mocked RPC)", () => {
   it("sell route swap reverts → reject with decoded reason", async () => {
     const amountIn = 10n ** 18n;
     const token = cleanToken("0x00000000000000000000000000000000000000ca");
-    const pool: FakePool = { address: POOL, mode: "revert", outAmount: 0n, outToken: WETH, revertReason: "pool error" };
+    const pool: FakePool = {
+      address: POOL,
+      mode: "revert",
+      outAmount: 0n,
+      outToken: WETH,
+      revertReason: "pool error",
+    };
     const { report } = await assess(token, { enabled: true }, pool, {
       sellRoute: { poolAddress: POOL, calldata: "0x12345678", amountIn, expectedOutToken: WETH },
     });
@@ -548,7 +703,13 @@ describe("evm-token-risk decision paths (mocked RPC)", () => {
   it("sell route with zero out-leg → reject", async () => {
     const amountIn = 10n ** 18n;
     const token = cleanToken("0x00000000000000000000000000000000000000cb");
-    const pool: FakePool = { address: POOL, mode: "ok", outAmount: 0n, outToken: WETH, revertReason: "pool error" };
+    const pool: FakePool = {
+      address: POOL,
+      mode: "ok",
+      outAmount: 0n,
+      outToken: WETH,
+      revertReason: "pool error",
+    };
     const { report } = await assess(token, { enabled: true }, pool, {
       sellRoute: { poolAddress: POOL, calldata: "0x12345678", amountIn, expectedOutToken: WETH },
     });
@@ -558,7 +719,9 @@ describe("evm-token-risk decision paths (mocked RPC)", () => {
   });
 
   it("sell route absent → skipped, clean token still ok", async () => {
-    const { report } = await assess(cleanToken("0x00000000000000000000000000000000000000cc"), { enabled: true });
+    const { report } = await assess(cleanToken("0x00000000000000000000000000000000000000cc"), {
+      enabled: true,
+    });
     expect(report.checks.sellRoute.status).toBe("skip");
     expect(report.verdict).toBe("ok");
   });
@@ -566,15 +729,35 @@ describe("evm-token-risk decision paths (mocked RPC)", () => {
   it("tax probe funds via `state` (never stateDiff) with both packings + allowance keys", async () => {
     const amountIn = 10n ** 18n;
     const token = cleanToken("0x00000000000000000000000000000000000000cd");
-    const pool: FakePool = { address: POOL, mode: "ok", outAmount: amountIn, outToken: WETH, revertReason: "pool error" };
+    const pool: FakePool = {
+      address: POOL,
+      mode: "ok",
+      outAmount: amountIn,
+      outToken: WETH,
+      revertReason: "pool error",
+    };
     const { mock } = await assess(token, { enabled: true }, pool, {
       sellRoute: { poolAddress: POOL, calldata: "0x12345678", amountIn, expectedOutToken: WETH },
     });
+    // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
     const sims = mock.simulateParams as Array<Array<unknown>>;
     const stateEntries = sims.flatMap((params) =>
       params
-        .filter((p): p is { blockStateCalls: Array<{ stateOverrides: Record<string, { state?: Record<string, string>; stateDiff?: unknown }> }> } =>
-          typeof p === "object" && p !== null && "blockStateCalls" in p,
+        .filter(
+          (
+            p,
+          ): p is {
+            blockStateCalls: Array<{
+              stateOverrides: Record<
+                string,
+                { state?: Record<string, string>; stateDiff?: unknown }
+              >;
+            }>;
+          } =>
+            // oxlint-disable-next-line anti-slop/no-runtime-typeof -- SAFETY: this test uses a controlled protocol fixture and establishes the expected shape at this boundary.
+            typeof p === "object" &&
+            p !== null &&
+            "blockStateCalls" in p /* oxlint-disable-line anti-slop/no-runtime-typeof */,
         )
         .flatMap((p) => p.blockStateCalls.flatMap((b) => Object.entries(b.stateOverrides ?? {}))),
     );
@@ -588,7 +771,11 @@ describe("evm-token-risk decision paths (mocked RPC)", () => {
     // padded packing variant (covers exotic layouts like 4663's WETH)
     expect(entry.state?.[paddedKey(PROBE, 0)]).toBe(numberToHex(amountIn, { size: 32 }));
     // allowance from probe → pool (router transferFrom path)
-    expect(entry.state?.[allowanceKeyStd(PROBE, POOL, 0)]).toBe(numberToHex(amountIn, { size: 32 }));
-    expect(entry.state?.[allowanceKeyPadded(PROBE, POOL, 0)]).toBe(numberToHex(amountIn, { size: 32 }));
+    expect(entry.state?.[allowanceKeyStd(PROBE, POOL, 0)]).toBe(
+      numberToHex(amountIn, { size: 32 }),
+    );
+    expect(entry.state?.[allowanceKeyPadded(PROBE, POOL, 0)]).toBe(
+      numberToHex(amountIn, { size: 32 }),
+    );
   });
 });

@@ -99,7 +99,10 @@ describe("ConfigService STABLECOIN_MINTS", () => {
     // The EVM adapter returns token mints lowercase; a checksummed or
     // mixed-case STABLECOIN_MINTS entry must still match. Regression for the
     // allowlist comparison that would otherwise fail for the default USDG mint.
-    vi.stubEnv("STABLECOIN_MINTS", "0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168,0x0Bd7D308f8E1639FAb988df18A8011f41EAcAD73");
+    vi.stubEnv(
+      "STABLECOIN_MINTS",
+      "0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168,0x0Bd7D308f8E1639FAb988df18A8011f41EAcAD73",
+    );
     const cfg = await loadConfig();
     expect(cfg.stablecoinMints).toEqual(
       new Set([

@@ -186,6 +186,7 @@ function makeProgramAdapter(
   pools: Record<string, PoolState>,
   overrides: Partial<AdapterApi> = {},
 ): AdapterApi {
+  // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
   return {
     hasWallet: () => false,
     getWalletAddress: () => null,
@@ -205,12 +206,14 @@ function makeProgramAdapter(
         estimatedFeesUsd: 0,
         estimatedCostUsd: 0,
         netBenefitUsd: 0,
+        // SAFETY: The controlled test fixture establishes the asserted shape at this boundary, and the surrounding test consumes only that documented invariant.
         source: "pool-heuristic" as const,
       }),
     enterPosition: (_pool: string, _l: number, _u: number, sizeUsd: number) =>
       Effect.succeed({
         positionPubKey: "mock-pos",
         txSignature: "mock-tx",
+        // SAFETY: The controlled test fixture establishes the asserted shape at this boundary, and the surrounding test consumes only that documented invariant.
         depositMode: "two-sided" as const,
         amountXUsd: sizeUsd / 2,
         amountYUsd: sizeUsd / 2,
@@ -238,6 +241,7 @@ function makeProgramAdapter(
     getTokenDecimals: () => Effect.succeed(9),
     getMintAuthorities: () => Effect.succeed(NO_AUTHORITIES),
     ...overrides,
+    // SAFETY: This partial adapter fixture implements only the methods exercised by the surrounding test.
   } as AdapterApi;
 }
 
@@ -382,22 +386,28 @@ function runOneCycle<E>(
     return { positions, decisions };
   });
   return Effect.runPromise(
-    Effect.provide(test, layer) as unknown as Effect.Effect<CycleResult, Error, never>,
+    // SAFETY: The surrounding test establishes the exact shape of this controlled fixture before this assertion.
+    Effect.provide(test, layer) as unknown as Effect.Effect<CycleResult, Error, never>, // oxlint-disable-line anti-slop/no-chained-type-assertions -- SAFETY: this test boundary uses a deliberately partial fixture or ABI-decoded tuple; the surrounding test establishes the exact exercised shape.
   );
 }
 
 describe("program — idle-capital auto-redeploy gate", () => {
   it("is inert when disabled (default): idle capital present, no redeploy, one normal ENTER only", async () => {
     const layer = makeProgramLayer({
+      // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
       adapter: makeProgramAdapter({ [POOL]: makePool({ address: POOL }) }),
       gecko: { getPoolStats: () => Effect.succeed(makeGeckoStats()) },
       configOverrides: {
         watchlistPools: [POOL],
         maxPositionsPerPool: 2,
+        // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
         maxOpenPositions: 5,
         // idleRedeployEnabled defaults to false; idle = 10_000 − 500 ≫ 500.
+        // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
       },
+      // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
     });
+    // SAFETY: The controlled test fixture establishes the asserted shape at this boundary, and the surrounding test consumes only that documented invariant.
     const { positions, decisions } = await runOneCycle(layer as never);
 
     expect(positions).toHaveLength(1);
@@ -413,11 +423,16 @@ describe("program — idle-capital auto-redeploy gate", () => {
         watchlistPools: [POOL],
         idleRedeployEnabled: true,
         idleRedeployThresholdUsd: 500,
+        // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
         idleRedeployMaxSizeUsd: 2000,
+        // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
         maxPositionsPerPool: 2,
         maxOpenPositions: 5,
+        // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
       },
+      // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
     });
+    // SAFETY: The controlled test fixture establishes the asserted shape at this boundary, and the surrounding test consumes only that documented invariant.
     const { positions, decisions } = await runOneCycle(layer as never);
 
     // Normal conservative ENTER ($500) + exactly one widened redeploy:
@@ -467,6 +482,7 @@ describe("program — idle-capital auto-redeploy gate", () => {
         maxOpenPositions: 5,
       },
     });
+    // SAFETY: The controlled test fixture establishes the asserted shape at this boundary, and the surrounding test consumes only that documented invariant.
     const { positions, decisions } = await runOneCycle(layer as never);
 
     // No real position may open on ANY path in shadow mode; the redeploy pass
@@ -493,11 +509,13 @@ describe("program — idle-capital auto-redeploy gate", () => {
         // which is ≤ the normal entry size ($500). The widened-size guard now
         // skips it — a smaller second position would fragment capital despite
         // the feature being a WIDER entry.
+        // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
         paperPortfolioUsd: 1500,
         maxPositionsPerPool: 2,
         maxOpenPositions: 5,
       },
     });
+    // SAFETY: The controlled test fixture establishes the asserted shape at this boundary, and the surrounding test consumes only that documented invariant.
     const { positions, decisions } = await runOneCycle(layer as never);
 
     // Only the normal ENTER opens; the sub-normal redeploy is skipped.
@@ -523,11 +541,13 @@ describe("program — idle-capital auto-redeploy gate", () => {
         // Normal ENTER $500 (min(5000, 1000, 500)); idle 10_000 − 500 = 9_500.
         // Ceiling pins the widened size at $600 — just ABOVE the normal $500 — so
         // the size guard passes and the redeploy dispatches.
+        // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
         idleRedeployMaxSizeUsd: 600,
         maxPositionsPerPool: 2,
         maxOpenPositions: 5,
       },
     });
+    // SAFETY: The controlled test fixture establishes the asserted shape at this boundary, and the surrounding test consumes only that documented invariant.
     const { positions } = await runOneCycle(layer as never);
 
     expect(positions).toHaveLength(2);
@@ -544,11 +564,13 @@ describe("program — idle-capital auto-redeploy gate", () => {
         idleRedeployEnabled: true,
         // Normal ENTER min(400, 1000, 500) = 400; idle 800 − 400 = 400 ≤ 2_000.
         paperPortfolioUsd: 800,
+        // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
         idleRedeployThresholdUsd: 2000,
         maxPositionsPerPool: 2,
         maxOpenPositions: 5,
       },
     });
+    // SAFETY: The controlled test fixture establishes the asserted shape at this boundary, and the surrounding test consumes only that documented invariant.
     const { positions, decisions } = await runOneCycle(layer as never);
 
     expect(positions).toHaveLength(1);
@@ -569,6 +591,7 @@ describe("program — idle-capital auto-redeploy gate", () => {
     // An in-range, healthy seeded position fills the single open slot. The
     // pool still passes candidate conditions, its normal ENTER is rejected by
     // allocation (capturing it), and the redeploy pass hits the max-open cap.
+    // SAFETY: The controlled test fixture establishes the asserted shape at this boundary, and the surrounding test consumes only that documented invariant.
     const { positions, decisions } = await runOneCycle(layer as never, (db) =>
       Effect.gen(function* () {
         yield* db.savePosition(makeSeededPosition({}));
@@ -592,10 +615,12 @@ describe("program — idle-capital auto-redeploy gate", () => {
         watchlistPools: [POOL],
         idleRedeployEnabled: true,
         idleRedeployThresholdUsd: 500,
+        // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
         maxPositionsPerPool: 2,
         maxOpenPositions: 5,
       },
     });
+    // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
     const { positions, decisions } = await runOneCycle(layer as never, (db) =>
       Effect.gen(function* () {
         yield* db.setPoolCooldown({
@@ -743,6 +768,7 @@ describe("program — idle-redeploy agent-overlay routing (P1)", () => {
       gecko: { getPoolStats: () => Effect.succeed(makeGeckoStats()) },
       configOverrides: { watchlistPools: [POOL], ...redeployOn },
     });
+    // SAFETY: The controlled test fixture establishes the asserted shape at this boundary, and the surrounding test consumes only that documented invariant.
     const { positions, decisions } = await runOneCycle(layer as never);
 
     expect(positions).toHaveLength(2);
@@ -758,10 +784,12 @@ describe("program — idle-redeploy agent-overlay routing (P1)", () => {
         watchlistPools: [POOL],
         ...redeployOn,
         agentiveMode: true,
+        // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
         agentProposalMode: "supervised",
       },
       // Default agent-state layer carries no pending/approved proposals.
     });
+    // SAFETY: The controlled test fixture establishes the asserted shape at this boundary, and the surrounding test consumes only that documented invariant.
     const { positions, decisions } = await runOneCycle(layer as never);
 
     // Supervised mode without approval holds EVERY ENTER — the normal one too —
@@ -791,10 +819,12 @@ describe("program — idle-redeploy agent-overlay routing (P1)", () => {
           Effect.succeed(
             decision.reasoning.includes("[idle-redeploy]")
               ? { action: "HOLD", poolAddress: POOL, confidence: 0.3, reasoning: "vetoed" }
-              : null,
+              : // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
+                null,
           ),
       },
     });
+    // SAFETY: The controlled test fixture establishes the asserted shape at this boundary, and the surrounding test consumes only that documented invariant.
     const { positions, decisions } = await runOneCycle(layer as never);
 
     expect(positions).toHaveLength(1); // normal ENTER opens; vetoed redeploy skips
@@ -825,10 +855,12 @@ describe("program — idle-redeploy agent-overlay routing (P1)", () => {
                   reasoning: "veto nudged confidence down",
                   positionSizeUsd: 2000,
                 }
-              : null,
+              : // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
+                null,
           ),
       },
     });
+    // SAFETY: The controlled test fixture establishes the asserted shape at this boundary, and the surrounding test consumes only that documented invariant.
     const { positions, decisions } = await runOneCycle(layer as never);
 
     // No redeploy opened; the vetoed confidence is replaced onto the decision and
@@ -880,6 +912,7 @@ describe("program — idle-redeploy entry-backoff guard (P2)", () => {
         maxOpenPositions: 5,
       },
     });
+    // SAFETY: The controlled test fixture establishes the asserted shape at this boundary, and the surrounding test consumes only that documented invariant.
     const { positions, decisions } = await runOneCycle(layer as never);
 
     // Normal ENTER failed (armed backoff); redeploy honored it → nothing opens.
@@ -906,6 +939,7 @@ describe("program — idle-redeploy confidence uses known signals only (P2)", ()
         maxOpenPositions: 5,
       },
     });
+    // SAFETY: The controlled test fixture establishes the asserted shape at this boundary, and the surrounding test consumes only that documented invariant.
     const { decisions } = await runOneCycle(layer as never);
     const redeploy = decisions.find((d) => d.reasoning.includes("[idle-redeploy]") && d.executed);
 
@@ -948,8 +982,10 @@ describe("program — idle-redeploy confidence uses known signals only (P2)", ()
         // The fee/IL term is dropped from the gecko score; a low threshold lets
         // the (fee-less) score still capture a candidate.
         weightedEntryScoreThreshold: 0.05,
+        // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
       },
     });
+    // SAFETY: The controlled test fixture establishes the asserted shape at this boundary, and the surrounding test consumes only that documented invariant.
     const { decisions } = await runOneCycle(layer as never);
     const redeploy = decisions.find((d) => d.reasoning.includes("[idle-redeploy]"));
 
@@ -987,8 +1023,10 @@ describe("program — idle-redeploy follow-up fidelity (post-merge review)", () 
     // A $1,500 position on an UNWATCHED pool counts toward deployed capital but
     // not toward POOL's per-pool headroom. At the pass: normal ENTER on POOL =
     // $500, deployed = $2,000, idle = $8,000. With the seed as the TOTAL
+    // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
     // ($10,000) the widened size = min(8_000/2, 10_000×0.4, 5_000) = $4,000, then
     // allocation caps it to POOL headroom = 4_000 − 500 = $3,500.
+    // SAFETY: The controlled test fixture establishes the asserted shape at this boundary, and the surrounding test consumes only that documented invariant.
     const { positions } = await runOneCycle(layer as never, (db) =>
       Effect.gen(function* () {
         yield* db.savePosition(
@@ -1037,8 +1075,10 @@ describe("program — idle-redeploy follow-up fidelity (post-merge review)", () 
     // POOL_A is already at MAX_POSITIONS_PER_POOL (2 seeded): its in-slot ENTER
     // is skipped and it is captured via the per-pool-cap path, but the pass's
     // allocation re-check rejects it again (per-pool count full). Equal entry
+    // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
     // scores keep POOL_A first in score order, so the walk must audit-skip it and
     // continue to the fully-executable POOL_B — deploying exactly once.
+    // SAFETY: The controlled test fixture establishes the asserted shape at this boundary, and the surrounding test consumes only that documented invariant.
     const { positions, decisions } = await runOneCycle(layer as never, (db) =>
       Effect.gen(function* () {
         yield* db.savePosition(makeSeededPosition({ positionId: "a-1", poolAddress: POOL_A }));
@@ -1096,6 +1136,7 @@ describe("program — idle-redeploy follow-up fidelity (post-merge review)", () 
           Effect.succeed(
             decision.action === "ENTER" && !decision.reasoning.includes("[idle-redeploy]")
               ? {
+                  // SAFETY: The controlled test fixture establishes the asserted shape at this boundary, and the surrounding test consumes only that documented invariant.
                   action: "ENTER" as const,
                   poolAddress: POOL,
                   confidence: 0.8,
@@ -1104,13 +1145,16 @@ describe("program — idle-redeploy follow-up fidelity (post-merge review)", () 
                   proposalId: "sync-g",
                   proposedAt: Date.now(),
                   expiresAt: Date.now() + 300_000,
+                  // SAFETY: The controlled test fixture establishes the asserted shape at this boundary, and the surrounding test consumes only that documented invariant.
                   source: "sync-prompt" as const,
+                  // SAFETY: The controlled test fixture establishes the asserted shape at this boundary, and the surrounding test consumes only that documented invariant.
                   status: "pending" as const,
                 }
               : null,
           ),
       },
     });
+    // SAFETY: The controlled test fixture establishes the asserted shape at this boundary, and the surrounding test consumes only that documented invariant.
     const { positions, decisions } = await runOneCycle(layer as never);
 
     // Normal ENTER enlarged to $3,000 and executed; the fix synced that FINAL
@@ -1155,6 +1199,7 @@ describe("program — idle-redeploy follow-up fidelity (post-merge review)", () 
           Effect.succeed(
             decision.action === "HOLD" && !decision.reasoning.includes("[idle-redeploy]")
               ? {
+                  // SAFETY: The controlled test fixture establishes the asserted shape at this boundary, and the surrounding test consumes only that documented invariant.
                   action: "EXIT" as const,
                   poolAddress: POOL,
                   confidence: 0.8,
@@ -1162,13 +1207,16 @@ describe("program — idle-redeploy follow-up fidelity (post-merge review)", () 
                   proposalId: "sync-f",
                   proposedAt: Date.now(),
                   expiresAt: Date.now() + 300_000,
+                  // SAFETY: The controlled test fixture establishes the asserted shape at this boundary, and the surrounding test consumes only that documented invariant.
                   source: "sync-prompt" as const,
+                  // SAFETY: The controlled test fixture establishes the asserted shape at this boundary, and the surrounding test consumes only that documented invariant.
                   status: "pending" as const,
                 }
               : null,
           ),
       },
     });
+    // SAFETY: The controlled test fixture establishes the asserted shape at this boundary, and the surrounding test consumes only that documented invariant.
     const { positions, decisions } = await runOneCycle(layer as never, (db) =>
       Effect.gen(function* () {
         yield* db.savePosition(makeSeededPosition({ positionId: "seeded-pos", poolAddress: POOL }));

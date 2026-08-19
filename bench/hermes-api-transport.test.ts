@@ -5,6 +5,7 @@ import type { AgentRuntimeContext } from "../engine/agent-transport.js";
 import type { AgentDecision } from "../engine/types.js";
 
 function makeContext(): AgentRuntimeContext {
+  // SAFETY: this fixture contains all fields consumed by HermesApiTransport.
   return {
     decision: {
       action: "HOLD",
@@ -12,14 +13,14 @@ function makeContext(): AgentRuntimeContext {
       confidence: 0.65,
       reasoning: "test decision",
     } satisfies AgentDecision,
-  } as unknown as AgentRuntimeContext;
+  } as AgentRuntimeContext;
 }
 
 describe("HermesApiTransport (OpenAI-compatible API)", () => {
   it("POSTs a chat-completions request and parses choices[0].message.content", async () => {
     let capturedPath = "";
     let capturedAuth = "";
-    let capturedBody: Record<string, unknown> | null = null;
+    let capturedBody: object | null = null;
 
     const server = Bun.serve({
       port: 0,
@@ -29,7 +30,12 @@ describe("HermesApiTransport (OpenAI-compatible API)", () => {
         capturedPath = url.pathname;
         capturedAuth = request.headers.get("authorization") ?? "";
         if (url.pathname === "/v1/chat/completions") {
-          capturedBody = (await request.json()) as Record<string, unknown>;
+          const body: unknown = await request.json();
+          if (Object.prototype.toString.call(body) !== "[object Object]") {
+            throw new Error("request body must be an object");
+          }
+          // SAFETY: the endpoint contract requires a JSON object request body.
+          capturedBody = body as object;
           return Response.json({
             choices: [
               { message: { role: "assistant", content: '{"action":"HOLD","confidence":0.5}' } },

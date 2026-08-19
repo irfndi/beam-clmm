@@ -14,7 +14,14 @@ function bar(ts: number, close: number, opts: Partial<GeckoOhlcvBar> = {}): Geck
 // ─── parseGeckoOhlcv ──────────────────────────────────────────────────────────
 
 describe("parseGeckoOhlcv", () => {
-  const payload = (list: unknown): unknown => ({
+  type JsonValue =
+    | string
+    | number
+    | boolean
+    | null
+    | JsonValue[]
+    | { readonly [key: string]: JsonValue };
+  const payload = (list: JsonValue) => ({
     data: { attributes: { ohlcv_list: list } },
   });
 
@@ -228,7 +235,7 @@ describe("getGeckoPoolOhlcv", () => {
   it("honors the limit query parameter", async () => {
     let seenUrl = "";
     const fetchImpl = async (input: string | URL | Request) => {
-      seenUrl = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      seenUrl = input instanceof URL ? input.href : input instanceof Request ? input.url : input;
       return Response.json(okBody);
     };
     await getGeckoPoolOhlcv("pool-limit", { fetchImpl, limit: 30 });

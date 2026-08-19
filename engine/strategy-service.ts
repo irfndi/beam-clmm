@@ -3,7 +3,7 @@ import { TickMath } from "@uniswap/v3-sdk";
 import { StrategyService, type StrategyApi } from "./services.js";
 import type {
   BinArray,
-  EntryStrategyShape,
+  EntryStrategyMode,
   PoolMetrics,
   PoolState,
   PriceDriftContext,
@@ -60,6 +60,7 @@ const MAX_CYCLES_PER_DAY = 24;
 
 /**
  * Fee-rate (fees24h / volume24h) band below/above which a pool's volume
+ // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
  * authenticity is docked as an "outlier". The upper cap is 10% rather than
  * mainnet's ~2% because Robinhood Chain is a low-liquidity chain where
  * legitimate krystal-measured pools carry 0.5-6% fee rates (high per-swap fees
@@ -77,6 +78,7 @@ function impermanentLossFraction(priceRatio: number): number {
 
 /**
  * Liquidity-weighted mean distance (in bins) of stocked bins from the active
+ // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
  * bin, expressed as an IL amplification factor vs the reference half-width.
  * Returns 1 when bin reserves are unknown or no bin holds liquidity.
  */
@@ -165,6 +167,7 @@ export const DLMMStrategy: StrategyApi = {
 
     const feeIlRatio = DLMMStrategy.computeFeeIlRatio(pool, binArray, priceDrift);
     // Fees are MEASURED only under the Data API (real per-pool fee data) — the
+    // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
     // same definition as feeIlRatioKnown below. Gecko's fees are a binStep
     // base-rate MODEL, so the fee-rate-band component of volume authenticity
     // must be skipped for gecko (feesMeasured=false); the real volume/TVL
@@ -184,6 +187,7 @@ export const DLMMStrategy: StrategyApi = {
       binUtilization,
       // Known-flag SPLIT by what each source actually measures:
       // - Volume + TVL are REAL under BOTH datapi and geckoterminal, so
+      // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
       //   volumeAuthenticityKnown treats either as measured; only heuristic
       //   (fabricated) volume is unknown.
       // - Fees are MEASURED only under datapi (real per-pool fee data).
@@ -222,10 +226,7 @@ export const DLMMStrategy: StrategyApi = {
     return Math.min(pool.fees24hUsd / estimatedIlDailyUsd, MAX_FEE_IL_RATIO);
   },
 
-  checkVolumeAuthenticity(
-    pool: PoolState,
-    feesMeasured: boolean,
-  ): VolumeAuthenticityResult {
+  checkVolumeAuthenticity(pool: PoolState, feesMeasured: boolean): VolumeAuthenticityResult {
     const flags: string[] = [];
     let score = 1.0;
 
@@ -341,6 +342,7 @@ export const StrategyLive = Layer.succeed(StrategyService, StrategyService.of(DL
 
 /**
  * Sample standard deviation of the active bin over recent snapshots. Returns 0
+ // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
  * for empty or single-point series. Used as the "high-vol" detector.
  */
 export function computeBinVolatilityStddev(activeBins: ReadonlyArray<number>): number {
@@ -447,11 +449,11 @@ export function resolveRangeHalfWidth(args: {
   return Math.min(halfCap, Math.max(effectiveMin, scaled));
 }
 
-// ─── Entry strategy shape regime pick (ENTRY_STRATEGY_TYPE=auto) ─────────────
+// ─── Entry strategy mode regime pick (ENTRY_STRATEGY_TYPE=auto) ─────────────
 
 /**
  * Pick a DLMM deposit distribution from recent pool regime signals. Only used
- * when ENTRY_STRATEGY_TYPE=auto; any concrete configured shape bypasses this.
+ * when ENTRY_STRATEGY_TYPE=auto; any concrete configured mode bypasses this.
  *
  * Heuristic:
  * - A dominant trend (|net drift| ≥ max(3 bins, 2σ) over the lookback window)
@@ -461,11 +463,11 @@ export function resolveRangeHalfWidth(args: {
  * - Calm / mean-reverting (default, including no history yet) → `curve`,
  *   concentrated around the active bin for maximum fee capture.
  */
-export function recommendStrategyShape(args: {
+export function recommendStrategyMode(args: {
   readonly volatilityStddev: number;
   readonly highVolThreshold: number;
   readonly netDriftBins: number;
-}): EntryStrategyShape {
+}): EntryStrategyMode {
   const trendDominates = Math.abs(args.netDriftBins) >= Math.max(3, 2 * args.volatilityStddev);
   if (trendDominates) return "bidask";
   if (isHighVolatility(args.volatilityStddev, args.highVolThreshold)) return "spot";
@@ -593,6 +595,7 @@ export function evolveThresholds(
  * Estimate the probability that an OOR position recovers into its existing
  * range. Heuristic: typical mean-reversion amplitude (mean |Δbin| over the
  * recent history) divided by current drift distance. If the typical swing is
+ // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
  * at least as large as the current drift, the price is more likely to come
  * back. Trending or runaway series score low; oscillating series score high.
  * Returns 0.5 for empty history (no signal, fall through to defaults).

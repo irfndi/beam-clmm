@@ -1,3 +1,4 @@
+/* eslint-disable anti-slop/require-safety-comment-for-type-assertion */
 import { Config, ConfigProvider, Context, Effect, Layer } from "effect";
 import { isAddress } from "viem";
 import { ConfigError } from "./errors.js";
@@ -11,7 +12,11 @@ import type {
 } from "./types.js";
 import { createLogger } from "./logger.js";
 import { applyDbConfigOverrides, readDbConfigOverrides } from "./db-config.js";
-import { ENTRY_SIZE_CAP_USD, ENTRY_SIZE_FLOOR_USD, ENTRY_SIZE_TVL_FRACTION } from "./entry-sizing.js";
+import {
+  ENTRY_SIZE_CAP_USD,
+  ENTRY_SIZE_FLOOR_USD,
+  ENTRY_SIZE_TVL_FRACTION,
+} from "./entry-sizing.js";
 import { MIN_NATIVE_FOR_ENTRY_WEI, MIN_NATIVE_FOR_GAS_WEI } from "./constants.js";
 import {
   LIVE_ENTRY_V4_ENABLED_CHAIN,
@@ -21,6 +26,18 @@ import {
 } from "./chain-registry.js";
 
 const logger = createLogger("ConfigService");
+
+function parseEnum<const Values extends readonly string[]>(
+  values: Values,
+  raw: string,
+  fallback: Values[number],
+): Values[number] {
+  return values.find((value) => value === raw) ?? fallback;
+}
+
+function isFeeDestination(value: string): value is FeeDestination {
+  return value === "compound" || value === "accumulate-quote" || value === "accumulate-native";
+}
 
 export type FeeDestination = "compound" | "accumulate-quote" | "accumulate-native";
 
@@ -673,11 +690,7 @@ const loadConfig = Effect.gen(function* () {
   // Single drawdown exit threshold: the old 'halve' de-risk tier (default 5%)
   // collapsed into exit (program.ts maps both to EXIT), so the exit default is
   // 5% — the effective runtime threshold.
-  const challengeDrawdownExitPct = yield* validatedNumber(
-    "CHALLENGE_DRAWDOWN_EXIT_PCT",
-    0,
-    5,
-  );
+  const challengeDrawdownExitPct = yield* validatedNumber("CHALLENGE_DRAWDOWN_EXIT_PCT", 0, 5);
   const challengeRangeVolK = yield* validatedNumber("CHALLENGE_RANGE_VOL_K", 0.5, 1.5);
   const challengeMinScore = yield* validatedNumber("CHALLENGE_MIN_SCORE", 0, 4);
   // Launch-rug window: pools younger than this are EXCLUDED from ENTER even
@@ -688,11 +701,7 @@ const loadConfig = Effect.gen(function* () {
     3_600_000,
     6 * 3_600_000,
   );
-  const challengePoolShareCapPct = yield* validatedNumber(
-    "CHALLENGE_POOL_SHARE_CAP_PCT",
-    0.5,
-    10,
-  );
+  const challengePoolShareCapPct = yield* validatedNumber("CHALLENGE_POOL_SHARE_CAP_PCT", 0.5, 10);
   const challengeBookSize = yield* validatedNumber("CHALLENGE_BOOK_SIZE", 1, 10);
   const challengeUniverseRefreshMs = yield* validatedNumber(
     "CHALLENGE_UNIVERSE_REFRESH_MS",
@@ -737,18 +746,14 @@ const loadConfig = Effect.gen(function* () {
     return isTest ? "https://example.com" : DEFAULT_RPC;
   });
   const rpcFallbackUrls = yield* Effect.gen(function* () {
-    const multi = yield* Config.string("RPC_FALLBACK_URLS").pipe(
-      Effect.orElseSucceed(() => ""),
-    );
+    const multi = yield* Config.string("RPC_FALLBACK_URLS").pipe(Effect.orElseSucceed(() => ""));
     if (multi.trim()) {
       return multi
         .split(",")
         .map((s) => s.trim())
         .filter((s) => s.length > 0);
     }
-    const single = yield* Config.string("RPC_FALLBACK_URL").pipe(
-      Effect.orElseSucceed(() => ""),
-    );
+    const single = yield* Config.string("RPC_FALLBACK_URL").pipe(Effect.orElseSucceed(() => ""));
     return single.trim() ? [single.trim()] : [];
   });
   const rpcRetryCount = yield* validatedNumber("RPC_RETRY_COUNT", 0, 4);
@@ -1037,7 +1042,7 @@ const loadConfig = Effect.gen(function* () {
   const feeDestination: FeeDestination = yield* Config.string("FEE_DESTINATION").pipe(
     Config.withDefault("compound"),
     Effect.flatMap((value) =>
-      value === "compound" || value === "accumulate-quote" || value === "accumulate-native"
+      isFeeDestination(value)
         ? Effect.succeed(value)
         : Effect.fail(
             new ConfigError({
@@ -1045,7 +1050,6 @@ const loadConfig = Effect.gen(function* () {
             }),
           ),
     ),
-    Effect.map((value) => value as FeeDestination),
   );
 
   // ─── F4: OOR recovery prediction ─────────────────────────────────────────────
@@ -1098,11 +1102,7 @@ const loadConfig = Effect.gen(function* () {
   const gasReservePct = yield* validatedNumber("GAS_RESERVE_PCT", 0, 0.1, 0.5);
   const harvestMinNetUsd = yield* validatedNumber("HARVEST_MIN_NET_USD", 0, 1);
   const harvestMaxGasPct = yield* validatedNumber("HARVEST_MAX_GAS_PCT", 0, 0.15, 1.0);
-  const rotationMinSuperiorityPct = yield* validatedNumber(
-    "ROTATION_MIN_SUPERIORITY_PCT",
-    0,
-    25,
-  );
+  const rotationMinSuperiorityPct = yield* validatedNumber("ROTATION_MIN_SUPERIORITY_PCT", 0, 25);
   const rotationMinAprLeadPct = yield* validatedNumber("ROTATION_MIN_APR_LEAD_PCT", 0, 20);
   const rotationMinFeeDensityLeadPct = yield* validatedNumber(
     "ROTATION_MIN_FEE_DENSITY_LEAD_PCT",
@@ -1186,11 +1186,7 @@ const loadConfig = Effect.gen(function* () {
     12 * 60 * 60 * 1000,
   );
   const maxOorCooldownExits = yield* validatedNumber("MAX_OOR_COOLDOWN_EXITS", 1, 3);
-  const rotationCooldownMs = yield* validatedNumber(
-    "ROTATION_COOLDOWN_MS",
-    0,
-    15 * 60 * 1000,
-  );
+  const rotationCooldownMs = yield* validatedNumber("ROTATION_COOLDOWN_MS", 0, 15 * 60 * 1000);
 
   // ─── Fee-density-driven low-yield exit cooldowns ────────────────────────────
   const feeDensityCooldowns = yield* Config.boolean("FEE_DENSITY_COOLDOWNS").pipe(
@@ -1265,11 +1261,7 @@ const loadConfig = Effect.gen(function* () {
     Effect.orElseSucceed(() => "auto"),
   );
   const validAgentRuntimes = ["auto", "hermes", "openclaw", "none"] as const;
-  const agentRuntime = validAgentRuntimes.includes(
-    agentRuntimeRaw as (typeof validAgentRuntimes)[number],
-  )
-    ? (agentRuntimeRaw as (typeof validAgentRuntimes)[number])
-    : "auto";
+  const agentRuntime = parseEnum(validAgentRuntimes, agentRuntimeRaw, "auto");
   const agentAcpCommand = yield* Config.string("AGENT_ACP_COMMAND").pipe(
     Effect.orElseSucceed(() => "hermes"),
   );
@@ -1335,11 +1327,7 @@ const loadConfig = Effect.gen(function* () {
     Effect.orElseSucceed(() => "veto"),
   );
   const validAgentProposalModes = ["veto", "suggest", "supervised", "full"] as const;
-  const agentProposalMode = validAgentProposalModes.includes(
-    agentProposalModeRaw as (typeof validAgentProposalModes)[number],
-  )
-    ? (agentProposalModeRaw as (typeof validAgentProposalModes)[number])
-    : "veto";
+  const agentProposalMode = parseEnum(validAgentProposalModes, agentProposalModeRaw, "veto");
   const agentProposalToken = yield* Config.string("AGENT_PROPOSAL_TOKEN").pipe(
     Effect.orElseSucceed(() => ""),
   );
@@ -1442,11 +1430,11 @@ const loadConfig = Effect.gen(function* () {
     Effect.orElseSucceed(() => "spot"),
   );
   const validEntryStrategyTypes = ["spot", "curve", "bidask", "auto"] as const;
-  const entryStrategyType: EntryStrategyType = validEntryStrategyTypes.includes(
-    entryStrategyTypeRaw as (typeof validEntryStrategyTypes)[number],
-  )
-    ? (entryStrategyTypeRaw as (typeof validEntryStrategyTypes)[number])
-    : "spot";
+  const entryStrategyType: EntryStrategyType = parseEnum(
+    validEntryStrategyTypes,
+    entryStrategyTypeRaw,
+    "spot",
+  );
 
   // ─── Proactive Telegram alerts (Wave 5) ───────────────────────────────────
   const alertsEnabled = yield* Config.boolean("ALERTS_ENABLED").pipe(
@@ -1619,9 +1607,7 @@ const loadConfig = Effect.gen(function* () {
     Effect.orElseSucceed(() => "stable"),
   );
   const validChannels = ["stable", "beta", "dev", "canary"] as const;
-  const updateChannel = validChannels.includes(updateChannelRaw as (typeof validChannels)[number])
-    ? (updateChannelRaw as (typeof validChannels)[number])
-    : "stable";
+  const updateChannel = parseEnum(validChannels, updateChannelRaw, "stable");
   const updateGithubRepo = yield* Config.string("UPDATE_GITHUB_REPO").pipe(
     Effect.orElseSucceed(() => "irfndi/beam-clmm"),
   );

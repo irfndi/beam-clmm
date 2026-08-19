@@ -475,7 +475,9 @@ export interface CapitalGateVerdict {
   readonly reason: string;
 }
 
-export function evaluateAgentRebalanceCapitalGates(input: AgentRebalanceCapitalGateInput): CapitalGateVerdict {
+export function evaluateAgentRebalanceCapitalGates(
+  input: AgentRebalanceCapitalGateInput,
+): CapitalGateVerdict {
   const timeSinceRebal = input.now - input.lastRebalanceAt;
   if (timeSinceRebal < input.minRebalanceIntervalMs && !input.oorGraceExpired) {
     return {

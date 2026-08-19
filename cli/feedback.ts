@@ -15,28 +15,44 @@ import { getBeamDbPath } from "../engine/paths.js";
 
 const logger = createLogger("feedback-cli");
 
-const VALID_CATEGORIES: ReadonlyArray<FeedbackCategory> = [
+const VALID_CATEGORIES = [
   "friction",
   "suggestion",
   "observation",
   "praise",
-];
-const VALID_SEVERITIES: ReadonlyArray<FeedbackSeverity> = ["low", "medium", "high"];
+] as const satisfies ReadonlyArray<FeedbackCategory>;
+const VALID_SEVERITIES = [
+  "low",
+  "medium",
+  "high",
+] as const satisfies ReadonlyArray<FeedbackSeverity>;
 
 function parseCategory(raw: string | undefined, fallback: FeedbackCategory): FeedbackCategory {
   const value = raw ?? fallback;
-  if (!VALID_CATEGORIES.includes(value as FeedbackCategory)) {
+  if (!isFeedbackCategory(value)) {
     throw new Error(`Invalid category '${value}'. Valid: ${VALID_CATEGORIES.join(", ")}`);
   }
-  return value as FeedbackCategory;
+  return value;
+}
+
+function isFeedbackCategory(value: string): value is FeedbackCategory {
+  return includesString(VALID_CATEGORIES, value);
+}
+
+function includesString(values: readonly string[], value: string): boolean {
+  return values.includes(value);
 }
 
 function parseSeverity(raw: string | undefined, fallback: FeedbackSeverity): FeedbackSeverity {
   const value = raw ?? fallback;
-  if (!VALID_SEVERITIES.includes(value as FeedbackSeverity)) {
+  if (!isFeedbackSeverity(value)) {
     throw new Error(`Invalid severity '${value}'. Valid: ${VALID_SEVERITIES.join(", ")}`);
   }
-  return value as FeedbackSeverity;
+  return value;
+}
+
+function isFeedbackSeverity(value: string): value is FeedbackSeverity {
+  return includesString(VALID_SEVERITIES, value);
 }
 
 function buildProgram(): Layer.Layer<FeedbackService | ConfigService, Error, never> {
@@ -64,7 +80,7 @@ function formatResult(result: FeedbackResult): string {
     case "error":
       return `✗ Failed to submit feedback: ${result.error}`;
     default:
-      return `✗ Unknown feedback result: ${String((result as { kind: string }).kind)}`;
+      return "✗ Unknown feedback result";
   }
 }
 
@@ -108,7 +124,7 @@ async function runSubmit(feedback: AgentFeedback): Promise<FeedbackResult> {
       const service = yield* FeedbackService;
       return yield* service.submit(feedback);
     }).pipe(Effect.provide(program)),
-  ).catch((err: unknown) => {
+  ).catch((err) => {
     const message = err instanceof Error ? err.message : String(err);
     logger.error(`Feedback submission crashed: ${message}`);
     return { kind: "error" as const, error: message } satisfies FeedbackResult;
@@ -232,7 +248,7 @@ feedbackCommand
 
 // Default action: if `beam feedback "summary"` is run, behave like `submit`.
 feedbackCommand.action(async (summary: string, opts: SubmitOptions) => {
-  if (typeof summary !== "string") {
+  if (Object.prototype.toString.call(summary) !== "[object String]") {
     feedbackCommand.help();
     return;
   }

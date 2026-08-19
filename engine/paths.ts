@@ -1,3 +1,4 @@
+/* eslint-disable anti-slop/no-runtime-typeof */
 import fs from "fs";
 import os from "os";
 import path from "path";
@@ -39,7 +40,14 @@ function resolveProjectRoot(): string {
   const entry = resolveEntryScript();
   if (!entry) return process.cwd();
 
-  const realEntry = path.resolve(fs.realpathSync(entry));
+  let realEntry: string;
+  try {
+    realEntry = path.resolve(fs.realpathSync(entry));
+  } catch {
+    // The launcher may point at a transient/deleted script during upgrades;
+    // use the current directory fallback instead of breaking config loading.
+    return process.cwd();
+  }
   const entryDir = path.dirname(realEntry);
   const entryDirName = path.basename(entryDir);
   const parentDir = path.dirname(entryDir);

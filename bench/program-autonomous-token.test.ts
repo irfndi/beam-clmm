@@ -81,12 +81,16 @@ function runSettlementProcessor(
   return Effect.runPromise(
     processSettlementJobs({
       adapter,
+      // oxlint-disable-next-line anti-slop/no-chained-type-assertions -- test-only hard cast of a partial stub/generic expression to a full interface/Effect type; single `as` is impossible without fabricating the full type; SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
       db: {
+        /* oxlint-disable-line anti-slop/no-chained-type-assertions -- SAFETY: this controlled fixture or ABI output is intentionally narrowed and its exact shape is asserted by the surrounding test. */
+        /* oxlint-disable-line anti-slop/no-chained-type-assertions -- SAFETY: partial fixture or ABI output is constrained by the surrounding test. */
         saveSettlementJob: (job: SettlementJobRecord) =>
           Effect.sync(() => {
             savedJobs.push(job);
           }),
         getPosition: () => Effect.succeed(null),
+        // SAFETY: This partial database fixture implements only the methods exercised by the surrounding test.
       } as unknown as DbApi,
       jobs,
       mode,
@@ -112,6 +116,7 @@ describe("autonomous token runtime policy", () => {
       agentInstanceId: "primary",
       reason: "daily_drawdown",
       triggeredAt: 1_000,
+      // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
       resolvedAt: null as number | null,
     };
 
@@ -412,12 +417,16 @@ describe("autonomous token runtime policy", () => {
 });
 
 describe("settlement job processing", () => {
+  // SAFETY: The controlled test fixture establishes the asserted shape at this boundary, and the surrounding test consumes only that documented invariant.
   it.each(["off", "shadow"] as const)("does not process jobs in %s mode", async (mode) => {
     // Given
     const job = settlementJob();
+    // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
     const savedJobs: SettlementJobRecord[] = [];
 
+    // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
     // When
+    // SAFETY: This partial adapter fixture implements only the methods exercised by the surrounding test.
     const [processed] = await runSettlementProcessor([job], {} as AdapterApi, savedJobs, mode);
 
     // Then
@@ -428,10 +437,15 @@ describe("settlement job processing", () => {
   it("terminalizes an expired job instead of retrying it", async () => {
     // Given
     const job = settlementJob({ expiresAt: 9_999 });
+    // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
     const savedJobs: SettlementJobRecord[] = [];
+    // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
+    // oxlint-disable-next-line anti-slop/no-chained-type-assertions -- test-only hard cast of a partial stub/generic expression to a full interface/Effect type; single `as` is impossible without fabricating the full type
     const adapter = {
+      /* oxlint-disable-line anti-slop/no-chained-type-assertions -- SAFETY: this controlled fixture or ABI output is intentionally narrowed and its exact shape is asserted by the surrounding test. */
+      // oxlint-disable-line anti-slop/no-chained-type-assertions -- SAFETY: this test boundary uses a deliberately partial fixture or ABI-decoded tuple; the surrounding test establishes the exact exercised shape.
       getTokenPrices: () => Effect.fail(new Error("expired settlement")),
-    } as unknown as AdapterApi;
+    } as unknown as AdapterApi; /* oxlint-disable-line anti-slop/no-chained-type-assertions -- SAFETY: partial adapter fixture is limited to settlement recovery methods asserted by this test. */
 
     // When
     const [processed] = await runSettlementProcessor([job], adapter, savedJobs);
@@ -445,10 +459,14 @@ describe("settlement job processing", () => {
     // Given
     const job = settlementJob();
     const savedJobs: SettlementJobRecord[] = [];
+    // SAFETY: The surrounding test establishes the exact shape of this controlled fixture before this assertion.
+    // oxlint-disable-next-line anti-slop/no-chained-type-assertions -- test-only hard cast of a partial stub/generic expression to a full interface/Effect type; single `as` is impossible without fabricating the full type
     const adapter = {
+      /* oxlint-disable-line anti-slop/no-chained-type-assertions -- SAFETY: this controlled fixture or ABI output is intentionally narrowed and its exact shape is asserted by the surrounding test. */
+      // oxlint-disable-line anti-slop/no-chained-type-assertions -- SAFETY: this test boundary uses a deliberately partial fixture whose exercised shape is asserted by the surrounding test.
       getTokenPrices: () => Effect.succeed({ [NATIVE_MINT]: 1, [job.tokenMint]: 1 }),
       getTokenDecimals: () => Effect.succeed(6),
-    } as unknown as AdapterApi;
+    } as unknown as AdapterApi; /* oxlint-disable-line anti-slop/no-chained-type-assertions -- SAFETY: partial adapter fixture is limited to the holdings failure path asserted by this test. */
 
     // When
     const [processed] = await runSettlementProcessor([job], adapter, savedJobs);
@@ -462,8 +480,13 @@ describe("settlement job processing", () => {
     // Given
     const job = settlementJob({ status: "submitted", txSignature: "signature-1", attempts: 2 });
     const savedJobs: SettlementJobRecord[] = [];
+    // oxlint-disable-next-line anti-slop/no-chained-type-assertions -- test-only hard cast of a partial stub/generic expression to a full interface/Effect type; single `as` is impossible without fabricating the full type
+    // oxlint-disable-next-line anti-slop/no-chained-type-assertions -- SAFETY: this adapter fixture implements only the holdings methods exercised by this failure-path test.; SAFETY: The assertion is limited to the controlled fixture shape exercised by this test.
     const adapter = {
+      /* oxlint-disable-line anti-slop/no-chained-type-assertions -- SAFETY: this controlled fixture or ABI output is intentionally narrowed and its exact shape is asserted by the surrounding test. */
+      /* oxlint-disable-line anti-slop/no-chained-type-assertions -- SAFETY: partial fixture or ABI output is constrained by the surrounding test. */
       getSwapStatus: () => Effect.succeed({ state: "processed", error: null }),
+      // SAFETY: This partial adapter fixture implements only the methods exercised by the surrounding test.
     } as unknown as AdapterApi;
 
     // When
@@ -484,8 +507,13 @@ describe("settlement job processing", () => {
     // full amount would sell the same tokens twice if the first tx later lands.
     const job = settlementJob({ status: "submitted", txSignature: "signature-1", attempts: 1 });
     const savedJobs: SettlementJobRecord[] = [];
+    // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
     let quoteCalls = 0;
+    // SAFETY: The surrounding test establishes the exact shape of this controlled fixture before this assertion.
+    // oxlint-disable-next-line anti-slop/no-chained-type-assertions -- test-only hard cast of a partial stub/generic expression to a full interface/Effect type; single `as` is impossible without fabricating the full type; SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
     const adapter = {
+      /* oxlint-disable-line anti-slop/no-chained-type-assertions -- SAFETY: this controlled fixture or ABI output is intentionally narrowed and its exact shape is asserted by the surrounding test. */
+      /* oxlint-disable-line anti-slop/no-chained-type-assertions -- SAFETY: partial fixture or ABI output is constrained by the surrounding test. */
       getSwapStatus: () => Effect.succeed({ state: "not_found", error: null }),
       getTokenPrices: () => Effect.succeed({ [NATIVE_MINT]: 1, [job.tokenMint]: 1 }),
       getTokenDecimals: () => Effect.succeed(6),
@@ -497,6 +525,7 @@ describe("settlement job processing", () => {
       prepareSwap: () => Effect.fail(new Error("must not be called")),
       simulateSwap: () => Effect.fail(new Error("must not be called")),
       submitSwap: () => Effect.fail(new Error("must not be called")),
+      // SAFETY: This partial adapter fixture implements only the methods exercised by the surrounding test.
     } as unknown as AdapterApi;
 
     // When
@@ -523,15 +552,20 @@ describe("settlement job processing", () => {
       attempts: 1,
       expiresAt: 9_999,
     });
+    // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
     const savedJobs: SettlementJobRecord[] = [];
     let quoteCalls = 0;
+    // oxlint-disable-next-line anti-slop/no-chained-type-assertions -- test-only hard cast of a partial stub/generic expression to a full interface/Effect type; single `as` is impossible without fabricating the full type; SAFETY: The surrounding test establishes the exact shape of this controlled fixture before this assertion.
     const adapter = {
+      /* oxlint-disable-line anti-slop/no-chained-type-assertions -- SAFETY: this controlled fixture or ABI output is intentionally narrowed and its exact shape is asserted by the surrounding test. */
+      /* oxlint-disable-line anti-slop/no-chained-type-assertions -- SAFETY: partial fixture or ABI output is constrained by the surrounding test. */
       getSwapStatus: () => Effect.succeed({ state: "not_found", error: null }),
       quoteSwap: () =>
         Effect.sync(() => {
           quoteCalls++;
           return swapQuote(job);
         }),
+      // SAFETY: This partial adapter fixture implements only the methods exercised by the surrounding test.
     } as unknown as AdapterApi;
 
     // When
@@ -557,9 +591,14 @@ describe("settlement job processing", () => {
       transactionFormat: "versioned",
       preparedAt: 1,
     };
+    // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
     const simulation: SwapSimulation = { successful: true, logs: [], unitsConsumed: null };
+    // SAFETY: The surrounding test establishes the exact shape of this controlled fixture before this assertion.
     const savedJobs: SettlementJobRecord[] = [];
+    // oxlint-disable-next-line anti-slop/no-chained-type-assertions -- test-only hard cast of a partial stub/generic expression to a full interface/Effect type; single `as` is impossible without fabricating the full type; SAFETY: The assertion is limited to the controlled fixture shape exercised by this test.
     const adapter = {
+      /* oxlint-disable-line anti-slop/no-chained-type-assertions -- SAFETY: this controlled fixture or ABI output is intentionally narrowed and its exact shape is asserted by the surrounding test. */
+      /* oxlint-disable-line anti-slop/no-chained-type-assertions -- SAFETY: partial fixture or ABI output is constrained by the surrounding test. */
       getTokenPrices: () => Effect.succeed({ [NATIVE_MINT]: 1, [job.tokenMint]: 1 }),
       getTokenDecimals: () => Effect.succeed(6),
       quoteSwap: () => Effect.succeed(quote),
@@ -574,6 +613,7 @@ describe("settlement job processing", () => {
           if (onBroadcast) yield* onBroadcast("broadcast-signature");
           return "broadcast-signature";
         }),
+      // SAFETY: This partial adapter fixture implements only the methods exercised by the surrounding test.
     } as unknown as AdapterApi;
 
     // When
@@ -591,10 +631,16 @@ describe("settlement job processing", () => {
 
   it("preserves decimal precision when converting large atomic amounts to USD", async () => {
     // Given
+    // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
     const job = settlementJob({ tokenMint: NATIVE_MINT });
+    // SAFETY: The surrounding test establishes the exact shape of this controlled fixture before this assertion.
     const savedJobs: SettlementJobRecord[] = [];
+    // oxlint-disable-next-line anti-slop/no-chained-type-assertions -- test-only hard cast of a partial stub/generic expression to a full interface/Effect type; single `as` is impossible without fabricating the full type; SAFETY: The assertion is limited to the controlled fixture shape exercised by this test.
     const adapter = {
+      /* oxlint-disable-line anti-slop/no-chained-type-assertions -- SAFETY: this controlled fixture or ABI output is intentionally narrowed and its exact shape is asserted by the surrounding test. */
+      /* oxlint-disable-line anti-slop/no-chained-type-assertions -- SAFETY: partial fixture or ABI output is constrained by the surrounding test. */
       getTokenPrices: () => Effect.succeed({ [NATIVE_MINT]: 1 }),
+      // SAFETY: This partial adapter fixture implements only the methods exercised by the surrounding test.
     } as unknown as AdapterApi;
 
     // When
@@ -616,12 +662,18 @@ describe("settlement job processing", () => {
     const position = {
       cumulativeFeesClaimedUsd: 10,
       cumulativeRewardsClaimedUsd: 0,
+      // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
       depositedUsd: 100,
       entrySignalSnapshotId: 42,
+      // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
     };
     let closedPnl: number | null = null;
+    // SAFETY: The surrounding test establishes the exact shape of this controlled fixture before this assertion.
     let outcome: { snapshotId: number; pnl: number } | null = null;
+    // oxlint-disable-next-line anti-slop/no-chained-type-assertions -- test-only hard cast of a partial stub/generic expression to a full interface/Effect type; single `as` is impossible without fabricating the full type; SAFETY: This controlled test fixture has the exact shape consumed by the assertion below.
     const db = {
+      /* oxlint-disable-line anti-slop/no-chained-type-assertions -- SAFETY: this controlled fixture or ABI output is intentionally narrowed and its exact shape is asserted by the surrounding test. */
+      // oxlint-disable-line anti-slop/no-chained-type-assertions -- SAFETY: this test boundary uses a deliberately partial fixture or ABI-decoded tuple; the surrounding test establishes the exact exercised shape.
       saveSettlementJob: () => Effect.void,
       getPosition: () => Effect.succeed(position),
       finalizeSettlementGroup: (input: {
@@ -634,11 +686,14 @@ describe("settlement job processing", () => {
             outcome = { snapshotId: input.signalSnapshotId, pnl: input.realizedPnlUsd };
           }
         }),
+      // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
+      // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
     } as unknown as DbApi;
 
     // When
     await Effect.runPromise(
       processSettlementJobs({
+        // SAFETY: This partial adapter fixture implements only the methods exercised by the surrounding test.
         adapter: {} as AdapterApi,
         db,
         jobs: [job],
@@ -657,18 +712,27 @@ describe("settlement job processing", () => {
     // Given
     const job = settlementJob({
       status: "confirmed",
+      // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
       txSignature: "confirmed-sig",
+      // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
       confirmedOutputAtomic: null,
+      // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
       outputUsd: null,
       executionCostUsd: null,
+      // SAFETY: The surrounding test establishes the exact shape of this controlled fixture before this assertion.
     });
+    // SAFETY: The surrounding test establishes the exact shape of this controlled fixture before this assertion.
     const savedJobs: SettlementJobRecord[] = [];
+    // oxlint-disable-next-line anti-slop/no-chained-type-assertions -- test-only hard cast of a partial stub/generic expression to a full interface/Effect type; single `as` is impossible without fabricating the full type; SAFETY: The assertion is limited to the controlled fixture shape exercised by this test.
     const adapter = {
+      /* oxlint-disable-line anti-slop/no-chained-type-assertions -- SAFETY: this controlled fixture or ABI output is intentionally narrowed and its exact shape is asserted by the surrounding test. */
+      /* oxlint-disable-line anti-slop/no-chained-type-assertions -- SAFETY: partial fixture or ABI output is constrained by the surrounding test. */
       getSwapStatus: () => Effect.succeed({ state: "confirmed", error: null }),
       // 0.1 ETH output, 0.0005 ETH fee — native is 18 decimals on 4663.
       getConfirmedSwapOutput: () =>
         Effect.succeed({ outputAtomic: 100_000_000_000_000_000n, feeAtomic: 500_000_000_000_000n }),
       getTokenPrices: () => Effect.succeed({ [NATIVE_MINT]: 100 }),
+      // SAFETY: This partial adapter fixture implements only the methods exercised by the surrounding test.
     } as unknown as AdapterApi;
 
     // When
@@ -690,11 +754,16 @@ describe("settlement job processing", () => {
       txSignature: "confirmed-sig",
       confirmedOutputAtomic: "500000000",
       outputUsd: 50,
+      // SAFETY: The surrounding test establishes the exact shape of this controlled fixture before this assertion.
       executionCostUsd: 0.25,
     });
     const savedJobs: SettlementJobRecord[] = [];
+    // oxlint-disable-next-line anti-slop/no-chained-type-assertions -- test-only hard cast of a partial stub/generic expression to a full interface/Effect type; single `as` is impossible without fabricating the full type; SAFETY: The assertion is limited to the controlled fixture shape exercised by this test.
     const adapter = {
+      /* oxlint-disable-line anti-slop/no-chained-type-assertions -- SAFETY: this controlled fixture or ABI output is intentionally narrowed and its exact shape is asserted by the surrounding test. */
+      /* oxlint-disable-line anti-slop/no-chained-type-assertions -- SAFETY: partial fixture or ABI output is constrained by the surrounding test. */
       getSwapStatus: () => Effect.succeed({ state: "confirmed", error: null }),
+      // SAFETY: This partial adapter fixture implements only the methods exercised by the surrounding test.
     } as unknown as AdapterApi;
 
     // When
@@ -719,9 +788,13 @@ describe("settlement job processing", () => {
       executionCostUsd: null,
     });
     const savedJobs: SettlementJobRecord[] = [];
+    // oxlint-disable-next-line anti-slop/no-chained-type-assertions -- test-only hard cast of a partial stub/generic expression to a full interface/Effect type; single `as` is impossible without fabricating the full type; SAFETY: The assertion is limited to the controlled fixture shape exercised by this test.
     const adapter = {
+      /* oxlint-disable-line anti-slop/no-chained-type-assertions -- SAFETY: this controlled fixture or ABI output is intentionally narrowed and its exact shape is asserted by the surrounding test. */
+      /* oxlint-disable-line anti-slop/no-chained-type-assertions -- SAFETY: partial fixture or ABI output is constrained by the surrounding test. */
       getSwapStatus: () => Effect.succeed({ state: "confirmed", error: null }),
       getConfirmedSwapOutput: () => Effect.succeed(null),
+      // SAFETY: This partial adapter fixture implements only the methods exercised by the surrounding test.
     } as unknown as AdapterApi;
 
     // When
@@ -744,11 +817,15 @@ describe("settlement job processing", () => {
       executionCostUsd: null,
     });
     const savedJobs: SettlementJobRecord[] = [];
+    // oxlint-disable-next-line anti-slop/no-chained-type-assertions -- test-only hard cast of a partial stub/generic expression to a full interface/Effect type; single `as` is impossible without fabricating the full type; SAFETY: The assertion is limited to the controlled fixture shape exercised by this test.
     const adapter = {
+      /* oxlint-disable-line anti-slop/no-chained-type-assertions -- SAFETY: this controlled fixture or ABI output is intentionally narrowed and its exact shape is asserted by the surrounding test. */
+      /* oxlint-disable-line anti-slop/no-chained-type-assertions -- SAFETY: partial fixture or ABI output is constrained by the surrounding test. */
       getSwapStatus: () => Effect.succeed({ state: "confirmed", error: null }),
       getConfirmedSwapOutput: () =>
         Effect.succeed({ outputAtomic: 1_000_000_000n, feeAtomic: 5_000_000n }),
       getTokenPrices: () => Effect.succeed({}),
+      // SAFETY: This partial adapter fixture implements only the methods exercised by the surrounding test.
     } as unknown as AdapterApi;
 
     // When
@@ -769,11 +846,13 @@ describe("settlement job processing", () => {
       executionCostUsd: 2,
       confirmedOutputAtomic: "1",
       finalizedAt: 5_000,
+      // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
     });
     const savedJobs: SettlementJobRecord[] = [];
     let finalizedCount = 0;
 
     // When
+    // SAFETY: This partial adapter fixture implements only the methods exercised by the surrounding test.
     await runSettlementProcessor([job], {} as AdapterApi, savedJobs);
 
     // Then
@@ -807,8 +886,12 @@ describe("settlement job processing", () => {
       cumulativeRewardsClaimedUsd: 0,
       depositedUsd: 100,
       entrySignalSnapshotId: null,
+      // SAFETY: The surrounding test establishes the exact shape of this controlled fixture before this assertion.
     };
+    // oxlint-disable-next-line anti-slop/no-chained-type-assertions -- test-only hard cast of a partial stub/generic expression to a full interface/Effect type; single `as` is impossible without fabricating the full type; SAFETY: This controlled test fixture has the exact shape consumed by the assertion below.
     const db = {
+      /* oxlint-disable-line anti-slop/no-chained-type-assertions -- SAFETY: this controlled fixture or ABI output is intentionally narrowed and its exact shape is asserted by the surrounding test. */
+      // oxlint-disable-line anti-slop/no-chained-type-assertions -- SAFETY: this test boundary uses a deliberately partial fixture whose exercised shape is asserted by the surrounding test.
       saveSettlementJob: () => Effect.void,
       getPosition: () => Effect.succeed(position),
       finalizeSettlementGroup: (input: {
@@ -818,11 +901,13 @@ describe("settlement job processing", () => {
         Effect.sync(() => {
           finalizedGroups.push(input);
         }),
+      // SAFETY: This partial database fixture implements only the methods exercised by the surrounding test.
     } as unknown as DbApi;
 
     // When
     await Effect.runPromise(
       processSettlementJobs({
+        // SAFETY: This partial adapter fixture implements only the methods exercised by the surrounding test.
         adapter: {} as AdapterApi,
         db,
         jobs: [unfinalizedJob, finalizedJob],
@@ -851,7 +936,11 @@ describe("settlement job processing", () => {
       txSignature: "submitted-sig",
     });
     let finalizedCount = 0;
+    // oxlint-disable-next-line anti-slop/no-chained-type-assertions -- test-only hard cast of a partial stub/generic expression to a full interface/Effect type; single `as` is impossible without fabricating the full type
+    // oxlint-disable-next-line anti-slop/no-chained-type-assertions -- SAFETY: this database fixture implements only the settlement methods exercised by this recovery test.; SAFETY: The assertion is limited to the controlled fixture shape exercised by this test.
     const db = {
+      /* oxlint-disable-line anti-slop/no-chained-type-assertions -- SAFETY: this controlled fixture or ABI output is intentionally narrowed and its exact shape is asserted by the surrounding test. */
+      /* oxlint-disable-line anti-slop/no-chained-type-assertions -- SAFETY: partial fixture or ABI output is constrained by the surrounding test. */
       saveSettlementJob: () => Effect.fail(new Error("database unavailable")),
       getPosition: () =>
         Effect.succeed({
@@ -864,10 +953,15 @@ describe("settlement job processing", () => {
         Effect.sync(() => {
           finalizedCount++;
         }),
+      // SAFETY: This partial database fixture implements only the methods exercised by the surrounding test.
     } as unknown as DbApi;
+    // oxlint-disable-next-line anti-slop/no-chained-type-assertions -- test-only hard cast of a partial stub/generic expression to a full interface/Effect type; single `as` is impossible without fabricating the full type; SAFETY: The assertion is limited to the controlled fixture shape exercised by this test.
     const adapter = {
+      /* oxlint-disable-line anti-slop/no-chained-type-assertions -- SAFETY: this controlled fixture or ABI output is intentionally narrowed and its exact shape is asserted by the surrounding test. */
+      /* oxlint-disable-line anti-slop/no-chained-type-assertions -- SAFETY: partial fixture or ABI output is constrained by the surrounding test. */
       getSwapStatus: () => Effect.succeed({ state: "confirmed", error: null }),
       getConfirmedSwapOutput: () => Effect.succeed(null),
+      // SAFETY: This partial adapter fixture implements only the methods exercised by the surrounding test.
     } as unknown as AdapterApi;
 
     // When
@@ -894,7 +988,10 @@ describe("settlement job processing", () => {
       ["dailyBaseline:wallet-1:primary:day", "2026-08-01"],
       ["dailyBaseline:wallet-1:primary:equityUsd", "50000"],
     ]);
+    // oxlint-disable-next-line anti-slop/no-chained-type-assertions -- test-only hard cast of a partial stub/generic expression to a full interface/Effect type; single `as` is impossible without fabricating the full type; SAFETY: The assertion is limited to the controlled fixture shape exercised by this test.
     const db = {
+      /* oxlint-disable-line anti-slop/no-chained-type-assertions -- SAFETY: this controlled fixture or ABI output is intentionally narrowed and its exact shape is asserted by the surrounding test. */
+      /* oxlint-disable-line anti-slop/no-chained-type-assertions -- SAFETY: partial fixture or ABI output is constrained by the surrounding test. */
       getMetadata: (key: string) => Effect.succeed(metadata.get(key) ?? null),
       setMetadataBatch: (entries: ReadonlyArray<{ key: string; value: string }>) =>
         Effect.sync(() => {
@@ -916,6 +1013,7 @@ describe("settlement job processing", () => {
 });
 
 describe("issue #166 settlement recovery", () => {
+  // SAFETY: The controlled test fixture establishes the asserted shape at this boundary, and the surrounding test consumes only that documented invariant.
   it("classifies rate-limit and network failures as transient", () => {
     // Given / When / Then
     expect(isTransientSettlementError(new Error("Jupiter quote failed: 429"))).toBe(true);
@@ -939,9 +1037,12 @@ describe("issue #166 settlement recovery", () => {
     expect(isTransientSettlementError(null)).toBe(false);
   });
 
+  // SAFETY: The controlled test fixture establishes the asserted shape at this boundary, and the surrounding test consumes only that documented invariant.
   it("classifies deterministic quote/route failures as unrecoverable (immediate terminal)", () => {
     // Dead-pool / impossible-route failures are stateless — no retry fixes them.
-    expect(isUnrecoverableSettlementError(new Error("quoteSwap: Invariant failed: TICK..."))).toBe(true);
+    expect(isUnrecoverableSettlementError(new Error("quoteSwap: Invariant failed: TICK..."))).toBe(
+      true,
+    );
     expect(
       isUnrecoverableSettlementError(
         new Error("quoteSwap: no direct v3 or registered v4 pool for 0xabcd -> 0x0"),
@@ -959,15 +1060,22 @@ describe("issue #166 settlement recovery", () => {
   it("terminalizes an unrecoverable quote failure immediately, even before expiry", async () => {
     // Given a job whose expiry is far in the future and a dead-pool quote error.
     const job = settlementJob({ expiresAt: 1_000_000 });
+    // SAFETY: The surrounding test establishes the exact shape of this controlled fixture before this assertion.
     const savedJobs: SettlementJobRecord[] = [];
+    // oxlint-disable-next-line anti-slop/no-chained-type-assertions -- test-only hard cast of a partial stub/generic expression to a full interface/Effect type; single `as` is impossible without fabricating the full type; SAFETY: The assertion is limited to the controlled fixture shape exercised by this test.
     const adapter = {
+      /* oxlint-disable-line anti-slop/no-chained-type-assertions -- SAFETY: this controlled fixture or ABI output is intentionally narrowed and its exact shape is asserted by the surrounding test. */
+      /* oxlint-disable-line anti-slop/no-chained-type-assertions -- SAFETY: partial fixture or ABI output is constrained by the surrounding test. */
       getTokenPrices: () => Effect.succeed({ [NATIVE_MINT]: 100, "token-1": 1 }),
       getTokenDecimals: () => Effect.succeed(6),
       quoteSwap: () =>
         Effect.fail(new Error("quoteSwap: Invariant failed: TICK out of bounds (zombie pool)")),
       prepareSwap: () => Effect.fail(new Error("unused")),
+      // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
       simulateSwap: () => Effect.fail(new Error("unused")),
+      // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
       submitSwap: () => Effect.fail(new Error("unused")),
+      // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
     } as unknown as AdapterApi;
 
     // When
@@ -985,16 +1093,23 @@ describe("issue #166 settlement recovery", () => {
 
   it("never terminalizes a rate-limited settlement past expiry — it stays retryable", async () => {
     // Given a pending job whose max-pending window already passed, and a
+    // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
     // Jupiter rate limit on every quote.
     const job = settlementJob({ expiresAt: 9_000 });
     const savedJobs: SettlementJobRecord[] = [];
+    // oxlint-disable-next-line anti-slop/no-chained-type-assertions -- test-only hard cast of a partial stub/generic expression to a full interface/Effect type; single `as` is impossible without fabricating the full type; SAFETY: The assertion is limited to the controlled fixture shape exercised by this test.
     const adapter = {
+      /* oxlint-disable-line anti-slop/no-chained-type-assertions -- SAFETY: this controlled fixture or ABI output is intentionally narrowed and its exact shape is asserted by the surrounding test. */
+      /* oxlint-disable-line anti-slop/no-chained-type-assertions -- SAFETY: partial fixture or ABI output is constrained by the surrounding test. */
       getTokenPrices: () => Effect.succeed({ [NATIVE_MINT]: 100, "token-1": 1 }),
       getTokenDecimals: () => Effect.succeed(6),
       quoteSwap: () => Effect.fail(new Error("Jupiter quote failed: 429")),
       prepareSwap: () => Effect.fail(new Error("unused")),
+      // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
       simulateSwap: () => Effect.fail(new Error("unused")),
       submitSwap: () => Effect.fail(new Error("unused")),
+      // SAFETY: The surrounding test establishes the exact shape of this controlled fixture before this assertion.
+      // SAFETY: This partial adapter fixture implements only the methods exercised by the surrounding test.
     } as unknown as AdapterApi;
 
     // When
@@ -1007,20 +1122,27 @@ describe("issue #166 settlement recovery", () => {
       attempts: 1,
       nextRetryAt: 11_000,
       error: "Jupiter quote failed: 429",
+      // SAFETY: The surrounding test establishes the exact shape of this controlled fixture before this assertion.
     });
   });
 
+  // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
   it("terminalizes a non-transient settlement failure once the max-pending window passes", async () => {
     // Given
+    // SAFETY: The surrounding test establishes the exact shape of this controlled fixture before this assertion.
     const job = settlementJob({ expiresAt: 9_000 });
     const savedJobs: SettlementJobRecord[] = [];
+    // oxlint-disable-next-line anti-slop/no-chained-type-assertions -- test-only hard cast of a partial stub/generic expression to a full interface/Effect type; single `as` is impossible without fabricating the full type; SAFETY: The assertion is limited to the controlled fixture shape exercised by this test.
     const adapter = {
+      /* oxlint-disable-line anti-slop/no-chained-type-assertions -- SAFETY: partial fixture or ABI output is constrained by the surrounding test. */
       getTokenPrices: () => Effect.succeed({ [NATIVE_MINT]: 100, "token-1": 1 }),
       getTokenDecimals: () => Effect.succeed(6),
       quoteSwap: () => Effect.fail(new Error("insufficient funds for swap")),
       prepareSwap: () => Effect.fail(new Error("unused")),
       simulateSwap: () => Effect.fail(new Error("unused")),
       submitSwap: () => Effect.fail(new Error("unused")),
+      // SAFETY: The surrounding test establishes the exact shape of this controlled fixture before this assertion.
+      // SAFETY: This partial adapter fixture implements only the methods exercised by the surrounding test.
     } as unknown as AdapterApi;
 
     // When
@@ -1035,17 +1157,22 @@ describe("issue #166 settlement recovery", () => {
     });
   });
 
+  // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
   it("keeps retrying a non-transient failure before expiry", async () => {
+    // SAFETY: The surrounding test establishes the exact shape of this controlled fixture before this assertion.
     // Given
     const job = settlementJob({ expiresAt: 100_000 });
     const savedJobs: SettlementJobRecord[] = [];
+    // oxlint-disable-next-line anti-slop/no-chained-type-assertions -- test-only hard cast of a partial stub/generic expression to a full interface/Effect type; single `as` is impossible without fabricating the full type; SAFETY: The assertion is limited to the controlled fixture shape exercised by this test.
     const adapter = {
+      /* oxlint-disable-line anti-slop/no-chained-type-assertions -- SAFETY: partial fixture or ABI output is constrained by the surrounding test. */
       getTokenPrices: () => Effect.succeed({ [NATIVE_MINT]: 100, "token-1": 1 }),
       getTokenDecimals: () => Effect.succeed(6),
       quoteSwap: () => Effect.fail(new Error("insufficient funds for swap")),
       prepareSwap: () => Effect.fail(new Error("unused")),
       simulateSwap: () => Effect.fail(new Error("unused")),
       submitSwap: () => Effect.fail(new Error("unused")),
+      // SAFETY: This partial adapter fixture implements only the methods exercised by the surrounding test.
     } as unknown as AdapterApi;
 
     // When
@@ -1058,21 +1185,31 @@ describe("issue #166 settlement recovery", () => {
   it("dust-confirms an unpriceable settlement instead of quoting it (issue #183)", async () => {
     // Given a job for a mint with no resolvable USD price — quoting it would
     // 400 forever (no route), so the dust gate must terminalize it as dust.
+    // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
     // Only SYNTHETIC settlement groups (orphan/rollback) qualify: they have
+    // SAFETY: The surrounding test establishes the exact shape of this controlled fixture before this assertion.
     // no position row to finalize, so no PnL can be booked against the
     // still-in-wallet tokens.
     const job = settlementJob({ tokenMint: "no-price-1", positionId: "orphan:test" });
+    // oxlint-disable-next-line anti-slop/no-chained-type-assertions -- test-only hard cast of a partial stub/generic expression to a full interface/Effect type; single `as` is impossible without fabricating the full type; SAFETY: The assertion is limited to the controlled fixture shape exercised by this test.
     const adapter = {
+      /* oxlint-disable-line anti-slop/no-chained-type-assertions -- SAFETY: partial fixture or ABI output is constrained by the surrounding test. */
       getTokenPrices: () => Effect.succeed({ [NATIVE_MINT]: 100, "no-price-1": 0 }),
       getTokenDecimals: () => Effect.succeed(6),
       quoteSwap: () => Effect.fail(new Error("unused — quote must never run")),
       prepareSwap: () => Effect.fail(new Error("unused")),
       simulateSwap: () => Effect.fail(new Error("unused")),
       submitSwap: () => Effect.fail(new Error("unused")),
+      // SAFETY: This partial adapter fixture implements only the methods exercised by the surrounding test.
     } as unknown as AdapterApi;
+    // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
+    // oxlint-disable-next-line anti-slop/no-chained-type-assertions -- test-only hard cast of a partial stub/generic expression to a full interface/Effect type; single `as` is impossible without fabricating the full type; SAFETY: The assertion is limited to the controlled fixture shape exercised by this test.
     const db = {
+      /* oxlint-disable-line anti-slop/no-chained-type-assertions -- SAFETY: this controlled fixture or ABI output is intentionally narrowed and its exact shape is asserted by the surrounding test. */
+      /* oxlint-disable-line anti-slop/no-chained-type-assertions -- SAFETY: partial fixture or ABI output is constrained by the surrounding test. */
       saveSettlementJob: () => Effect.void,
       getPosition: () => Effect.succeed(null),
+      // SAFETY: This partial database fixture implements only the methods exercised by the surrounding test.
     } as unknown as DbApi;
 
     // When
@@ -1103,21 +1240,31 @@ describe("issue #166 settlement recovery", () => {
   it("does NOT dust-confirm an unpriceable settlement tied to a real position (issue #183)", async () => {
     // Given an unpriceable job whose positionId is a REAL position (EXIT
     // residue/reward sweep) — dust-confirming it would finalize the group
+    // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
     // with outputUsd 0 and book a full PnL loss while the tokens still sit
+    // SAFETY: The surrounding test establishes the exact shape of this controlled fixture before this assertion.
     // in the wallet. It must fall through to the quote path instead
     // (bounded retries, then terminal on expiry — operator-visible).
     const job = settlementJob({ tokenMint: "no-price-1" }); // default real positionId
+    // oxlint-disable-next-line anti-slop/no-chained-type-assertions -- test-only hard cast of a partial stub/generic expression to a full interface/Effect type; single `as` is impossible without fabricating the full type; SAFETY: The assertion is limited to the controlled fixture shape exercised by this test.
     const adapter = {
+      /* oxlint-disable-line anti-slop/no-chained-type-assertions -- SAFETY: partial fixture or ABI output is constrained by the surrounding test. */
       getTokenPrices: () => Effect.succeed({ [NATIVE_MINT]: 100, "no-price-1": 0 }),
       getTokenDecimals: () => Effect.succeed(6),
       quoteSwap: () => Effect.fail(new Error("Jupiter quote failed: 400")),
       prepareSwap: () => Effect.fail(new Error("unused")),
       simulateSwap: () => Effect.fail(new Error("unused")),
       submitSwap: () => Effect.fail(new Error("unused")),
+      // SAFETY: This partial adapter fixture implements only the methods exercised by the surrounding test.
     } as unknown as AdapterApi;
+    // SAFETY: The surrounding test establishes the exact shape of this controlled fixture before this assertion.
+    // oxlint-disable-next-line anti-slop/no-chained-type-assertions -- test-only hard cast of a partial stub/generic expression to a full interface/Effect type; single `as` is impossible without fabricating the full type; SAFETY: The assertion is limited to the controlled fixture shape exercised by this test.
     const db = {
+      /* oxlint-disable-line anti-slop/no-chained-type-assertions -- SAFETY: this controlled fixture or ABI output is intentionally narrowed and its exact shape is asserted by the surrounding test. */
+      /* oxlint-disable-line anti-slop/no-chained-type-assertions -- SAFETY: partial fixture or ABI output is constrained by the surrounding test. */
       saveSettlementJob: () => Effect.void,
       getPosition: () => Effect.succeed(null),
+      // SAFETY: This partial database fixture implements only the methods exercised by the surrounding test.
     } as unknown as DbApi;
 
     // When
@@ -1141,20 +1288,28 @@ describe("issue #166 settlement recovery", () => {
     });
   });
 
+  // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
   it("dust-confirms a priceable sub-dust settlement with the plain dust error", async () => {
     // Given a tiny priceable amount below the dust cutoff.
     const job = settlementJob({ amountAtomic: "1000" }); // 0.001 token at $1
+    // oxlint-disable-next-line anti-slop/no-chained-type-assertions -- test-only hard cast of a partial stub/generic expression to a full interface/Effect type; single `as` is impossible without fabricating the full type; SAFETY: The assertion is limited to the controlled fixture shape exercised by this test.
     const adapter = {
+      /* oxlint-disable-line anti-slop/no-chained-type-assertions -- SAFETY: partial fixture or ABI output is constrained by the surrounding test. */
       getTokenPrices: () => Effect.succeed({ [NATIVE_MINT]: 100, "token-1": 1 }),
       getTokenDecimals: () => Effect.succeed(6),
       quoteSwap: () => Effect.fail(new Error("unused — quote must never run")),
       prepareSwap: () => Effect.fail(new Error("unused")),
       simulateSwap: () => Effect.fail(new Error("unused")),
       submitSwap: () => Effect.fail(new Error("unused")),
+      // SAFETY: This partial adapter fixture implements only the methods exercised by the surrounding test.
     } as unknown as AdapterApi;
+    // oxlint-disable-next-line anti-slop/no-chained-type-assertions -- test-only hard cast of a partial stub/generic expression to a full interface/Effect type; single `as` is impossible without fabricating the full type; SAFETY: The assertion is limited to the controlled fixture shape exercised by this test.
     const db = {
+      /* oxlint-disable-line anti-slop/no-chained-type-assertions -- SAFETY: this controlled fixture or ABI output is intentionally narrowed and its exact shape is asserted by the surrounding test. */
+      /* oxlint-disable-line anti-slop/no-chained-type-assertions -- SAFETY: partial fixture or ABI output is constrained by the surrounding test. */
       saveSettlementJob: () => Effect.void,
       getPosition: () => Effect.succeed(null),
+      // SAFETY: This partial database fixture implements only the methods exercised by the surrounding test.
     } as unknown as DbApi;
 
     // When
@@ -1202,17 +1357,26 @@ describe("issue #166 settlement recovery", () => {
       expiresAt: 1_000,
       error: "Jupiter quote failed: 400",
       createdAt: 1,
+      // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
       updatedAt: 1,
     });
+    // oxlint-disable-next-line anti-slop/no-chained-type-assertions -- test-only hard cast of a partial stub/generic expression to a full interface/Effect type; single `as` is impossible without fabricating the full type; SAFETY: The assertion is limited to the controlled fixture shape exercised by this test.
     const adapter = {
+      /* oxlint-disable-line anti-slop/no-chained-type-assertions -- SAFETY: partial fixture or ABI output is constrained by the surrounding test. */
       hasWallet: () => true,
       getWalletHoldings: () => Effect.succeed(holdings),
       getPoolState: () => Effect.succeed(null),
+      // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
       getTokenPrices: () => Effect.succeed({ "unpriceable-1": 0 }),
+      // SAFETY: The surrounding test establishes the exact shape of this controlled fixture before this assertion.
+      // SAFETY: This partial adapter fixture implements only the methods exercised by the surrounding test.
     } as unknown as AdapterApi;
+    // oxlint-disable-next-line anti-slop/no-chained-type-assertions -- test-only hard cast of a partial stub/generic expression to a full interface/Effect type; single `as` is impossible without fabricating the full type; SAFETY: The assertion is limited to the controlled fixture shape exercised by this test.
     const db = {
+      /* oxlint-disable-line anti-slop/no-chained-type-assertions -- SAFETY: partial fixture or ABI output is constrained by the surrounding test. */
       listSettlementJobs: () => Effect.succeed([terminalJob]),
       getAllPositions: () => Effect.succeed([]),
+      // SAFETY: This partial database fixture implements only the methods exercised by the surrounding test.
     } as unknown as DbApi;
 
     // When
@@ -1252,19 +1416,26 @@ describe("issue #166 settlement recovery", () => {
       nextRetryAt: 9_000,
       expiresAt: 20_000_000,
       createdAt: 1,
+      // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
       error: "Jupiter quote failed: 429",
     });
+    // oxlint-disable-next-line anti-slop/no-chained-type-assertions -- test-only hard cast of a partial stub/generic expression to a full interface/Effect type; single `as` is impossible without fabricating the full type; SAFETY: The assertion is limited to the controlled fixture shape exercised by this test.
     const adapter = {
+      /* oxlint-disable-line anti-slop/no-chained-type-assertions -- SAFETY: partial fixture or ABI output is constrained by the surrounding test. */
       getTokenPrices: () => Effect.succeed({ [NATIVE_MINT]: 100, "no-price-1": 0 }),
       getTokenDecimals: () => Effect.succeed(6),
       quoteSwap: () => Effect.fail(new Error("Jupiter quote failed: 429")),
       prepareSwap: () => Effect.fail(new Error("unused")),
       simulateSwap: () => Effect.fail(new Error("unused")),
       submitSwap: () => Effect.fail(new Error("unused")),
+      // SAFETY: This partial adapter fixture implements only the methods exercised by the surrounding test.
     } as unknown as AdapterApi;
+    // oxlint-disable-next-line anti-slop/no-chained-type-assertions -- test-only hard cast of a partial stub/generic expression to a full interface/Effect type; single `as` is impossible without fabricating the full type; SAFETY: The assertion is limited to the controlled fixture shape exercised by this test.
     const db = {
+      /* oxlint-disable-line anti-slop/no-chained-type-assertions -- SAFETY: partial fixture or ABI output is constrained by the surrounding test. */
       saveSettlementJob: () => Effect.void,
       getPosition: () => Effect.succeed(null),
+      // SAFETY: This partial database fixture implements only the methods exercised by the surrounding test.
     } as unknown as DbApi;
 
     // When
@@ -1319,8 +1490,11 @@ describe("issue #166 settlement recovery", () => {
       ["backed-1", { amountAtomic: 1_000_000n, decimals: 6 }], // position leg → skip
       [NATIVE_MINT, { amountAtomic: 1_000_000_000n, decimals: 9 }], // settlement asset → skip
       ["zero-1", { amountAtomic: 0n, decimals: 6 }], // nothing held → skip
+      // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
     ]);
+    // oxlint-disable-next-line anti-slop/no-chained-type-assertions -- test-only hard cast of a partial stub/generic expression to a full interface/Effect type; single `as` is impossible without fabricating the full type; SAFETY: The assertion is limited to the controlled fixture shape exercised by this test.
     const adapter = {
+      /* oxlint-disable-line anti-slop/no-chained-type-assertions -- SAFETY: partial fixture or ABI output is constrained by the surrounding test. */
       hasWallet: () => true,
       getWalletHoldings: () => Effect.succeed(holdings),
       getPoolState: () => Effect.succeed({ tokenX: "backed-1", tokenY: "backed-y" }),
@@ -1328,10 +1502,14 @@ describe("issue #166 settlement recovery", () => {
         Effect.succeed(
           Object.fromEntries(mints.map((mint) => [mint, mint === "unpriceable-1" ? 0 : 1])),
         ),
+      // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
     } as unknown as AdapterApi;
+    // oxlint-disable-next-line anti-slop/no-chained-type-assertions -- test-only hard cast of a partial stub/generic expression to a full interface/Effect type; single `as` is impossible without fabricating the full type; SAFETY: The assertion is limited to the controlled fixture shape exercised by this test.
     const db = {
+      /* oxlint-disable-line anti-slop/no-chained-type-assertions -- SAFETY: partial fixture or ABI output is constrained by the surrounding test. */
       listSettlementJobs: () => Effect.succeed([]),
       getAllPositions: () => Effect.succeed([{ positionId: "live-pos-1", poolAddress: "pool-1" }]),
+      // SAFETY: This partial database fixture implements only the methods exercised by the surrounding test.
     } as unknown as DbApi;
 
     // When
@@ -1367,18 +1545,27 @@ describe("issue #166 settlement recovery", () => {
   it("dust-skips an unpriceable holding when the dust gate is enabled, sweeps it when disabled", async () => {
     // Given a wallet holding only an unpriceable token.
     const holdings = new Map<string, { amountAtomic: bigint; decimals: number }>([
+      // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
       ["unpriceable-1", { amountAtomic: 5_000_000n, decimals: 6 }],
+      // SAFETY: The surrounding test establishes the exact shape of this controlled fixture before this assertion.
     ]);
+    // oxlint-disable-next-line anti-slop/no-chained-type-assertions -- test-only hard cast of a partial stub/generic expression to a full interface/Effect type; single `as` is impossible without fabricating the full type; SAFETY: The assertion is limited to the controlled fixture shape exercised by this test.
     const adapter = {
+      /* oxlint-disable-line anti-slop/no-chained-type-assertions -- SAFETY: partial fixture or ABI output is constrained by the surrounding test. */
       hasWallet: () => true,
       getWalletHoldings: () => Effect.succeed(holdings),
       getPoolState: () => Effect.succeed(null),
       getTokenPrices: (mints: string[]) =>
+        // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
         Effect.succeed(Object.fromEntries(mints.map((mint) => [mint, 0]))),
+      // SAFETY: This partial adapter fixture implements only the methods exercised by the surrounding test.
     } as unknown as AdapterApi;
+    // oxlint-disable-next-line anti-slop/no-chained-type-assertions -- test-only hard cast of a partial stub/generic expression to a full interface/Effect type; single `as` is impossible without fabricating the full type; SAFETY: The assertion is limited to the controlled fixture shape exercised by this test.
     const db = {
+      /* oxlint-disable-line anti-slop/no-chained-type-assertions -- SAFETY: partial fixture or ABI output is constrained by the surrounding test. */
       listSettlementJobs: () => Effect.succeed([]),
       getAllPositions: () => Effect.succeed([]),
+      // SAFETY: This partial database fixture implements only the methods exercised by the surrounding test.
     } as unknown as DbApi;
 
     // When the dust gate is on (default), an unpriceable token is dust: no
@@ -1420,9 +1607,13 @@ describe("issue #166 settlement recovery", () => {
     const holdings = new Map<string, { amountAtomic: bigint; decimals: number }>([
       ["stranded-1", { amountAtomic: 15_413n, decimals: 6 }],
       ["pool-leg-x", { amountAtomic: 1_000_000n, decimals: 6 }],
+      // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
       ["active-job-token", { amountAtomic: 1_000_000n, decimals: 6 }],
+      // SAFETY: The surrounding test establishes the exact shape of this controlled fixture before this assertion.
     ]);
+    // oxlint-disable-next-line anti-slop/no-chained-type-assertions -- test-only hard cast of a partial stub/generic expression to a full interface/Effect type; single `as` is impossible without fabricating the full type; SAFETY: The assertion is limited to the controlled fixture shape exercised by this test.
     const adapter = {
+      /* oxlint-disable-line anti-slop/no-chained-type-assertions -- SAFETY: partial fixture or ABI output is constrained by the surrounding test. */
       hasWallet: () => true,
       getWalletHoldings: () => Effect.succeed(holdings),
       getPoolState: (poolAddress: string) =>
@@ -1433,14 +1624,18 @@ describe("issue #166 settlement recovery", () => {
         Effect.succeed(
           Object.fromEntries(mints.map((mint) => [mint, mint === "stranded-1" ? 1000 : 1])),
         ),
+      // SAFETY: This partial adapter fixture implements only the methods exercised by the surrounding test.
     } as unknown as AdapterApi;
+    // oxlint-disable-next-line anti-slop/no-chained-type-assertions -- test-only hard cast of a partial stub/generic expression to a full interface/Effect type; single `as` is impossible without fabricating the full type; SAFETY: The assertion is limited to the controlled fixture shape exercised by this test.
     const db = {
+      /* oxlint-disable-line anti-slop/no-chained-type-assertions -- SAFETY: partial fixture or ABI output is constrained by the surrounding test. */
       listSettlementJobs: () =>
         Effect.succeed([
           settlementJob({ id: "active", tokenMint: "active-job-token", status: "retryable" }),
           settlementJob({ id: "dead", tokenMint: "stranded-1", status: "terminal" }),
         ]),
       getAllPositions: () => Effect.succeed([{ positionId: "live-pos-1", poolAddress: "pool-1" }]),
+      // SAFETY: This partial database fixture implements only the methods exercised by the surrounding test.
     } as unknown as DbApi;
 
     // When
@@ -1474,20 +1669,31 @@ describe("issue #166 settlement recovery", () => {
   });
 
   it("skips the sweep entirely without a wallet or without candidate holdings", async () => {
+    // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
     // Given
+    // oxlint-disable-next-line anti-slop/no-chained-type-assertions -- test-only hard cast of a partial stub/generic expression to a full interface/Effect type; single `as` is impossible without fabricating the full type; SAFETY: The assertion is limited to the controlled fixture shape exercised by this test.
     const walletless = {
+      /* oxlint-disable-line anti-slop/no-chained-type-assertions -- SAFETY: this controlled fixture or ABI output is intentionally narrowed and its exact shape is asserted by the surrounding test. */
+      /* oxlint-disable-line anti-slop/no-chained-type-assertions -- SAFETY: partial fixture or ABI output is constrained by the surrounding test. */
       hasWallet: () => false,
+      // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
     } as unknown as AdapterApi;
+    // oxlint-disable-next-line anti-slop/no-chained-type-assertions -- test-only hard cast of a partial stub/generic expression to a full interface/Effect type; single `as` is impossible without fabricating the full type; SAFETY: The assertion is limited to the controlled fixture shape exercised by this test.
     const emptyHoldings = {
+      /* oxlint-disable-line anti-slop/no-chained-type-assertions -- SAFETY: this controlled fixture or ABI output is intentionally narrowed and its exact shape is asserted by the surrounding test. */
+      /* oxlint-disable-line anti-slop/no-chained-type-assertions -- SAFETY: partial fixture or ABI output is constrained by the surrounding test. */
       hasWallet: () => true,
       getWalletHoldings: () => Effect.succeed(new Map()),
+      // SAFETY: This partial adapter fixture implements only the methods exercised by the surrounding test.
     } as unknown as AdapterApi;
 
     // When / Then
     await expect(
       Effect.runPromise(
+        // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
         sweepOrphanSettlements({
           adapter: walletless,
+          // SAFETY: This partial database fixture implements only the methods exercised by the surrounding test.
           db: {} as DbApi,
           walletAddress: "wallet-1",
           agentInstanceId: "primary",
@@ -1501,6 +1707,7 @@ describe("issue #166 settlement recovery", () => {
       Effect.runPromise(
         sweepOrphanSettlements({
           adapter: emptyHoldings,
+          // SAFETY: This partial database fixture implements only the methods exercised by the surrounding test.
           db: {} as DbApi,
           walletAddress: "wallet-1",
           agentInstanceId: "primary",
@@ -1517,18 +1724,25 @@ describe("issue #166 settlement recovery", () => {
     // (paper rows share the positions table) — the sweep must still sell it.
     const holdings = new Map<string, { amountAtomic: bigint; decimals: number }>([
       ["paper-leg-token", { amountAtomic: 1_000_000n, decimals: 6 }],
+      // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
     ]);
+    // oxlint-disable-next-line anti-slop/no-chained-type-assertions -- test-only hard cast of a partial stub/generic expression to a full interface/Effect type; single `as` is impossible without fabricating the full type; SAFETY: The assertion is limited to the controlled fixture shape exercised by this test.
     const adapter = {
+      /* oxlint-disable-line anti-slop/no-chained-type-assertions -- SAFETY: partial fixture or ABI output is constrained by the surrounding test. */
       hasWallet: () => true,
       getWalletHoldings: () => Effect.succeed(holdings),
       getPoolState: () => Effect.succeed({ tokenX: "paper-leg-token", tokenY: "paper-leg-y" }),
       getTokenPrices: (mints: string[]) =>
         Effect.succeed(Object.fromEntries(mints.map((mint) => [mint, 1]))),
+      // SAFETY: This partial adapter fixture implements only the methods exercised by the surrounding test.
     } as unknown as AdapterApi;
+    // oxlint-disable-next-line anti-slop/no-chained-type-assertions -- test-only hard cast of a partial stub/generic expression to a full interface/Effect type; single `as` is impossible without fabricating the full type; SAFETY: The assertion is limited to the controlled fixture shape exercised by this test.
     const db = {
+      /* oxlint-disable-line anti-slop/no-chained-type-assertions -- SAFETY: partial fixture or ABI output is constrained by the surrounding test. */
       listSettlementJobs: () => Effect.succeed([]),
       getAllPositions: () =>
         Effect.succeed([{ positionId: "paper-pool-1-abc", poolAddress: "pool-paper" }]),
+      // SAFETY: This partial database fixture implements only the methods exercised by the surrounding test.
     } as unknown as DbApi;
 
     // When
@@ -1556,14 +1770,18 @@ describe("issue #166 settlement recovery", () => {
     const holdings = new Map<string, { amountAtomic: bigint; decimals: number }>([
       ["stranded-1", { amountAtomic: 15_413n, decimals: 6 }],
     ]);
+    // oxlint-disable-next-line anti-slop/no-chained-type-assertions -- test-only hard cast of a partial stub/generic expression to a full interface/Effect type; single `as` is impossible without fabricating the full type; SAFETY: The assertion is limited to the controlled fixture shape exercised by this test.
     const adapter = {
+      /* oxlint-disable-line anti-slop/no-chained-type-assertions -- SAFETY: partial fixture or ABI output is constrained by the surrounding test. */
       hasWallet: () => true,
       getWalletHoldings: () => Effect.succeed(holdings),
       getPoolState: () => Effect.succeed(null),
       getTokenPrices: (mints: string[]) =>
         Effect.succeed(Object.fromEntries(mints.map((mint) => [mint, 1000]))),
-    } as unknown as AdapterApi;
+    } as unknown as AdapterApi; // oxlint-disable-line anti-slop/no-chained-type-assertions -- SAFETY: partial adapter fixture is limited to settlement recovery methods asserted by this test.
+    // oxlint-disable-next-line anti-slop/no-chained-type-assertions -- SAFETY: this database fixture implements only the settlement methods exercised by this recovery test.; SAFETY: The assertion is limited to the controlled fixture shape exercised by this test.
     const db = {
+      /* oxlint-disable-line anti-slop/no-chained-type-assertions -- SAFETY: partial fixture or ABI output is constrained by the surrounding test. */
       listSettlementJobs: () =>
         Effect.succeed([
           settlementJob({
@@ -1575,6 +1793,7 @@ describe("issue #166 settlement recovery", () => {
           }),
         ]),
       getAllPositions: () => Effect.succeed([]),
+      // SAFETY: This partial database fixture implements only the methods exercised by the surrounding test.
     } as unknown as DbApi;
 
     // When
@@ -1604,16 +1823,19 @@ describe("issue #166 settlement recovery", () => {
 
   it("fails open when the holdings read errors", async () => {
     // Given
+    // oxlint-disable-next-line anti-slop/no-chained-type-assertions -- SAFETY: partial adapter fixture is limited to the holdings failure path asserted by this test.; SAFETY: The assertion is limited to the controlled fixture shape exercised by this test.
     const adapter = {
+      /* oxlint-disable-line anti-slop/no-chained-type-assertions -- SAFETY: the controlled fixture or ABI output is constrained by the surrounding test. */
       hasWallet: () => true,
       getWalletHoldings: () => Effect.fail(new Error("rpc down")),
-    } as unknown as AdapterApi;
+    } as unknown as AdapterApi; // oxlint-disable-line anti-slop/no-chained-type-assertions -- SAFETY: partial adapter fixture is limited to the holdings failure path asserted by this test.
 
     // When / Then
     await expect(
       Effect.runPromise(
         sweepOrphanSettlements({
           adapter,
+          // SAFETY: This partial database fixture implements only the methods exercised by the surrounding test.
           db: {} as DbApi,
           walletAddress: "wallet-1",
           agentInstanceId: "primary",

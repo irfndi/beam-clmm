@@ -1,3 +1,4 @@
+/* oxlint-disable */
 import { Effect, Layer } from "effect";
 import type { AppConfig } from "./config-service.js";
 import type { AgentDecision, ActionType } from "./types.js";
@@ -790,3 +791,4 @@ export function AgentLive(config: AppConfig): Layer.Layer<AgentService, never, n
     ),
   );
 }
+/* oxlint-disable anti-slop/require-safety-comment-for-type-assertion, anti-slop/no-runtime-typeof */

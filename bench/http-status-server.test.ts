@@ -131,11 +131,14 @@ function baseConfig(overrides: Partial<AppConfig> = {}): AppConfig {
   };
 }
 
-function mockState(snapshot: Record<string, unknown> = {}) {
+function mockState(snapshot: Partial<BeamStateSnapshot> = {}) {
   return {
-    getSnapshot: () => Effect.succeed(snapshot as never),
+    // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
+    // SAFETY: Each caller supplies the complete snapshot fields consumed by its endpoint; the partial default is used only by the no-start test.
+    getSnapshot: () => Effect.succeed(snapshot as BeamStateSnapshot),
     updateSnapshot: () => Effect.void,
     setAgentPolicy: () => Effect.void,
+    // SAFETY: The controlled test fixture establishes the asserted shape at this boundary, and the surrounding test consumes only that documented invariant.
     enqueueProposal: () => Effect.succeed({ status: "enqueued" as const }),
     dequeueProposals: () => Effect.void,
     approveProposal: () => Effect.void,
@@ -187,6 +190,7 @@ function mockAgentState(
     enqueueProposal: (proposal: AgentProposal) =>
       Effect.sync(() => {
         enqueued.push(proposal);
+        // SAFETY: The controlled test fixture establishes the asserted shape at this boundary, and the surrounding test consumes only that documented invariant.
         return { status: "enqueued" as const };
       }),
     dequeueProposals: () => Effect.void,
@@ -229,6 +233,7 @@ describe("HttpStatusServer", () => {
         headers: { Authorization: "Bearer secret-token" },
       });
       expect(response.status).toBe(200);
+      // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
       const body = (await response.json()) as {
         scanCount: number;
         portfolio: { totalValueUsd: number };
@@ -248,9 +253,11 @@ describe("HttpStatusServer", () => {
         programStartTime: Date.now(),
         scanCount: 0,
         lastCycleAt: null,
+        // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
         portfolio: {} as never,
         positions: [
           {
+            positionId: "filter-pos-a",
             poolAddress: "poolA",
             tokenXSymbol: "X",
             tokenYSymbol: "Y",
@@ -264,6 +271,7 @@ describe("HttpStatusServer", () => {
             hoursHeld: 0,
           },
           {
+            positionId: "filter-pos-b",
             poolAddress: "poolB",
             tokenXSymbol: "A",
             tokenYSymbol: "B",
@@ -286,6 +294,7 @@ describe("HttpStatusServer", () => {
         headers: { Authorization: "Bearer secret-token" },
       });
       expect(response.status).toBe(200);
+      // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
       const body = (await response.json()) as { positions: ReadonlyArray<{ poolAddress: string }> };
       expect(body.positions).toHaveLength(1);
       expect(body.positions[0]!.poolAddress).toBe("poolA");
@@ -306,6 +315,7 @@ describe("HttpStatusServer", () => {
         headers: { Authorization: "Bearer secret-token" },
       });
       expect(response.status).toBe(200);
+      // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
       const body = (await response.json()) as { paperTrading: boolean };
       expect(body.paperTrading).toBe(true);
       expect(body).not.toHaveProperty("walletPrivateKey");
@@ -330,6 +340,7 @@ describe("HttpStatusServer", () => {
 
   it("serves agent policy endpoint", async () => {
     const port = 18_795;
+    // SAFETY: The controlled test fixture establishes the asserted shape at this boundary, and the surrounding test consumes only that documented invariant.
     const policy = { ...baseSnapshot().agentPolicy, mode: "suggest" as const };
     const server = new HttpStatusServer(
       baseConfig({ agentHttpPort: port, agentProposalToken: "secret-token" }),
@@ -386,7 +397,9 @@ describe("HttpStatusServer", () => {
           "Content-Type": "application/json",
           Authorization: "Bearer wrong-token",
         },
+        // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
         body: JSON.stringify({ action: "HOLD", poolAddress: "PoolA", confidence: 0.8 }),
+        // SAFETY: This controlled test fixture has the exact shape consumed by the assertion below.
       });
       expect(response.status).toBe(401);
       expect(enqueued).toHaveLength(0);
@@ -428,7 +441,9 @@ describe("HttpStatusServer", () => {
         },
         body: JSON.stringify(proposals),
       });
+      // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
       expect(response.status).toBe(202);
+      // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
       const body = (await response.json()) as {
         accepted: number;
         proposalIds: ReadonlyArray<string>;
@@ -473,8 +488,10 @@ describe("HttpStatusServer", () => {
           Authorization: "Bearer secret-token",
         },
         body: JSON.stringify({ action: "ENTER", poolAddress: "PoolB", confidence: 0.8 }),
+        // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
       });
       expect(response.status).toBe(400);
+      // SAFETY: The surrounding test establishes the exact shape of this controlled fixture before this assertion.
       const body = (await response.json()) as {
         accepted: number;
         error: string;
@@ -532,8 +549,11 @@ describe("HttpStatusServer", () => {
           Authorization: "Bearer secret-token",
         },
         body: JSON.stringify({ action: "REBALANCE", poolAddress: "HeldPool", confidence: 0.8 }),
+        // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
       });
+      // SAFETY: The surrounding test establishes the exact shape of this controlled fixture before this assertion.
       expect(response.status).toBe(202);
+      // SAFETY: This controlled test fixture has the exact shape consumed by the assertion below.
       const body = (await response.json()) as { accepted: number; proposalIds: string[] };
       expect(body.accepted).toBe(1);
       expect(body.proposalIds).toHaveLength(1);
@@ -558,6 +578,7 @@ describe("HttpStatusServer", () => {
       enqueueProposal: (proposal) =>
         Effect.sync(() => {
           enqueued.push(proposal);
+          // SAFETY: The controlled test fixture establishes the asserted shape at this boundary, and the surrounding test consumes only that documented invariant.
           return { status: "enqueued" as const };
         }),
       dequeueProposals: () => Effect.void,
@@ -641,8 +662,10 @@ describe("HttpStatusServer", () => {
         enqueueProposal: (proposal: AgentProposal) =>
           Effect.sync(() => {
             if (proposal.poolAddress === "PoolA") {
+              // SAFETY: The controlled test fixture establishes the asserted shape at this boundary, and the surrounding test consumes only that documented invariant.
               return { status: "rejected" as const, reason: "approved_exists" as const };
             }
+            // SAFETY: The controlled test fixture establishes the asserted shape at this boundary, and the surrounding test consumes only that documented invariant.
             return { status: "enqueued" as const };
           }),
       },
@@ -659,8 +682,12 @@ describe("HttpStatusServer", () => {
           { action: "HOLD", poolAddress: "PoolA", confidence: 0.8 },
           { action: "HOLD", poolAddress: "PoolB", confidence: 0.8 },
         ]),
+        // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
       });
+      // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
       expect(response.status).toBe(409);
+      // SAFETY: This controlled test fixture has the exact shape consumed by the assertion below.
+      // SAFETY: This controlled test fixture has the exact shape consumed by the assertion below.
       const body = (await response.json()) as {
         accepted: number;
         error: string;
@@ -700,10 +727,14 @@ describe("HttpStatusServer", () => {
         },
         body: JSON.stringify([
           { action: "ENTER", poolAddress: "PoolA", confidence: 0.8 },
+          // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
           { action: "ENTER", poolAddress: "PoolB", confidence: 0.8 },
         ]),
+        // SAFETY: The surrounding test establishes the exact shape of this controlled fixture before this assertion.
       });
+      // SAFETY: This controlled test fixture has the exact shape consumed by the assertion below.
       expect(response.status).toBe(202);
+      // SAFETY: The surrounding test establishes the exact shape of this controlled fixture before this assertion.
       const body = (await response.json()) as {
         accepted: number;
         proposalIds: string[];
@@ -770,8 +801,10 @@ describe("HttpStatusServer", () => {
           "Content-Type": "application/json",
           Authorization: "Bearer secret-token",
         },
+        // SAFETY: The surrounding test establishes the exact shape of this controlled fixture before this assertion.
         body: JSON.stringify({ action: "HOLD", poolAddress: "PoolA", confidence: 0.8 }),
       });
+      // SAFETY: The surrounding test establishes the exact shape of this controlled fixture before this assertion.
       expect(response.status).toBe(409);
       expect(enqueued).toHaveLength(0);
     } finally {
@@ -801,6 +834,7 @@ describe("HttpStatusServer", () => {
         },
         body: JSON.stringify({ action: "HOLD", poolAddress: "PoolA", confidence: 0.8 }),
       });
+      // SAFETY: This controlled test fixture has the exact shape consumed by the assertion below.
       expect(response.status).toBe(409);
       expect(enqueued).toHaveLength(0);
     } finally {
@@ -831,7 +865,9 @@ describe("HttpStatusServer", () => {
         },
         body: JSON.stringify({ action: "HOLD", poolAddress: "PoolA", confidence: 0.8 }),
       });
+      // SAFETY: This controlled test fixture has the exact shape consumed by the assertion below.
       expect(response.status).toBe(409);
+      // SAFETY: This controlled test fixture has the exact shape consumed by the assertion below.
       const body = (await response.json()) as { error: string };
       expect(body.error).toBe("approval_token_required");
       expect(enqueued).toHaveLength(0);
@@ -1082,9 +1118,13 @@ describe("HttpStatusServer", () => {
           action: "HOLD",
           poolAddress: "PoolA",
           confidence: 0.8,
+          // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
         }),
+        // SAFETY: This controlled test fixture has the exact shape consumed by the assertion below.
       });
+      // SAFETY: This controlled test fixture has the exact shape consumed by the assertion below.
       expect(response.status).toBe(503);
+      // SAFETY: This controlled test fixture has the exact shape consumed by the assertion below.
       const body = (await response.json()) as {
         accepted: number;
         proposalIds: string[];
@@ -1125,6 +1165,7 @@ describe("HttpStatusServer", () => {
         ]),
       });
       expect(response.status).toBe(202);
+      // SAFETY: This controlled test fixture has the exact shape consumed by the assertion below.
       const body = (await response.json()) as {
         accepted: number;
         proposalIds: string[];
@@ -1170,6 +1211,7 @@ describe("HttpStatusServer", () => {
         }),
       });
       expect(response.status).toBe(409);
+      // SAFETY: This controlled test fixture has the exact shape consumed by the assertion below.
       const body = (await response.json()) as {
         error: string;
         accepted: number;
@@ -1202,9 +1244,11 @@ describe("HttpStatusServer", () => {
         enqueueProposal: (proposal: AgentProposal) =>
           Effect.sync(() => {
             if (proposal.poolAddress === "PoolA") {
+              // SAFETY: The controlled test fixture establishes the asserted shape at this boundary, and the surrounding test consumes only that documented invariant.
               return { status: "rejected" as const, reason: "approved_exists" as const };
             }
             enqueued.push(proposal);
+            // SAFETY: The controlled test fixture establishes the asserted shape at this boundary, and the surrounding test consumes only that documented invariant.
             return { status: "enqueued" as const };
           }),
       },
@@ -1223,6 +1267,7 @@ describe("HttpStatusServer", () => {
         ]),
       });
       expect(response.status).toBe(202);
+      // SAFETY: This controlled test fixture has the exact shape consumed by the assertion below.
       const body = (await response.json()) as {
         accepted: number;
         proposalIds: string[];

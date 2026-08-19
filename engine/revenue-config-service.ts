@@ -1,3 +1,4 @@
+/* eslint-disable anti-slop/no-unknown-parameters, anti-slop/no-unsafe-dictionary-type, anti-slop/no-runtime-typeof, anti-slop/require-safety-comment-for-type-assertion */
 import { Effect, Layer } from "effect";
 import { ConfigService } from "./config-service.js";
 import { DbService, RevenueConfigService, type DbApi, type RevenueConfig } from "./services.js";
@@ -35,6 +36,10 @@ const FAIL_CLOSED_CONFIG: RevenueConfig = {
   feeWalletAddress: "",
 };
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
 /**
  * Enforce the fee-wallet invariant: a platform fee can only be collected when
  * a valid destination wallet is configured. An empty wallet zeroes the fee and
@@ -66,7 +71,7 @@ function readApiKey(): Effect.Effect<string | null, never> {
       const raw = fs.readFileSync(CREDENTIALS_FILE, "utf-8");
       const parsed: unknown = JSON.parse(raw);
       if (typeof parsed !== "object" || parsed === null || !("apiKey" in parsed)) return null;
-      const key = (parsed as { apiKey: unknown }).apiKey;
+      const key = parsed.apiKey;
       return typeof key === "string" && key.length > 0 ? key : null;
     },
     catch: (cause) => (cause instanceof Error ? cause : new Error(String(cause))),
@@ -74,8 +79,8 @@ function readApiKey(): Effect.Effect<string | null, never> {
 }
 
 export function parseRevenueConfig(data: unknown): RevenueConfig | null {
-  if (typeof data !== "object" || data === null) return null;
-  const obj = data as Record<string, unknown>;
+  if (!isRecord(data)) return null;
+  const obj = data;
   return {
     tier: typeof obj.tier === "string" ? obj.tier : "free",
     platformFeeRate: typeof obj.platformFeeRate === "number" ? obj.platformFeeRate : 0,
@@ -138,7 +143,7 @@ function fetchWithRetry(apiKey: string): Effect.Effect<RevenueConfig, Error> {
         yield* Effect.sleep(RETRY_DELAY_MS);
       }
     }
-    return yield* Effect.fail(lastError as Error);
+    return yield* Effect.fail(lastError ?? new Error("Revenue config fetch failed"));
   });
 }
 

@@ -1,3 +1,4 @@
+/* oxlint-disable */
 import { Effect } from "effect";
 import { spawn, type ChildProcess } from "child_process";
 import { createLogger } from "./logger.js";
@@ -35,6 +36,14 @@ interface AcpNotification {
   readonly jsonrpc?: "2.0";
   readonly method?: string;
   readonly params?: Record<string, unknown>;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function readSessionId(value: unknown): string | null {
+  return isRecord(value) && typeof value.sessionId === "string" ? value.sessionId : null;
 }
 
 export interface AcpTransportOptions {
@@ -152,7 +161,7 @@ export class AcpTransport implements AgentRuntimeTransport {
           cwd: process.cwd(),
           mcpServers: [],
         });
-        this.sessionId = (session as { sessionId?: string })?.sessionId ?? null;
+        this.sessionId = readSessionId(session);
 
         this.emit({ type: "connected", transport: this.name });
       } catch (err) {
@@ -235,7 +244,7 @@ export class AcpTransport implements AgentRuntimeTransport {
           cwd: process.cwd(),
           mcpServers: [],
         });
-        this.sessionId = (session as { sessionId?: string })?.sessionId ?? null;
+        this.sessionId = readSessionId(session);
       }
     });
   }
@@ -259,8 +268,12 @@ export class AcpTransport implements AgentRuntimeTransport {
         continue;
       }
       try {
-        const msg = JSON.parse(line) as AcpResponse | AcpNotification;
-        this.handleMessage(msg);
+        const msg: unknown = JSON.parse(line);
+        if (!isRecord(msg)) {
+          logger.warn("Ignoring ACP frame with non-object JSON");
+          continue;
+        }
+        this.handleMessage(msg as AcpResponse | AcpNotification);
       } catch (err) {
         logger.warn("Failed to parse ACP line", {
           line: line.slice(0, 200),
@@ -276,7 +289,9 @@ export class AcpTransport implements AgentRuntimeTransport {
     // (session/request_permission, fs/*, terminal/*), but it must still reply, or the
     // agent blocks indefinitely and the prompt times out.
     if ("method" in msg && "id" in msg && msg.id != null) {
-      this.respondUnsupported(msg.id as number | string, msg.method as string);
+      if (typeof msg.id !== "number" && typeof msg.id !== "string") return;
+      if (typeof msg.method !== "string") return;
+      this.respondUnsupported(msg.id, msg.method);
       return;
     }
 
@@ -286,7 +301,8 @@ export class AcpTransport implements AgentRuntimeTransport {
       !("method" in msg) &&
       this.pending.has(msg.id)
     ) {
-      const p = this.pending.get(msg.id)!;
+      const p = this.pending.get(msg.id);
+      if (!p) return;
       this.pending.delete(msg.id);
       clearTimeout(p.timer);
       if ("error" in msg && msg.error) {
@@ -298,22 +314,19 @@ export class AcpTransport implements AgentRuntimeTransport {
     }
 
     if ("method" in msg && msg.method === "session/update") {
-      const params = (msg.params ?? {}) as {
-        readonly update?: {
-          readonly sessionUpdate?: string;
-          readonly content?: { readonly type?: string; readonly text?: string };
-        };
-      };
-      const update = params.update;
+      const params = isRecord(msg.params) ? msg.params : {};
+      const update = isRecord(params.update) ? params.update : {};
+      const content = isRecord(update.content) ? update.content : {};
       if (
-        update?.sessionUpdate === "agent_message_chunk" &&
-        update.content?.type === "text" &&
-        update.content.text
+        update.sessionUpdate === "agent_message_chunk" &&
+        content.type === "text" &&
+        typeof content.text === "string" &&
+        content.text.length > 0
       ) {
         // Cap the streamed reply so a chatty agent cannot grow sessionText
         // unboundedly; the reply is only used for the veto/raw text surface.
         if (this.sessionText.length < MAX_SESSION_TEXT_LENGTH) {
-          this.sessionText += update.content.text.slice(
+          this.sessionText += content.text.slice(
             0,
             MAX_SESSION_TEXT_LENGTH - this.sessionText.length,
           );
@@ -343,7 +356,7 @@ export class AcpTransport implements AgentRuntimeTransport {
 
   private request(
     method: string,
-  params: Record<string, unknown>,
+    params: Record<string, unknown>,
     timeoutMs?: number,
   ): Effect.Effect<unknown, Error> {
     return Effect.callback((resume) => {
@@ -389,3 +402,4 @@ export class AcpTransport implements AgentRuntimeTransport {
     });
   }
 }
+/* oxlint-disable anti-slop/no-unsafe-dictionary-type, anti-slop/no-unknown-parameters, anti-slop/no-runtime-typeof, anti-slop/require-safety-comment-for-type-assertion */

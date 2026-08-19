@@ -13,9 +13,11 @@ import {
  * via the vi.mocked API.
  */
 function mockFetch(): void {
-  globalThis.fetch = vi.fn(() =>
-    Promise.resolve(new Response(null, { status: 200 })),
-  ) as unknown as typeof globalThis.fetch;
+  // SAFETY: Vitest's zero-argument mock is fetch-compatible for this response-only test.
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(() => Promise.resolve(new Response(null, { status: 200 }))),
+  );
 }
 
 /**
@@ -252,6 +254,7 @@ describe("buffering", () => {
     expect(copy).toHaveLength(1);
 
     // Mutating the copy should not affect internal state
+    // SAFETY: the test deliberately mutates the returned copy with an invalid sentinel.
     (copy as unknown[]).push({} as never);
     expect(r.getPending()).toHaveLength(1);
     void r.dispose();
@@ -292,6 +295,7 @@ describe("batch payload", () => {
     let capturedBody: string | undefined;
     vi.mocked(globalThis.fetch).mockImplementation(
       (_url: string | URL | Request, init?: RequestInit): Promise<Response> => {
+        // SAFETY: this mock receives JSON.stringify output from the reporter.
         capturedBody = init?.body as string;
         return Promise.resolve(new Response(null, { status: 200 }));
       },
@@ -366,6 +370,7 @@ describe("failure resilience", () => {
     // most `batchSize` so a backlog drains in server-safe chunks.
     const sent: number[] = [];
     vi.mocked(globalThis.fetch).mockImplementation((_url, init) => {
+      // SAFETY: this mock receives JSON.stringify output from the reporter.
       const body = JSON.parse((init?.body as string) ?? "{}");
       sent.push(Array.isArray(body.reports) ? body.reports.length : 0);
       return Promise.resolve(new Response(null, { status: 400 }));
@@ -413,10 +418,10 @@ describe("createErrorReporter factory", () => {
   it("returns an ErrorReporter instance", () => {
     const r = createErrorReporter({ enabled: false });
     expect(r).toBeInstanceOf(Object);
-    expect(typeof r.report).toBe("function");
-    expect(typeof r.flushAsync).toBe("function");
-    expect(typeof r.getPending).toBe("function");
-    expect(typeof r.dispose).toBe("function");
+    expect(r.report.bind(r)).toBeTypeOf("function");
+    expect(r.flushAsync.bind(r)).toBeTypeOf("function");
+    expect(r.getPending.bind(r)).toBeTypeOf("function");
+    expect(r.dispose.bind(r)).toBeTypeOf("function");
     void r.dispose();
   });
 });

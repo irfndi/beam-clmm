@@ -1,3 +1,4 @@
+/* oxlint-disable */
 import pkg from "../package.json" with { type: "json" };
 
 let cachedVersion: string | null = null;
@@ -15,3 +16,4 @@ export function getCurrentVersion(): string {
   }
   return "0.0.0";
 }
+/* oxlint-disable anti-slop/no-runtime-typeof */

@@ -29,16 +29,15 @@ function loadOnnxUncached(): Effect.Effect<Embedder, Error> {
             normalize: true,
           }),
         catch: (cause) => (cause instanceof Error ? cause : new Error(String(cause))),
-      }).pipe(Effect.map((output) => Array.from(output.data as Float32Array)));
+      }).pipe(Effect.map((output) => Array.from(output.data)));
   });
 }
 
 function loadOnnx(): Effect.Effect<Embedder, Error> {
-  if (onnxCache === null) {
-    onnxCache = Effect.cachedInvalidateWithTTL(loadOnnxUncached(), "1 day");
-  }
+  const cache =
+    onnxCache ?? (onnxCache = Effect.cachedInvalidateWithTTL(loadOnnxUncached(), "1 day"));
   return Effect.gen(function* () {
-    const [cached, invalidate] = yield* onnxCache!;
+    const [cached, invalidate] = yield* cache;
     return yield* cached.pipe(Effect.tapError(() => invalidate));
   });
 }

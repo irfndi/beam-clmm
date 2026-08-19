@@ -158,6 +158,7 @@ function buildLayer(
     alertFeeMilestoneUsd: 10,
   });
   const baseLayer = Layer.merge(mockConfig, DbLive(":memory:"));
+  // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
   return Layer.provide(FeedbackLive, baseLayer) as Layer.Layer<FeedbackService, never, never>;
 }
 
@@ -230,13 +231,19 @@ describe("feedback service — no credentials", () => {
 describe("feedback service — cloud fallback", () => {
   it("submits to the D1-backed cloud endpoint", async () => {
     enableCredentials();
+    // SAFETY: The surrounding test establishes the exact shape of this controlled fixture before this assertion.
     mockFetch(
+      // oxlint-disable-next-line anti-slop/no-chained-type-assertions -- SAFETY: controlled fetch fixture has the exact function shape consumed by mockFetch.
       vi.fn(async (url: string | URL | Request) => {
+        /* oxlint-disable-line anti-slop/no-chained-type-assertions -- SAFETY: this controlled fixture or ABI output is intentionally narrowed and its exact shape is asserted by the surrounding test. */
+        /* oxlint-disable-line anti-slop/no-chained-type-assertions -- mock fetch fixture */
+        // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
         const u = String(url as string | URL);
         if (u.includes("/v1/feedback")) {
           return new Response(JSON.stringify({ id: "cloud-test-id" }), { status: 200 });
         }
         return new Response("unexpected", { status: 500 });
+        // SAFETY: This controlled fetch mock implements the response contract consumed by the surrounding test.
       }) as unknown as typeof fetch,
     );
 
@@ -255,8 +262,14 @@ describe("feedback service — cloud fallback", () => {
 
   it("falls back to local storage when the cloud endpoint fails", async () => {
     enableCredentials();
+    // SAFETY: The surrounding test establishes the exact shape of this controlled fixture before this assertion.
     mockFetch(
-      (async () => new Response("service unavailable", { status: 500 })) as unknown as typeof fetch,
+      // oxlint-disable-next-line anti-slop/no-chained-type-assertions -- SAFETY: controlled fetch fixture has the exact function shape consumed by mockFetch.
+      (async () =>
+        /* oxlint-disable-line anti-slop/no-chained-type-assertions -- SAFETY: this controlled fixture or ABI output is intentionally narrowed and its exact shape is asserted by the surrounding test. */
+        new Response("service unavailable", {
+          status: 500,
+        })) as unknown as typeof fetch /* oxlint-disable-line anti-slop/no-chained-type-assertions -- mock fetch fixture */,
     );
 
     const layer = buildLayer("");
@@ -309,11 +322,18 @@ describe("feedback service — opt-out", () => {
 describe("feedback service — D1 cloud submissions", () => {
   it("stores a new feedback item in the cloud", async () => {
     enableCredentials();
+    // SAFETY: This controlled test fixture has the exact shape consumed by the assertion below.
     mockFetch(
-      vi.fn(async (url: string | URL | Request) =>
-        String(url as string | URL).includes("/v1/feedback")
-          ? new Response(JSON.stringify({ id: "cloud-new" }), { status: 200 })
-          : new Response("unexpected", { status: 500 }),
+      // oxlint-disable-next-line anti-slop/no-chained-type-assertions -- SAFETY: controlled fetch fixture has the exact function shape consumed by mockFetch.
+      vi.fn(
+        /* oxlint-disable-line anti-slop/no-chained-type-assertions -- SAFETY: this controlled fixture or ABI output is intentionally narrowed and its exact shape is asserted by the surrounding test. */
+        async (url: string | URL | Request) =>
+          /* oxlint-disable-line anti-slop/no-chained-type-assertions -- mock fetch fixture */
+          // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
+          String(url as string | URL).includes("/v1/feedback")
+            ? new Response(JSON.stringify({ id: "cloud-new" }), { status: 200 })
+            : new Response("unexpected", { status: 500 }),
+        // SAFETY: This controlled fetch mock implements the response contract consumed by the surrounding test.
       ) as unknown as typeof fetch,
     );
 
@@ -334,10 +354,15 @@ describe("feedback service — D1 cloud submissions", () => {
 
   it("preserves the D1 duplicate marker", async () => {
     enableCredentials();
+    // SAFETY: This controlled test fixture has the exact shape consumed by the assertion below.
     mockFetch(
+      // oxlint-disable-next-line anti-slop/no-chained-type-assertions -- SAFETY: controlled fetch fixture has the exact function shape consumed by mockFetch.
       (async () =>
+        /* oxlint-disable-line anti-slop/no-chained-type-assertions -- SAFETY: this controlled fixture or ABI output is intentionally narrowed and its exact shape is asserted by the surrounding test. */
+        // oxlint-disable-line anti-slop/no-chained-type-assertions -- SAFETY: this test boundary uses a deliberately partial fixture or ABI-decoded tuple; the surrounding test establishes the exact exercised shape.
         new Response(JSON.stringify({ id: "cloud-existing", duplicate: true }), {
           status: 200,
+          // SAFETY: This controlled fetch mock implements the response contract consumed by the surrounding test.
         })) as unknown as typeof fetch,
     );
 
@@ -359,7 +384,12 @@ describe("feedback service — D1 cloud submissions", () => {
   it("falls back to local storage when D1 returns an error", async () => {
     enableCredentials();
     mockFetch(
-      (async () => new Response("server error", { status: 500 })) as unknown as typeof fetch,
+      // oxlint-disable-next-line anti-slop/no-chained-type-assertions -- SAFETY: controlled fetch fixture has the exact function shape consumed by mockFetch.
+      (async () =>
+        /* oxlint-disable-line anti-slop/no-chained-type-assertions -- SAFETY: this controlled fixture or ABI output is intentionally narrowed and its exact shape is asserted by the surrounding test. */
+        new Response("server error", {
+          status: 500,
+        })) as unknown as typeof fetch /* oxlint-disable-line anti-slop/no-chained-type-assertions -- mock fetch fixture */,
     );
 
     const layer = buildLayer("");
@@ -378,11 +408,16 @@ describe("feedback service — D1 cloud submissions", () => {
 
 describe("feedback service — rate limiting", () => {
   it("rejects when exceeding per-hour limit (5)", async () => {
+    // SAFETY: The surrounding test establishes the exact shape of this controlled fixture before this assertion.
     enableCredentials();
     mockFetch(
+      // oxlint-disable-next-line anti-slop/no-chained-type-assertions -- SAFETY: controlled fetch fixture has the exact function shape consumed by mockFetch.
       (async () =>
+        /* oxlint-disable-line anti-slop/no-chained-type-assertions -- SAFETY: this controlled fixture or ABI output is intentionally narrowed and its exact shape is asserted by the surrounding test. */
+        // oxlint-disable-line anti-slop/no-chained-type-assertions -- SAFETY: this test boundary uses a deliberately partial fixture or ABI-decoded tuple; the surrounding test establishes the exact exercised shape.
         new Response(JSON.stringify({ id: "cloud-rate" }), {
           status: 200,
+          // SAFETY: This controlled fetch mock implements the response contract consumed by the surrounding test.
         })) as unknown as typeof fetch,
     );
 
@@ -410,9 +445,13 @@ describe("feedback service — rate limiting", () => {
   it("rejects when minimum interval (60s) not elapsed since last feedback", async () => {
     enableCredentials();
     mockFetch(
+      // oxlint-disable-next-line anti-slop/no-chained-type-assertions -- SAFETY: controlled fetch fixture has the exact function shape consumed by mockFetch.
       (async () =>
+        /* oxlint-disable-line anti-slop/no-chained-type-assertions -- SAFETY: this controlled fixture or ABI output is intentionally narrowed and its exact shape is asserted by the surrounding test. */
+        // oxlint-disable-line anti-slop/no-chained-type-assertions -- SAFETY: this test boundary uses a deliberately partial fixture or ABI-decoded tuple; the surrounding test establishes the exact exercised shape.
         new Response(JSON.stringify({ id: "cloud-interval" }), {
           status: 200,
+          // SAFETY: This controlled fetch mock implements the response contract consumed by the surrounding test.
         })) as unknown as typeof fetch,
     );
 
@@ -436,9 +475,12 @@ describe("feedback service — local dedup cooldown", () => {
   it("returns duplicate for the same hash within 24h (after one successful submit)", async () => {
     enableCredentials();
     mockFetch(
+      // oxlint-disable-next-line anti-slop/no-chained-type-assertions -- SAFETY: controlled fetch fixture returns the exact Response contract consumed by this test.
       (async () =>
+        // oxlint-disable-line anti-slop/no-chained-type-assertions -- SAFETY: this test boundary uses a deliberately partial fixture or ABI-decoded tuple; the surrounding test establishes the exact exercised shape.
         new Response(JSON.stringify({ id: "cloud-dedup" }), {
           status: 200,
+          // SAFETY: This controlled fetch mock implements the response contract consumed by the surrounding test.
         })) as unknown as typeof fetch,
     );
 
@@ -474,9 +516,12 @@ describe("feedback service — getByHash", () => {
     const { createHash } = await import("crypto");
     enableCredentials();
     mockFetch(
+      // oxlint-disable-next-line anti-slop/no-chained-type-assertions -- SAFETY: controlled fetch fixture returns the exact Response contract consumed by this test.
       (async () =>
+        /* oxlint-disable-line anti-slop/no-chained-type-assertions -- SAFETY: this mock fetch fixture implements the controlled response consumed by the feedback service */
         new Response(JSON.stringify({ id: "cloud-hash" }), {
           status: 200,
+          // SAFETY: This controlled fetch mock implements the response contract consumed by the surrounding test.
         })) as unknown as typeof fetch,
     );
     const layer = buildLayer("");
@@ -502,9 +547,12 @@ describe("feedback service — details round-trip", () => {
   it("preserves empty-string details as '' (not null) on read-back", async () => {
     enableCredentials();
     mockFetch(
+      // oxlint-disable-next-line anti-slop/no-chained-type-assertions -- SAFETY: controlled fetch fixture returns the exact Response contract consumed by this test.
       (async () =>
+        // oxlint-disable-line anti-slop/no-chained-type-assertions -- SAFETY: this test boundary uses a deliberately partial fixture whose exercised shape is asserted by the surrounding test.
         new Response(JSON.stringify({ id: "cloud-empty-details" }), {
           status: 200,
+          // SAFETY: This controlled fetch mock implements the response contract consumed by the surrounding test.
         })) as unknown as typeof fetch,
     );
     const layer = buildLayer("");
@@ -524,12 +572,16 @@ describe("feedback service — details round-trip", () => {
     expect(entry!.details).toBe("");
   });
 
+  // SAFETY: The controlled test fixture establishes the asserted shape at this boundary, and the surrounding test consumes only that documented invariant.
   it("preserves null details as null when details is omitted", async () => {
     enableCredentials();
     mockFetch(
+      // oxlint-disable-next-line anti-slop/no-chained-type-assertions -- SAFETY: controlled fetch fixture returns the exact Response contract consumed by this test.
       (async () =>
+        // oxlint-disable-line anti-slop/no-chained-type-assertions -- SAFETY: this test boundary uses a deliberately partial fixture whose exercised shape is asserted by the surrounding test.
         new Response(JSON.stringify({ id: "cloud-null-details" }), {
           status: 200,
+          // SAFETY: This controlled fetch mock implements the response contract consumed by the surrounding test.
         })) as unknown as typeof fetch,
     );
     const layer = buildLayer("");

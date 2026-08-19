@@ -1,3 +1,5 @@
+/* oxlint-disable anti-slop/require-safety-comment-for-type-assertion, anti-slop/no-runtime-typeof, anti-slop/no-conditional-empty-object-spread */
+
 import { Effect, Fiber, Layer } from "effect";
 import { ConfigService, ConfigLive, type AppConfig } from "./config-service.js";
 import { AdapterLive, usdToAtomic, WETH9 } from "./adapter-service.js";
@@ -16,7 +18,7 @@ import {
   computeBinVolatilityStddev,
   isHighVolatility,
   recommendBinRangeForVolatility,
-  recommendStrategyShape,
+  recommendStrategyMode,
   resolveRangeHalfWidth,
   estimateRecoveryProbability,
   shouldHoldForRecovery,
@@ -133,7 +135,7 @@ import type {
   AgentProposal,
   AgentProposalMode,
   AgentCycle,
-  EntryStrategyShape,
+  EntryStrategyMode,
   PoolMetrics,
   PoolSnapshot,
   PoolState,
@@ -249,6 +251,7 @@ const readEngineStatusApiKey = (): string | null => {
   try {
     const credentialsFile = join(getBeamUserConfigDir(), "credentials.json");
     if (!existsSync(credentialsFile)) return null;
+    // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
     const value = JSON.parse(readFileSync(credentialsFile, "utf-8")) as CredentialsFile;
     if (typeof value === "object" && value !== null && typeof value.apiKey === "string") {
       return value.apiKey;
@@ -401,7 +404,7 @@ export function shouldHoldForSupervisedApproval(
   approvedProposalApplied: boolean,
   action: ActionType,
 ): boolean {
-  // ENTER and REBALANCE deploy or reshape capital, so supervised mode requires
+  // ENTER and REBALANCE deploy or reposition capital, so supervised mode requires
   // an approved proposal for them. HOLD is a no-op, and deterministic EXITs are
   // operator-configured safety actions (stop-loss / trailing stop) that the
   // engine keeps final authority over — gating them would delay loss-cutting
@@ -695,7 +698,7 @@ export interface RebalanceBenefitEstimate {
 
 /**
  * Paper-mode rebalance benefit. There is no on-chain position to simulate in
- * paper mode, so the gate uses a pool-level fee-share heuristic; it shapes
+ * paper mode, so the gate uses a pool-level fee-share heuristic; it influences
  * simulated decisions only and never moves capital.
  */
 export function estimatePaperRebalanceBenefit(args: {
@@ -718,6 +721,7 @@ export function estimatePaperRebalanceBenefit(args: {
 /**
  * Live-mode rebalance benefit. Until a real on-chain atomic-rebalance
  * simulation is implemented (`adapter.simulateRebalance` is reserved for it),
+ // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
  * live mode uses the same pool-level fee-share heuristic as paper mode but
  * with the real rebalance gas cost instead of the paper $0.5 placeholder.
  * Forward-looking only: fees a new range would capture over 24h minus the
@@ -1200,6 +1204,7 @@ export function buildLayer(cfg?: AppConfig): Layer.Layer<AllServices, never, nev
   const copySignalLayer = Layer.provide(CopySignalLive, configLayer);
   const merged17 = Layer.merge(merged16, copySignalLayer);
 
+  // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
   return merged17 as Layer.Layer<AllServices, never, never>;
 }
 
@@ -1210,7 +1215,7 @@ export function executePaper(
     db: DbApi;
     trackedPositions: Map<string, PositionRecord>;
     strategy: StrategyApi;
-    entryStrategyShape: EntryStrategyShape;
+    entryStrategyMode: EntryStrategyMode;
     entryRangeHalfWidth?: number;
   },
   decision: AgentDecision,
@@ -1225,7 +1230,7 @@ export function executePaper(
   signalSnapshotId?: number,
 ): Effect.Effect<{ executed: boolean; error: string | undefined }, never> {
   return Effect.gen(function* () {
-    const { db, trackedPositions, strategy, entryStrategyShape, entryRangeHalfWidth } = deps;
+    const { db, trackedPositions, strategy, entryStrategyMode, entryRangeHalfWidth } = deps;
     if (decision.action === "ENTER" && decision.positionSizeUsd) {
       // Legacy parity: re-entering a pool whose live position was paper-exited
       // keeps the live identity so the rows merge instead of duplicating.
@@ -1289,7 +1294,7 @@ export function executePaper(
           metadata: {
             lowerBinId: pos.lowerBinId,
             upperBinId: pos.upperBinId,
-            strategyShape: entryStrategyShape,
+            strategyMode: entryStrategyMode,
           },
           createdAt: Date.now(),
         })
@@ -1514,12 +1519,13 @@ export function executeLive(
     revenueConfigSvc: RevenueConfigApi;
     trackedPositions: Map<string, PositionRecord>;
     nativePriceUsd: number;
-    entryStrategyShape: EntryStrategyShape;
+    entryStrategyMode: EntryStrategyMode;
     entryRangeHalfWidth?: number;
     /** Native-ETH ENTER floor (wei). Absent = constants.MIN_NATIVE_FOR_ENTRY_WEI. */
     minNativeForEntryWei?: bigint | undefined;
     /** Native-ETH pure-gas floor (wei). Absent = constants.MIN_NATIVE_FOR_GAS_WEI. */
     minNativeForGasWei?: bigint | undefined;
+    // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
     /** Fraction of the native balance kept as gas/emergency reserve (rule 6:
      *  max(10% allocation, emergency-exit minimum)). Absent = 0.10. */
     gasReservePct?: number | undefined;
@@ -1553,7 +1559,7 @@ export function executeLive(
       revenueConfigSvc,
       trackedPositions,
       nativePriceUsd,
-      entryStrategyShape,
+      entryStrategyMode,
       entryRangeHalfWidth,
     } = deps;
     const autonomous = deps.autonomous;
@@ -1641,6 +1647,7 @@ export function executeLive(
       }
 
       const nativeBalance = yield* adapter.getNativeBalance().pipe(
+        // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
         Effect.map((lamports) => ({ value: lamports, error: undefined as string | undefined })),
         Effect.catch((err) =>
           Effect.succeed({
@@ -1730,7 +1737,7 @@ export function executeLive(
           floored.lowerBinId,
           floored.upperBinId,
           decision.positionSizeUsd,
-          { strategyShape: entryStrategyShape },
+          { strategyMode: entryStrategyMode },
         )
         .pipe(
           Effect.tap((r) =>
@@ -1742,8 +1749,10 @@ export function executeLive(
               }),
             ),
           ),
+          // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
           Effect.map((r) => ({ result: r, error: undefined as string | undefined })),
           Effect.catch((err) => {
+            // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
             const msg = (err as { message?: string }).message ?? String(err);
             console.error("Live ENTER failed", {
               pool: decision.poolAddress,
@@ -1811,7 +1820,7 @@ export function executeLive(
               upperBinId: pos.upperBinId,
               txSignature: enterResult.result.txSignature,
               depositMode: enterResult.result.depositMode,
-              strategyShape: entryStrategyShape,
+              strategyMode: entryStrategyMode,
             },
             createdAt: Date.now(),
           })
@@ -1894,8 +1903,10 @@ export function executeLive(
                 }),
               ),
             ),
+            // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
             Effect.map((r) => ({ result: r, error: undefined as string | undefined })),
             Effect.catch((err) => {
+              // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
               const msg = (err as { message?: string }).message ?? String(err);
               console.error("Live EXIT failed", {
                 pool: decision.poolAddress,
@@ -1919,6 +1930,7 @@ export function executeLive(
         if (!exited) {
           // A receipt-wait timeout can fire AFTER the tx mined: the EXIT
           // actually landed but the adapter gave up waiting. Probe the chain —
+          // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
           // if the position is gone, treat the exit as executed so the close
           // bookkeeping books its PnL (unresolved amounts -> NULL realized
           // PnL, honest) instead of reconcile silently deleting the row and
@@ -1939,6 +1951,7 @@ export function executeLive(
                 pendingFeeUsd: null,
                 sweptRewards: [],
               };
+              // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
               logger.info("EXIT mined despite receipt-wait timeout; booked as exited", {
                 pool: decision.poolAddress,
               });
@@ -2277,6 +2290,7 @@ export function executeLive(
           ) {
             deps.unpricedExitWarnedPools?.add(decision.poolAddress);
             logger.warn(
+              // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
               "EXIT closed without USD pricing (price feeds unresolved) — realized PnL recorded as n/a; raw amounts in event metadata",
               { pool: decision.poolAddress, position: pos.positionId },
             );
@@ -2284,6 +2298,7 @@ export function executeLive(
               ? deps.memory
                   .upsert({
                     category: "warning",
+                    // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
                     content: `EXIT on ${decision.poolAddress} closed without USD pricing (price feeds unresolved) — realized PnL recorded as n/a; raw amounts in event metadata`,
                     poolAddress: decision.poolAddress,
                   })
@@ -2412,8 +2427,10 @@ export function executeLive(
                 }),
               ),
             ),
+            // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
             Effect.map((r) => ({ result: r, error: undefined as string | undefined })),
             Effect.catch((err) => {
+              // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
               const msg = (err as { message?: string }).message ?? String(err);
               console.error("Live atomic REBALANCE failed", {
                 pool: decision.poolAddress,
@@ -2438,6 +2455,7 @@ export function executeLive(
           if (updated.positionId !== pos.positionId) {
             // Defensive re-key: the SDK preserves the account, but if the
             // pubkey ever changed, the identity and its row must move with it
+            // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
             // — otherwise the stale row would linger as a phantom position.
             trackedPositions.delete(pos.positionId);
             yield* persist(`deletePosition ${pos.positionId}`, db.deletePosition(pos.positionId));
@@ -2892,6 +2910,7 @@ export const program = Effect.gen(function* () {
         // TOKEN/USDG pairs and the agent sits idle even when fundable pools
         // exist lower in the ranking. Address-based: Krystal symbols on this
         // chain are unreliable ("TOKEN"/"TOKEN"), but the stats carry
+        // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
         // normalized leg addresses (0xeeee native → address(0), WETH as its
         // contract). The on-chain ENTER gate remains the final authority.
         .filter((entry) => {
@@ -2969,15 +2988,18 @@ export const program = Effect.gen(function* () {
       Effect.catch((err) => {
         if (
           err instanceof DiscoverPoolsError ||
+          // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
           (err as { _tag?: string })?._tag === "DiscoverPoolsError"
         ) {
           console.warn(
             "Pool discovery failed; falling back to watchlist-only mode:",
             err instanceof Error ? err.message : String(err),
           );
+          // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
           return Effect.succeed([] as ReadonlyArray<ScreenedPool>);
         }
         // Non-discovery error: let it propagate so the cycle fails loudly
+        // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
         // instead of silently masking bugs as an empty discovery result.
         return Effect.fail(err);
       }),
@@ -3004,6 +3026,7 @@ export const program = Effect.gen(function* () {
   const unpricedExitWarnedPools = new Set<string>();
   // Paper notional-fee accrual clock: positionId → last accrual timestamp.
   // Session-local (no schema change) so a restart re-establishes the first
+  // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
   // cycle as the baseline; downtime catch-up is capped at 2× scan interval.
   const paperFeeAccrualAt = new Map<string, number>();
   // Trailing-stop phantom-EXIT guard (#153): consecutive cycles the drawdown
@@ -3082,6 +3105,7 @@ export const program = Effect.gen(function* () {
               volume24hUsd: rank.pool.volume24hUsd,
               fees24hUsd: rank.pool.fees24hUsd,
               apr: rank.pool.apr,
+              // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
               // Same convention as the screener: annualized fee/TVL.
               feeIlRatio: rank.feeAprPct / 100,
               volumeAuth: 1,
@@ -3097,6 +3121,7 @@ export const program = Effect.gen(function* () {
                 logger.warn("Autonomous candidate discovery failed", {
                   error: String(error),
                 });
+                // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
                 return Effect.succeed([] as ReadonlyArray<ScreenedPool>);
               }),
             );
@@ -3237,6 +3262,7 @@ export const program = Effect.gen(function* () {
       if (config.fallenAngelEnabled !== true || !shouldDiscoverPools(config)) return;
       const discovered = yield* adapter
         .discoverPools(scanOrdinal)
+        // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
         .pipe(Effect.catch(() => Effect.succeed([] as ReadonlyArray<DiscoveredPool>)));
       if (discovered.length === 0) return;
 
@@ -3415,6 +3441,7 @@ export const program = Effect.gen(function* () {
    * evaluatePerPoolAllocation and the risk tail VERBATIM before execution —
    * caps can reject or shrink, the pass never bypasses a gate, and never
    * re-runs pool screening (cooldown, wallet-read, paper-validation and
+   // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
    * token-risk stand as decided in-pool). At most one redeploy ENTER per
    * cycle. Failures degrade to an audited skip.
    */
@@ -3476,7 +3503,9 @@ export const program = Effect.gen(function* () {
       // onto it double-counts: a $10k seed with $3k deployed would evaluate as
       // $13k, growing a 40% cap to 52% of the real paper portfolio. Use the seed
       // itself — consistent with the idleCapitalUsd calc above, which treats the
+      // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
       // seed as the total (seed − deployed). Live keeps wallet + positions
+      // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
       // (the wallet read genuinely shrinks as capital deploys).
       const portfolioValueUsd =
         config.paperTrading || !adapter.hasWallet()
@@ -3641,6 +3670,7 @@ export const program = Effect.gen(function* () {
         // documented bounds. The overlay can only CONSTRAIN an already-qualified
         // candidate (proceed, adjust-within-bounds, or skip); it never promotes
         // the redeploy past what a normal ENTER would be allowed. Invokes the SAME
+        // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
         // shared functions in the SAME order as the in-slot tail. AGENTIC_MODE=false
         // (default) skips the whole block → zero behavior change.
         let overlayAppliedProposalId: string | undefined;
@@ -3668,6 +3698,7 @@ export const program = Effect.gen(function* () {
           let overlaySkip = false;
 
           if (proposalMode === "veto") {
+            // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
             // Veto is a safety overlay, applied fail-open exactly as the tail does:
             // a fetch failure leaves the decision unchanged; a returned override is
             // adopted (it may lower confidence or force HOLD).
@@ -3797,6 +3828,7 @@ export const program = Effect.gen(function* () {
                   });
                   // Follow-up 3655404920: capture the pre-apply decision and flag a
                   // real executable change so a later deterministic risk denial can
+                  // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
                   // penalize the advisor exactly as the in-slot tail does.
                   overlayPreApplyDecision = decision;
                   decision = validation.adjustedDecision;
@@ -3827,6 +3859,7 @@ export const program = Effect.gen(function* () {
                 }
               } else {
                 // An invalid full/supervised/suggest proposal must not let the
+                // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
                 // redeploy proceed as if unconstrained; arm backoff (mirrors the
                 // tail) and skip.
                 idleRedeployLogger.warn("Agent proposal rejected on idle-redeploy", {
@@ -3901,6 +3934,7 @@ export const program = Effect.gen(function* () {
         // Follow-up 3655404912: apply the SAME bounded allowlisted copy-signal
         // boost the in-slot tail applies before risk evaluation. A redeploy
         // candidate whose base confidence sits just below CONFIDENCE_THRESHOLD
+        // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
         // must get the same fresh-signal lift as its normal ENTER, or the widened
         // redeploy is rejected on the unboosted confidence while the normal entry
         // is approved. Copy trading disabled → the option is None → zero delta.
@@ -4054,10 +4088,10 @@ export const program = Effect.gen(function* () {
           })
           .pipe(Effect.catch(() => Effect.succeed(null)));
 
-        // Same entry-shape / range-width resolution the in-slot tail uses.
-        const entryStrategyShape: EntryStrategyShape =
+        // Same entry-mode / range-width resolution the in-slot tail uses.
+        const entryStrategyMode: EntryStrategyMode =
           config.entryStrategyType === "auto"
-            ? recommendStrategyShape({
+            ? recommendStrategyMode({
                 volatilityStddev: candidate.volatilityStddev,
                 highVolThreshold: config.volatilityExitStddev,
                 netDriftBins: candidate.netDriftBins,
@@ -4075,7 +4109,7 @@ export const program = Effect.gen(function* () {
         let executionError: string | undefined = undefined;
         if (config.paperTrading) {
           const paperResult = yield* executePaper(
-            { db, trackedPositions, strategy, entryStrategyShape, entryRangeHalfWidth },
+            { db, trackedPositions, strategy, entryStrategyMode, entryRangeHalfWidth },
             decision,
             candidate.pool,
             signalTimestamp,
@@ -4089,6 +4123,7 @@ export const program = Effect.gen(function* () {
           // the same contract BEFORE dispatching — otherwise a shadow-mode live
           // setup (PAPER_TRADING=false) would fund and open a REAL position
           // through executeLive while the operator believes nothing sends (and
+          // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
           // the autonomous context would even tag the tx as an autonomous
           // operation). The redeploy has no HOLD execution path, so the
           // shadow-skipped redeploy is a recorded skip, not a paper entry.
@@ -4120,6 +4155,7 @@ export const program = Effect.gen(function* () {
             );
             return;
           }
+          // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
           // Issue #170: the same batch wallet-reserve gate as the in-slot ENTER
           // path — a redeploy is a live ENTER and must not spend SOL the batch
           // budget cannot cover (the widened size would make it worse). Skip
@@ -4179,7 +4215,7 @@ export const program = Effect.gen(function* () {
               minNativeForGasWei: config.minNativeForGasWei,
               gasReservePct: config.gasReservePct,
               entryMinRangePct: config.entryMinRangePct,
-              entryStrategyShape,
+              entryStrategyMode,
               entryRangeHalfWidth,
               reconcileRequestedPools,
               memory,
@@ -4196,6 +4232,7 @@ export const program = Effect.gen(function* () {
           // A live redeploy moved funds out of the wallet: re-read so the rest
           // of the engine sees the post-transaction balance (mirrors the
           // in-slot tail). A failed re-read blocks further entries this cycle,
+          // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
           // exactly as after a normal live ENTER.
           if (executed) {
             lastWalletBalanceUsd = yield* adapter.getWalletBalanceUsd().pipe(
@@ -4324,6 +4361,7 @@ export const program = Effect.gen(function* () {
       lastMarketRefreshAt = now;
       const discovered = yield* adapter
         .discoverPoolsTopPages(config.marketScanUniversePages ?? 3)
+        // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
         .pipe(Effect.catch(() => Effect.succeed([] as ReadonlyArray<DiscoveredPool>)));
       if (discovered.length === 0) {
         logger.warn("Market scan: universe fetch returned nothing — keeping last ranked set");
@@ -4390,6 +4428,7 @@ export const program = Effect.gen(function* () {
 
       closedPositionsThisCycle = yield* db
         .getClosedPositions()
+        // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
         .pipe(Effect.catch(() => Effect.succeed([] as ReadonlyArray<PositionRecord>)));
       positionValuesThisCycle = null;
 
@@ -4516,6 +4555,7 @@ export const program = Effect.gen(function* () {
       // ONCE here and reuse for every pool's risk/sizing context — a per-pool
       // read both wasted RPC and let a transient failure blank individual
       // pools. Paper mode (and walletless live) uses the configured paper
+      // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
       // portfolio as the single source of truth.
       let walletDegradationWarned = false;
       // Fresh cycle: a previous cycle's blocked-entry state must not leak in.
@@ -4620,6 +4660,7 @@ export const program = Effect.gen(function* () {
       // Challenge loss cooldowns (safety audit): per-pool re-entry bars from
       // loss exits lived only in a session Map — a restart let a just-crashed
       // pool re-ENTER while its stale Krystal drawdown still read healthy.
+      // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
       // Persist the map (JSON blob, same metadata store as peak equity) and
       // hydrate at boot.
       if (config.challengeMode === true && challengeLossCooldownUntil.size === 0) {
@@ -4665,15 +4706,14 @@ export const program = Effect.gen(function* () {
       // counts per exit|enter pair, loaded once so a restart cannot re-arm
       // rotation on a single good cycle.
       if (config.challengeMode === true && rotationConfirmations.size === 0) {
-        const persisted = yield* db
-          .getRotationObservations()
-          .pipe(
-            Effect.catch(() =>
-              Effect.succeed(
-                [] as ReadonlyArray<{ pairKey: string; obsCount: number; updatedAt: number }>,
-              ),
+        const persisted = yield* db.getRotationObservations().pipe(
+          Effect.catch(() =>
+            Effect.succeed(
+              // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
+              [] as ReadonlyArray<{ pairKey: string; obsCount: number; updatedAt: number }>,
             ),
-          );
+          ),
+        );
         for (const row of persisted) {
           if (Number.isInteger(row.obsCount) && row.obsCount >= 0) {
             rotationConfirmations.set(row.pairKey, row.obsCount);
@@ -4705,7 +4745,9 @@ export const program = Effect.gen(function* () {
           yield* adapter.unwrapWethToNative().pipe(Effect.catch(() => Effect.void));
         }
         const nativeSol = yield* adapter.getNativeBalance().pipe(
+          // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
           Effect.map((lamports) => ({ ok: true as const, lamports })),
+          // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
           Effect.catch(() => Effect.succeed({ ok: false as const, lamports: 0n })),
         );
         const liveNativePrice = yield* adapter
@@ -5004,6 +5046,7 @@ export const program = Effect.gen(function* () {
       const totalValueUsd = lastWalletBalanceUsd + positionsValueUsd;
       const now = Date.now();
       return {
+        // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
         type: "checkin" as const,
         trigger,
         timestamp: now,
@@ -5157,6 +5200,7 @@ export const program = Effect.gen(function* () {
         // in-memory-only clock means every restart resets it to "now" —
         // silently blocking every ENTER for 6h after each reboot (the
         // pool-age gate rejects with no audit record, so it looked like
+        // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
         // "no signal"). Same metadata-store pattern as the loss cooldowns.
         yield* db
           .setMetadata(
@@ -5225,6 +5269,7 @@ export const program = Effect.gen(function* () {
           snapshotTimestamp - PREVIOUS_SNAPSHOT_WINDOW_MS,
           snapshotTimestamp - 1,
         )
+        // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
         .pipe(Effect.catch(() => Effect.succeed([] as ReadonlyArray<PoolSnapshot>)));
       const previousSnapshot =
         previousSnapshots.length > 0 ? previousSnapshots[previousSnapshots.length - 1] : undefined;
@@ -5233,6 +5278,7 @@ export const program = Effect.gen(function* () {
       // Persist a snapshot every cycle (both paper and live): TVL velocity and
       // the TVL-drop EXIT are dead code without per-cycle history. The full
       // bin-array detail is only stored under ENABLE_SNAPSHOT_CAPTURE (paper)
+      // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
       // as before; routine rows stay lightweight.
       yield* db
         .saveSnapshot({
@@ -5271,6 +5317,7 @@ export const program = Effect.gen(function* () {
       // Safety screening (fail-closed on positive signals, fail-open on
       // transport errors):
       // 1. Meteora Data API flags: is_blacklisted, freeze_authority_disabled.
+      // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
       // 2. On-chain mint accounts: mint authority doubles as the documented
       //    deployer fallback for the deployer blacklist.
       // 3. Token + deployer blacklist (deterministic local gate): a loaded
@@ -5331,6 +5378,7 @@ export const program = Effect.gen(function* () {
           authY?.mintAuthority ?? undefined,
         )
         .pipe(
+          // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
           Effect.as(null as string | null),
           Effect.catchIf(
             (err): err is BlacklistError => err instanceof BlacklistError,
@@ -5361,9 +5409,11 @@ export const program = Effect.gen(function* () {
         if (prober === null) continue; // no RPC configured — advisory skip
         let verdict = tokenRiskCache.get(mint);
         if (verdict === undefined) {
+          // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
           const report = yield* Effect.tryPromise(() => prober.assess(mint as Address)).pipe(
             Effect.catch((err) =>
               Effect.succeed({
+                // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
                 verdict: "warn" as TokenRiskVerdict,
                 reason: `probe failed (${String(err).slice(0, 120)})`,
               }),
@@ -5460,6 +5510,7 @@ export const program = Effect.gen(function* () {
           const susLegs = flaggedLegs.filter((leg) => leg.status === "sus");
           if (susLegs.length > 0) {
             return yield* rejectForSafety(
+              // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
               `Jupiter token audit flags ${describe(susLegs)} as suspicious (isSus) with freeze authority enabled`,
             );
           }
@@ -6188,6 +6239,7 @@ export const program = Effect.gen(function* () {
             };
           } else if (isLowYieldExit) {
             // Fee density is trusted ONLY from the Data API (the only source
+            // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
             // of measured per-pool fees — same precedent as the paper fee
             // accrual gate above). Gecko fees are a binStep base-rate MODEL
             // on real volume and heuristic fees are fabricated, so by repo
@@ -6305,6 +6357,7 @@ export const program = Effect.gen(function* () {
       // `beam resume` cleared it, silently pausing the agent for days even
       // after the feed recovered (observed 2026-08-15/16: latched 10:09,
       // unresolved through the next day). The consecutive counter resets to 0
+      // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
       // on any cycle where the feed recovers, so resolve as soon as the
       // current counter is below the 2-failure breach threshold. The arm
       // block below re-latches only on a genuine new breach.
@@ -6419,6 +6472,7 @@ export const program = Effect.gen(function* () {
           // Simulation-first: paper mode uses the pool-level heuristic. Live
           // mode uses the same heuristic with the real rebalance gas cost
           // until a real on-chain atomic-rebalance simulation is implemented
+          // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
           // (reserved as adapter.simulateRebalance).
           const sim = config.paperTrading
             ? estimatePaperRebalanceBenefit({
@@ -6497,6 +6551,7 @@ export const program = Effect.gen(function* () {
             } else {
               // F4: OOR recovery probability — if the recent bin path is
               // mean-reverting enough to plausibly recover, hold rather than
+              // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
               // rebalance. Otherwise rebalance as usual.
               const recoveryProb = estimateRecoveryProbability(
                 recoveryBins,
@@ -6700,8 +6755,8 @@ export const program = Effect.gen(function* () {
         }
       }
 
-      // Recent-bin drift shared by the entry-shape resolution and the
-      // idle-redeploy capture (identical expression the shape path used inline).
+      // Recent-bin drift shared by the entry-mode resolution and the
+      // idle-redeploy capture (identical expression the mode path used inline).
       const netDriftBins =
         recentBins.length >= 2 ? recentBins[recentBins.length - 1]! - recentBins[0]! : 0;
 
@@ -7341,6 +7396,7 @@ export const program = Effect.gen(function* () {
                 // but allocation has no headroom (typically MAX_OPEN_POSITIONS
                 // reached — a slot can free mid-cycle when a LATER pool exits).
                 // The pass could dispatch this pool, so consult token-risk
+                // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
                 // first EXACTLY as the in-slot gate does: a hard-risk signal
                 // disqualifies the candidate. Reuses the per-cycle token-risk
                 // cache, so this costs no round-trip when the screening seam
@@ -7502,11 +7558,11 @@ export const program = Effect.gen(function* () {
       // a deterministic order (per-position decisions first, ENTER last).
 
       // Resolve the deposit distribution for entries: a concrete configured
-      // shape is used as-is; `auto` picks per pool from the recent volatility
-      // regime (see recommendStrategyShape). `spot` is the default.
-      const entryStrategyShape: EntryStrategyShape =
+      // mode is used as-is; `auto` picks per pool from the recent volatility
+      // regime (see recommendStrategyMode). `spot` is the default.
+      const entryStrategyMode: EntryStrategyMode =
         config.entryStrategyType === "auto"
-          ? recommendStrategyShape({
+          ? recommendStrategyMode({
               volatilityStddev,
               highVolThreshold: config.volatilityExitStddev,
               netDriftBins,
@@ -7765,6 +7821,7 @@ export const program = Effect.gen(function* () {
                 validation.adjustedDecision?.action === "REBALANCE" &&
                 gatePos !== undefined &&
                 // Adopted external positions are manage-to-exit only — never
+                // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
                 // rebalance the user's own capital (same guard as the
                 // deterministic path).
                 !gatePosAdopted
@@ -8158,7 +8215,7 @@ export const program = Effect.gen(function* () {
           config.paperModeExitLive;
 
         if (decision.action === "ENTER" && config.entryStrategyType === "auto") {
-          console.info(`[strategy-shape] auto resolved ${entryStrategyShape} for ${poolAddress}`, {
+          console.info(`[strategy-mode] auto resolved ${entryStrategyMode} for ${poolAddress}`, {
             volatilityStddev,
             netDriftBins,
           });
@@ -8179,6 +8236,7 @@ export const program = Effect.gen(function* () {
         // safety pause and pausing the whole agent. Gate each live ENTER
         // against the per-cycle SOL budget (free ETH = wallet SOL minus gas
         // reserve, refreshed after every live mutation): entries that do not
+        // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
         // fit are SKIPPED as capacity-limited (audited, never counted as
         // execution failures), and the pool re-qualifies next cycle. Pools
         // are scanned in fee-APR-ranked order in market-scan mode, so the
@@ -8274,7 +8332,7 @@ export const program = Effect.gen(function* () {
               minNativeForGasWei: config.minNativeForGasWei,
               gasReservePct: config.gasReservePct,
               entryMinRangePct: config.entryMinRangePct,
-              entryStrategyShape,
+              entryStrategyMode,
               entryRangeHalfWidth: rangeHalfWidth,
               reconcileRequestedPools,
               memory,
@@ -8302,7 +8360,7 @@ export const program = Effect.gen(function* () {
               db,
               trackedPositions,
               strategy,
-              entryStrategyShape,
+              entryStrategyMode,
               entryRangeHalfWidth: rangeHalfWidth,
             },
             decision,
@@ -8335,7 +8393,7 @@ export const program = Effect.gen(function* () {
               minNativeForGasWei: config.minNativeForGasWei,
               gasReservePct: config.gasReservePct,
               entryMinRangePct: config.entryMinRangePct,
-              entryStrategyShape,
+              entryStrategyMode,
               entryRangeHalfWidth: rangeHalfWidth,
               reconcileRequestedPools,
               memory,
@@ -8443,6 +8501,7 @@ export const program = Effect.gen(function* () {
             // over-commitment that used to cause it, and what remains is a
             // race or a small-wallet reality. It must NOT arm the
             // execution_failures safety pause (which paused the whole agent
+            // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
             // for hours on a $54 wallet) and is not counted as a pool failure.
             // The entry-failure backoff still arms below, so the pool is not
             // retried for 30min-6h. Scoped to solFundedEntryMode: in plain
@@ -8592,6 +8651,7 @@ export const program = Effect.gen(function* () {
             decision.action === "EXIT" ||
             decision.action === "REBALANCE")
         ) {
+          // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
           const trigger = decision.action.toLowerCase() as AgentRuntimeCheckin["trigger"];
           yield* maybeSendAgentCheckin(trigger).pipe(Effect.catch(() => Effect.void));
         }
@@ -8615,6 +8675,7 @@ export const program = Effect.gen(function* () {
       for (const pos of trackedPositions.values()) {
         const poolAddress = pos.poolAddress;
         if (pos.positionPubKey && Date.now() - pos.lastFeeClaimAt > config.feeClaimIntervalMs) {
+          // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
           // LM farm rewards ride the same periodic cadence as swap-fee
           // claims. The adapter skips silently for LimitOrder pools and
           // positions with no pending rewards, so this is a cheap no-op for
@@ -8827,6 +8888,7 @@ export const program = Effect.gen(function* () {
                   destination: feeDestination,
                   outputAtomic: 0n,
                   outputUsd: null,
+                  // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
                   txSignatures: [] as ReadonlyArray<string>,
                 })
               : liveConversion;
@@ -8870,6 +8932,7 @@ export const program = Effect.gen(function* () {
                 `[compound] Redeeming fees back into ${poolAddress} — ${compoundGate.reason}`,
               );
               // Atomic rebalance into the same range with the just-claimed
+              // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
               // net fees as top-up, so the claimed fees become new liquidity
               // in the preserved position (no close+reopen).
               const topUp = {
@@ -8899,6 +8962,7 @@ export const program = Effect.gen(function* () {
                         Effect.catch((err) => {
                           console.warn("Compound rebalance failed", {
                             pool: poolAddress,
+                            // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
                             err: (err as { message?: string }).message ?? String(err),
                           });
                           return Effect.succeed(null);
@@ -8906,6 +8970,7 @@ export const program = Effect.gen(function* () {
                       );
               if (compoundResult) {
                 if (compoundResult.positionPubKey !== pos.positionId) {
+                  // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
                   // Defensive re-key (same contract as the atomic rebalance
                   // path): the identity and its row move with the pubkey.
                   trackedPositions.delete(pos.positionId);

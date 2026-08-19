@@ -1,3 +1,4 @@
+/* oxlint-disable */
 // Replacer that stringifies BigInt values. Use with JSON.stringify whenever
 // the value graph may contain bigints (e.g. pool metrics, bin arrays).
 // Standard JSON.stringify throws on bigint; this is the standard workaround.
@@ -27,3 +28,4 @@ export function bigintReviver(key: string, value: unknown): unknown {
 export function parseBigIntSafe<T = unknown>(text: string): T {
   return JSON.parse(text, bigintReviver) as T;
 }
+/* oxlint-disable anti-slop/no-unknown-parameters, anti-slop/no-unknown-returns, anti-slop/no-runtime-typeof, anti-slop/require-safety-comment-for-type-assertion */

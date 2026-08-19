@@ -19,9 +19,7 @@ afterEach(() => {
   }
 });
 
-function createChildEnvironment(
-  overrides: Readonly<Record<string, string>>,
-) {
+function createChildEnvironment(overrides: Readonly<Record<string, string>>) {
   const environment: Record<string, string> = {};
   for (const [key, value] of Object.entries(process.env)) {
     if (value !== undefined) environment[key] = value;
@@ -41,12 +39,16 @@ function decode(output: Uint8Array): string {
   return new TextDecoder().decode(output);
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
+type JsonValue = string | number | boolean | null | JsonObject | JsonValue[];
+type JsonObject = { readonly [key: string]: JsonValue };
+
+function isRecord(value: JsonValue): value is JsonObject {
+  return Object.prototype.toString.call(value) === "[object Object]";
 }
 
-function decodeJsonObject(output: Uint8Array): Record<string, unknown> {
-  const parsed: unknown = JSON.parse(decode(output));
+function decodeJsonObject(output: Uint8Array): JsonObject {
+  // SAFETY: CLI --json is parsed at this boundary and validated by isRecord.
+  const parsed = JSON.parse(decode(output)) as JsonValue;
   if (!isRecord(parsed)) {
     throw new Error("CLI JSON output must be an object");
   }
@@ -213,152 +215,157 @@ describe("autonomous CLI operator surface", () => {
     "shows current-wallet candidate, operation, settlement, and active pause state in JSON",
     { timeout: 90_000 },
     async () => {
-    // Given
-    testDirectory = mkdtempSync(join(tmpdir(), "beam-cli-autonomous-status-"));
-    const dbPath = join(testDirectory, "beam.db");
-    const account = privateKeyToAccount(`0x${"ab".repeat(32)}`);
-    const wallet = account.address;
-    const agentInstanceId = "operator-test";
-    await seedAutonomousState(dbPath, wallet, agentInstanceId);
+      // Given
+      testDirectory = mkdtempSync(join(tmpdir(), "beam-cli-autonomous-status-"));
+      const dbPath = join(testDirectory, "beam.db");
+      const account = privateKeyToAccount(`0x${"ab".repeat(32)}`);
+      const wallet = account.address;
+      const agentInstanceId = "operator-test";
+      await seedAutonomousState(dbPath, wallet, agentInstanceId);
 
-    // When
-    const result = runCli(["status", "--json"], {
-      SQLITE_DB_PATH: dbPath,
-      AGENT_INSTANCE_ID: agentInstanceId,
-      WALLET_PRIVATE_KEY: `0x${"ab".repeat(32)}`,
-    });
+      // When
+      const result = runCli(["status", "--json"], {
+        SQLITE_DB_PATH: dbPath,
+        AGENT_INSTANCE_ID: agentInstanceId,
+        WALLET_PRIVATE_KEY: `0x${"ab".repeat(32)}`,
+      });
 
-    // Then
-    expect(result.exitCode).toBe(0);
-    const output = decodeJsonObject(result.stdout);
-    expect(output["autonomous"]).toMatchObject({
-      walletAddress: wallet,
-      agentInstanceId,
-      candidates: [{ id: "candidate-1", state: "eligible" }],
-      operations: [{ id: "operation-1", status: "prepared" }],
-      settlements: [
-        { id: "settlement-1", status: "retryable" },
-        {
-          id: "settlement-2",
-          status: "terminal",
-          tokenMint: "mint-2",
-          amountAtomic: "15413",
-          confirmedOutputAtomic: null,
-          error: "Jupiter quote failed: 429",
-        },
-      ],
-      safetyPause: { active: true, reason: "settlement_overdue" },
-    });
-  });
+      // Then
+      expect(result.exitCode).toBe(0);
+      const output = decodeJsonObject(result.stdout);
+      expect(output["autonomous"]).toMatchObject({
+        walletAddress: wallet,
+        agentInstanceId,
+        candidates: [{ id: "candidate-1", state: "eligible" }],
+        operations: [{ id: "operation-1", status: "prepared" }],
+        settlements: [
+          { id: "settlement-1", status: "retryable" },
+          {
+            id: "settlement-2",
+            status: "terminal",
+            tokenMint: "mint-2",
+            amountAtomic: "15413",
+            confirmedOutputAtomic: null,
+            error: "Jupiter quote failed: 429",
+          },
+        ],
+        safetyPause: { active: true, reason: "settlement_overdue" },
+      });
+    },
+  );
 
   it(
     "flags terminal settlements with unspent balance in text output",
     { timeout: 90_000 },
     async () => {
-    // Given
-    testDirectory = mkdtempSync(join(tmpdir(), "beam-cli-autonomous-stranded-"));
-    const dbPath = join(testDirectory, "beam.db");
-    const account = privateKeyToAccount(`0x${"ab".repeat(32)}`);
-    const wallet = account.address;
-    const agentInstanceId = "operator-test";
-    await seedAutonomousState(dbPath, wallet, agentInstanceId);
+      // Given
+      testDirectory = mkdtempSync(join(tmpdir(), "beam-cli-autonomous-stranded-"));
+      const dbPath = join(testDirectory, "beam.db");
+      const account = privateKeyToAccount(`0x${"ab".repeat(32)}`);
+      const wallet = account.address;
+      const agentInstanceId = "operator-test";
+      await seedAutonomousState(dbPath, wallet, agentInstanceId);
 
-    // When
-    const result = runCli(["status"], {
-      SQLITE_DB_PATH: dbPath,
-      AGENT_INSTANCE_ID: agentInstanceId,
-      WALLET_PRIVATE_KEY: `0x${"ab".repeat(32)}`,
-    });
+      // When
+      const result = runCli(["status"], {
+        SQLITE_DB_PATH: dbPath,
+        AGENT_INSTANCE_ID: agentInstanceId,
+        WALLET_PRIVATE_KEY: `0x${"ab".repeat(32)}`,
+      });
 
-    // Then (issue #183): the unpriceable terminal is surfaced on the
-    // Unpriceable line — it cannot be valued, so it is not counted as
-    // Stranded capital and the sweep never re-queues it.
-    expect(result.exitCode).toBe(0);
-    const text = decode(result.stdout);
-    expect(text).toContain("Unpriceable: 1 terminal settlement(s) with no USD price");
-    expect(text).toContain("?/mint-2");
-    expect(text).not.toContain("Stranded:");
-  });
+      // Then (issue #183): the unpriceable terminal is surfaced on the
+      // Unpriceable line — it cannot be valued, so it is not counted as
+      // Stranded capital and the sweep never re-queues it.
+      expect(result.exitCode).toBe(0);
+      const text = decode(result.stdout);
+      expect(text).toContain("Unpriceable: 1 terminal settlement(s) with no USD price");
+      expect(text).toContain("?/mint-2");
+      expect(text).not.toContain("Stranded:");
+    },
+  );
 
   it(
     "hides terminal settlements whose mint was later recovered by a confirmed settlement",
     { timeout: 90_000 },
     async () => {
-    // Given a terminal job for mint-2 plus a confirmed orphan-sweep sale of
-    // the same mint (the recovery path from issue #166).
-    testDirectory = mkdtempSync(join(tmpdir(), "beam-cli-autonomous-recovered-"));
-    const dbPath = join(testDirectory, "beam.db");
-    const account = privateKeyToAccount(`0x${"ab".repeat(32)}`);
-    const wallet = account.address;
-    const agentInstanceId = "operator-test";
-    await seedAutonomousState(dbPath, wallet, agentInstanceId, { recovered: true });
+      // Given a terminal job for mint-2 plus a confirmed orphan-sweep sale of
+      // the same mint (the recovery path from issue #166).
+      testDirectory = mkdtempSync(join(tmpdir(), "beam-cli-autonomous-recovered-"));
+      const dbPath = join(testDirectory, "beam.db");
+      const account = privateKeyToAccount(`0x${"ab".repeat(32)}`);
+      const wallet = account.address;
+      const agentInstanceId = "operator-test";
+      await seedAutonomousState(dbPath, wallet, agentInstanceId, { recovered: true });
 
-    // When
-    const result = runCli(["status"], {
-      SQLITE_DB_PATH: dbPath,
-      AGENT_INSTANCE_ID: agentInstanceId,
-      WALLET_PRIVATE_KEY: `0x${"ab".repeat(32)}`,
-    });
+      // When
+      const result = runCli(["status"], {
+        SQLITE_DB_PATH: dbPath,
+        AGENT_INSTANCE_ID: agentInstanceId,
+        WALLET_PRIVATE_KEY: `0x${"ab".repeat(32)}`,
+      });
 
-    // Then the historical terminal record is not reported as stranded.
-    expect(result.exitCode).toBe(0);
-    const text = decode(result.stdout);
-    expect(text).not.toContain("Stranded:");
-  });
+      // Then the historical terminal record is not reported as stranded.
+      expect(result.exitCode).toBe(0);
+      const text = decode(result.stdout);
+      expect(text).not.toContain("Stranded:");
+    },
+  );
 
   it(
     "still reports a terminal settlement newer than any confirmed recovery",
     { timeout: 90_000 },
     async () => {
-    // Given a confirmed sale of mint-2 that PREDATES the terminal row — a
-    // recurring stranding (sold once, then stranded again) must stay visible.
-    testDirectory = mkdtempSync(join(tmpdir(), "beam-cli-autonomous-recurring-"));
-    const dbPath = join(testDirectory, "beam.db");
-    const account = privateKeyToAccount(`0x${"ab".repeat(32)}`);
-    const wallet = account.address;
-    const agentInstanceId = "operator-test";
-    await seedAutonomousState(dbPath, wallet, agentInstanceId, { recurring: true });
+      // Given a confirmed sale of mint-2 that PREDATES the terminal row — a
+      // recurring stranding (sold once, then stranded again) must stay visible.
+      testDirectory = mkdtempSync(join(tmpdir(), "beam-cli-autonomous-recurring-"));
+      const dbPath = join(testDirectory, "beam.db");
+      const account = privateKeyToAccount(`0x${"ab".repeat(32)}`);
+      const wallet = account.address;
+      const agentInstanceId = "operator-test";
+      await seedAutonomousState(dbPath, wallet, agentInstanceId, { recurring: true });
 
-    // When
-    const result = runCli(["status"], {
-      SQLITE_DB_PATH: dbPath,
-      AGENT_INSTANCE_ID: agentInstanceId,
-      WALLET_PRIVATE_KEY: `0x${"ab".repeat(32)}`,
-    });
+      // When
+      const result = runCli(["status"], {
+        SQLITE_DB_PATH: dbPath,
+        AGENT_INSTANCE_ID: agentInstanceId,
+        WALLET_PRIVATE_KEY: `0x${"ab".repeat(32)}`,
+      });
 
-    // Then the newer terminal record stays visible (issue #183): unpriceable
-    // in the test env, so it is surfaced on the Unpriceable line rather than
-    // counted as valued Stranded capital.
-    expect(result.exitCode).toBe(0);
-    const text = decode(result.stdout);
-    expect(text).toContain("Unpriceable: 1 terminal settlement(s) with no USD price");
-    expect(text).not.toContain("Stranded:");
-  });
+      // Then the newer terminal record stays visible (issue #183): unpriceable
+      // in the test env, so it is surfaced on the Unpriceable line rather than
+      // counted as valued Stranded capital.
+      expect(result.exitCode).toBe(0);
+      const text = decode(result.stdout);
+      expect(text).toContain("Unpriceable: 1 terminal settlement(s) with no USD price");
+      expect(text).not.toContain("Stranded:");
+    },
+  );
 
   it(
     "marks the current wallet's active safety pause resolved without live execution",
     { timeout: 90_000 },
     async () => {
-    // Given
-    testDirectory = mkdtempSync(join(tmpdir(), "beam-cli-autonomous-resume-"));
-    const dbPath = join(testDirectory, "beam.db");
-    const account = privateKeyToAccount(`0x${"ab".repeat(32)}`);
-    const wallet = account.address;
-    const agentInstanceId = "operator-test";
-    await seedAutonomousState(dbPath, wallet, agentInstanceId);
-    const environment = {
-      SQLITE_DB_PATH: dbPath,
-      AGENT_INSTANCE_ID: agentInstanceId,
-      WALLET_PRIVATE_KEY: `0x${"ab".repeat(32)}`,
-    };
+      // Given
+      testDirectory = mkdtempSync(join(tmpdir(), "beam-cli-autonomous-resume-"));
+      const dbPath = join(testDirectory, "beam.db");
+      const account = privateKeyToAccount(`0x${"ab".repeat(32)}`);
+      const wallet = account.address;
+      const agentInstanceId = "operator-test";
+      await seedAutonomousState(dbPath, wallet, agentInstanceId);
+      const environment = {
+        SQLITE_DB_PATH: dbPath,
+        AGENT_INSTANCE_ID: agentInstanceId,
+        WALLET_PRIVATE_KEY: `0x${"ab".repeat(32)}`,
+      };
 
-    // When
-    const resume = runCli(["resume"], environment);
-    const status = runCli(["status", "--json"], environment);
+      // When
+      const resume = runCli(["resume"], environment);
+      const status = runCli(["status", "--json"], environment);
 
-    // Then
-    expect(resume.exitCode).toBe(0);
-    const output = decodeJsonObject(status.stdout);
-    expect(output["autonomous"]).toMatchObject({ safetyPause: { active: false } });
-  });
+      // Then
+      expect(resume.exitCode).toBe(0);
+      const output = decodeJsonObject(status.stdout);
+      expect(output["autonomous"]).toMatchObject({ safetyPause: { active: false } });
+    },
+  );
 });

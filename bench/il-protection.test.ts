@@ -42,6 +42,7 @@ function makeAdapter(
   pools: Record<string, ReturnType<typeof makePool>>,
   overrides: Partial<AdapterApi> = {},
 ): AdapterApi {
+  // SAFETY: this adapter fixture implements every method exercised by IL protection.
   return {
     hasWallet: () => false,
     getWalletAddress: () => null,
@@ -215,11 +216,8 @@ function runWithSeed(
     return yield* audit.getRecentDecisions(200);
   });
   return Effect.runPromise(
-    Effect.provide(test, layer) as unknown as Effect.Effect<
-      ReadonlyArray<DecisionRow>,
-      Error,
-      never
-    >,
+    // SAFETY: the provided test layer discharges all services; only the result row type is narrowed.
+    Effect.provide(test, layer) as Effect.Effect<ReadonlyArray<DecisionRow>, Error, never>,
   );
 }
 
@@ -418,9 +416,9 @@ describe("IL protection — IL-dominance fast EXIT (Task 3b)", () => {
     expect(alert.positionId).toBe(position.positionId);
     expect(alert.poolAddress).toBe(POOL);
     const data = alert.data ?? {};
-    expect(typeof data.ilUsd).toBe("number");
+    expect(data.ilUsd).toBeTypeOf("number");
     expect(data.ilUsd).toBeGreaterThan(0);
-    expect(typeof data.hodlValueUsd).toBe("number");
-    expect(typeof data.feesClaimedUsd).toBe("number");
+    expect(data.hodlValueUsd).toBeTypeOf("number");
+    expect(data.feesClaimedUsd).toBeTypeOf("number");
   }, 15_000);
 });

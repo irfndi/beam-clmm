@@ -1,3 +1,4 @@
+/* eslint-disable anti-slop/no-runtime-typeof, anti-slop/no-unknown-parameters */
 import { Effect, Layer } from "effect";
 import { createHash, randomUUID } from "crypto";
 import { readFileSync, existsSync, writeFileSync, mkdirSync } from "fs";
@@ -11,6 +12,8 @@ import {
   type AgentFeedback,
   type FeedbackContext,
   type FeedbackEntry,
+  type FeedbackCategory,
+  type FeedbackSeverity,
   type FeedbackResult,
 } from "./services.js";
 import { getCurrentVersion } from "./version.js";
@@ -63,9 +66,13 @@ function submitCloudFeedback(
     );
     if (res.status === 401 || res.status === 403) return { authFailure: true as const };
     if (!res.ok) return null;
-    const json = (yield* Effect.tryPromise(() => res.json())) as { id?: unknown; duplicate?: unknown };
+    const json: unknown = yield* Effect.tryPromise(() => res.json());
+    if (typeof json !== "object" || json === null || !("id" in json)) return null;
     if (typeof json.id !== "string") return null;
-    return { id: json.id, duplicate: json.duplicate === true };
+    return {
+      id: json.id,
+      duplicate: "duplicate" in json && json.duplicate === true,
+    };
   }).pipe(Effect.catch(() => Effect.succeed(null)));
 }
 
@@ -136,9 +143,8 @@ function readBeamApiKey(): Effect.Effect<string | null, never> {
       const credentialsFile =
         process.env.BEAM_CREDENTIALS_FILE ?? join(getBeamUserConfigDir(), "credentials.json");
       if (!existsSync(credentialsFile)) return null;
-      const value = JSON.parse(readFileSync(credentialsFile, "utf-8")) as {
-        apiKey?: unknown;
-      };
+      const value: unknown = JSON.parse(readFileSync(credentialsFile, "utf-8"));
+      if (typeof value !== "object" || value === null || !("apiKey" in value)) return null;
       return typeof value.apiKey === "string" && value.apiKey.length > 0 ? value.apiKey : null;
     },
     catch: (cause) => (cause instanceof Error ? cause : new Error(String(cause))),
@@ -159,11 +165,13 @@ function toFeedbackEntry(row: {
   reportedAt: number;
   hash: string;
 }): FeedbackEntry {
+  const category = parseFeedbackCategory(row.category);
+  const severity = parseFeedbackSeverity(row.severity);
   return {
     id: row.id,
     agentId: row.agentId,
-    category: row.category as FeedbackEntry["category"],
-    severity: row.severity as FeedbackEntry["severity"],
+    category,
+    severity,
     summary: row.summary,
     details: row.details,
     relatedFiles: row.relatedFiles,
@@ -173,6 +181,29 @@ function toFeedbackEntry(row: {
     reportedAt: row.reportedAt,
     hash: row.hash,
   };
+}
+
+function parseFeedbackCategory(value: string): FeedbackCategory {
+  switch (value) {
+    case "friction":
+    case "suggestion":
+    case "observation":
+    case "praise":
+      return value;
+    default:
+      return "observation";
+  }
+}
+
+function parseFeedbackSeverity(value: string): FeedbackSeverity {
+  switch (value) {
+    case "low":
+    case "medium":
+    case "high":
+      return value;
+    default:
+      return "medium";
+  }
 }
 
 export const FeedbackLive = Layer.effect(

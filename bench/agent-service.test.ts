@@ -235,15 +235,18 @@ describe("validateOverride", () => {
 
 describe("AgentNoOp", () => {
   it("enhanceDecision returns null", async () => {
+    // SAFETY: AgentNoOp ignores runtime context for this no-op contract.
     const result = await Effect.runPromise(AgentNoOp.enhanceDecision(makeDecision(), {} as never));
     expect(result).toBeNull();
   });
 
   it("sendCheckin returns void", async () => {
+    // SAFETY: AgentNoOp ignores the check-in payload for this no-op contract.
     await Effect.runPromise(AgentNoOp.sendCheckin({ type: "checkin" } as never));
   });
 
   it("sendAlert returns void", async () => {
+    // SAFETY: AgentNoOp ignores the alert payload for this no-op contract.
     await Effect.runPromise(AgentNoOp.sendAlert({ type: "alert" } as never));
   });
 
@@ -311,6 +314,8 @@ describe("LatencyWindow", () => {
 });
 
 const makePromptCtx = (decision: AgentDecision): AgentRuntimeContext =>
+  // SAFETY: this fixture supplies every field consumed by the prompt builder.
+  // @ts-expect-error the fixture intentionally omits fields unused by this prompt test.
   ({
     decision,
     pool: {
@@ -331,7 +336,7 @@ const makePromptCtx = (decision: AgentDecision): AgentRuntimeContext =>
     warnings: [],
     recentDecisions: [],
     hasOpenPosition: decision.action === "REBALANCE" || decision.action === "EXIT",
-  }) as unknown as AgentRuntimeContext;
+  }) as AgentRuntimeContext;
 
 const makePositionState = (overrides: Partial<AgentPositionState> = {}): AgentPositionState => ({
   positionId: "pos-1",

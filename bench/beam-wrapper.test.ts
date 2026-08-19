@@ -80,6 +80,7 @@ function runBeam(
   args: string[],
   opts: { version?: string; home?: string; path?: string; cwd?: string; script?: string } = {},
 ): RunResult {
+  // SAFETY: process.env is copied into a child-process environment whose values are strings.
   const env = {
     ...(process.env as Record<string, string>),
     FAKE_BUN_VERSION: opts.version ?? MIN_BUN_VERSION,
@@ -97,6 +98,7 @@ function runBeam(
     });
     return { status: 0, stdout, stderr: "" };
   } catch (err) {
+    // SAFETY: execFileSync errors expose these documented subprocess fields.
     const e = err as { status?: number; stdout?: string | Buffer; stderr?: string | Buffer };
     return {
       status: e.status ?? 1,
@@ -155,7 +157,7 @@ describe("scripts/beam.sh wrapper", () => {
     expect(res.status).toBe(0);
     const log = logLines();
     const execLine = log.find((l) => l.startsWith("EXEC:"));
-    expect(execLine).toBeTruthy();
+    expect(execLine).toBeDefined();
     expect(execLine).toContain("cli/index.ts");
     expect(execLine).toContain("dev --paper");
   });
@@ -168,7 +170,11 @@ describe("scripts/beam.sh wrapper", () => {
     expect(res.status).toBe(0);
     const log = logLines();
     expect(log).toContain(`BEAM_INSTALL_DIR=${realpathSync(REPO_ROOT)}`);
-    expect(log.some((l) => l.startsWith("EXEC:") && l.includes(`${realpathSync(REPO_ROOT)}/cli/index.ts`))).toBe(true);
+    expect(
+      log.some(
+        (l) => l.startsWith("EXEC:") && l.includes(`${realpathSync(REPO_ROOT)}/cli/index.ts`),
+      ),
+    ).toBe(true);
   });
 
   it("resolves the package root through a multi-hop relative symlink chain", () => {
@@ -213,6 +219,7 @@ describe("scripts/beam.sh wrapper", () => {
         execFileSync("awk", ["-v", `a=${a}`, "-v", `b=${b}`, program], { timeout: 10_000 });
         return 0; // a >= b passes the gate
       } catch (err) {
+        // SAFETY: this branch only reads the documented subprocess exit status.
         const e = err as { status?: number };
         return e.status ?? 1;
       }

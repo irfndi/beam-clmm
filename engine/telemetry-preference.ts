@@ -1,3 +1,4 @@
+/* eslint-disable anti-slop/no-runtime-typeof */
 /**
  * Privacy-first telemetry preference module.
  *
@@ -28,13 +29,21 @@ export function readTelemetryPreference(): TelemetryPreference {
       return { enabled: true, updatedAt: new Date().toISOString() };
     }
     const raw = readFileSync(path, "utf-8");
-    const parsed = JSON.parse(raw) as Partial<TelemetryPreference>;
-    if (typeof parsed.enabled !== "boolean") {
+    const parsed: unknown = JSON.parse(raw);
+    if (
+      typeof parsed !== "object" ||
+      parsed === null ||
+      !("enabled" in parsed) ||
+      typeof parsed.enabled !== "boolean"
+    ) {
       return { enabled: true, updatedAt: new Date().toISOString() };
     }
     return {
       enabled: parsed.enabled,
-      updatedAt: typeof parsed.updatedAt === "string" ? parsed.updatedAt : new Date().toISOString(),
+      updatedAt:
+        "updatedAt" in parsed && typeof parsed.updatedAt === "string"
+          ? parsed.updatedAt
+          : new Date().toISOString(),
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);

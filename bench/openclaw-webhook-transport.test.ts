@@ -56,13 +56,16 @@ function makeContext(): AgentRuntimeContext {
 
 describe("OpenClawWebhookTransport", () => {
   it("includes the prompt in the webhook payload", async () => {
-    let capturedBody: unknown = null;
+    type JsonValue = string | number | boolean | null | JsonObject | JsonValue[];
+    type JsonObject = { readonly [key: string]: JsonValue };
+    let capturedBody: JsonObject | null = null;
 
     const server = Bun.serve({
       port: 0,
       hostname: "127.0.0.1",
       fetch: async (request) => {
-        capturedBody = await request.json();
+        // SAFETY: this local server receives the transport's JSON object payload.
+        capturedBody = (await request.json()) as JsonObject;
         return Response.json({ action: "HOLD", confidence: 0.65, reasoning: "ok" });
       },
     });
@@ -76,13 +79,15 @@ describe("OpenClawWebhookTransport", () => {
       const prompt = "Respond with the proposal JSON schema";
       const response = await Effect.runPromise(transport.sendPrompt(prompt, makeContext()));
 
-      expect(response.raw).toBeTruthy();
+      expect(response.raw).toBeDefined();
       expect(capturedBody).toMatchObject({
         type: "beam_prompt",
         prompt,
       });
-      expect((capturedBody as { decision?: unknown; pool?: unknown }).decision).toBeDefined();
-      expect((capturedBody as { decision?: unknown; pool?: unknown }).pool).toBeDefined();
+      // SAFETY: the local server assigns the validated webhook JSON object before this assertion.
+      const body = capturedBody!;
+      expect(body.decision).toBeDefined();
+      expect(body.pool).toBeDefined();
     } finally {
       void server.stop();
     }

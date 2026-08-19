@@ -1,3 +1,4 @@
+// oxlint-disable anti-slop/no-unknown-parameters, anti-slop/no-unsafe-dictionary-type, anti-slop/no-runtime-typeof -- JSON parser predicates are the I/O boundary for the configured signal feed.
 import { Effect, Layer } from "effect";
 import { ConfigService } from "./config-service.js";
 import { CopySignalService } from "./services.js";
@@ -68,15 +69,19 @@ export function parseCopySignalPayload(raw: unknown): ReadonlyArray<CopySignalOb
       !Number.isFinite(observedAt)
     )
       continue;
-    const observation = {
+    const baseObservation = {
       wallet,
       poolAddress,
       action,
       confidence,
       observedAt,
-      ...(typeof value["signature"] === "string" ? { signature: value["signature"] } : {}),
     } satisfies CopySignalObservation;
-    observations.push(observation);
+    const signature = value["signature"];
+    if (typeof signature === "string") {
+      observations.push({ ...baseObservation, signature });
+    } else {
+      observations.push(baseObservation);
+    }
   }
   return observations;
 }
@@ -101,7 +106,7 @@ const fetchSignals = (config: CopySignalConfig) =>
       try: () =>
         fetch(config.endpoint, { signal: AbortSignal.timeout(10_000) }).then((response) => {
           if (!response.ok) throw new Error(`copy-signal HTTP ${response.status}`);
-          return response.json() as Promise<unknown>;
+          return response.json();
         }),
       catch: (cause) => (cause instanceof Error ? cause : new Error(String(cause))),
     }),
@@ -141,7 +146,8 @@ export const CopySignalLive = Layer.effect(
         Effect.map((raw) => {
           const allowed = new Set(settings.wallets);
           const seen = new Set<string>();
-          const valid = parseCopySignalPayload(raw).filter((signal) => {
+          const observations = parseCopySignalPayload(raw);
+          const valid = observations.filter((signal) => {
             const key = `${signal.wallet}:${signal.poolAddress}:${signal.action}:${signal.signature ?? `${signal.wallet}:${signal.poolAddress}:${signal.observedAt}`}`;
             const accepted =
               signal.poolAddress === poolAddress &&
@@ -156,7 +162,7 @@ export const CopySignalLive = Layer.effect(
           return {
             boost: Math.min(settings.maxBoost, wallets.length > 0 ? MAX_BOOST : 0),
             wallets,
-            ignored: parseCopySignalPayload(raw).length - valid.length,
+            ignored: observations.length - valid.length,
           };
         }),
         Effect.catch((error) =>

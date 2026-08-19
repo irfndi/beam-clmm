@@ -10,6 +10,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const FAKE_AGENT = path.join(__dirname, "fake-acp-agent.ts");
 
 function makeContext(): AgentRuntimeContext {
+  // SAFETY: this fixture intentionally omits optional runtime context fields not used here.
   return {
     decision: {
       action: "ENTER",
@@ -17,7 +18,7 @@ function makeContext(): AgentRuntimeContext {
       confidence: 0.8,
       reasoning: "test decision",
     } satisfies AgentDecision,
-  } as unknown as AgentRuntimeContext;
+  } as AgentRuntimeContext;
 }
 
 describe("AcpTransport (ACP v1)", () => {

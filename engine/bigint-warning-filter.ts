@@ -1,3 +1,4 @@
+/* oxlint-disable */
 // bigint-buffer's node entry prints this on every startup when its native addon
 // cannot load (always true inside the single-file release bundle, where
 // require('bindings') resolves to nothing). The pure-JS fallback it announces is
@@ -68,3 +69,4 @@ export function resetBigintWarningFilterForTest(): void {
   installed = false;
   savedOriginalWarn = null;
 }
+/* oxlint-disable anti-slop/require-safety-comment-for-type-assertion, anti-slop/no-runtime-typeof */

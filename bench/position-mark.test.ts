@@ -17,7 +17,12 @@ const token1 = new Token(4663, "0x5fc5360d0400a0fd4f2af552add042d716f1d168", 6);
 // The installed v3-sdk build is JSBI-based (not native bigint): adapt at the
 // boundary. tickCurrent is derived from the price so the Pool's PRICE_BOUNDS
 // invariant holds for out-of-range prices too.
-const sdkAmounts = (liquidity: bigint, tickLower: number, tickUpper: number, sqrtPriceX96: bigint) => {
+const sdkAmounts = (
+  liquidity: bigint,
+  tickLower: number,
+  tickUpper: number,
+  sqrtPriceX96: bigint,
+) => {
   const j = (v: bigint) => JSBI.BigInt(v.toString());
   const tickCurrent = TickMath.getTickAtSqrtRatio(j(sqrtPriceX96));
   const pool = new Pool(token0, token1, 3000, j(sqrtPriceX96), j(liquidity), tickCurrent);

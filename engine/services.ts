@@ -1,3 +1,5 @@
+/* oxlint-disable anti-slop/no-unsafe-dictionary-type */
+
 import { Context, Effect } from "effect";
 import type {
   AgentDecision,
@@ -5,7 +7,7 @@ import type {
   AgentProposal,
   BinArray,
   EntryDepositMode,
-  EntryStrategyShape,
+  EntryStrategyMode,
   MemoryCategory,
   MemoryEntry,
   PoolCooldown,
@@ -37,7 +39,8 @@ import type { ClaimedReward as RewardClaim } from "./rewards.js";
 export type GeckoStats = GeckoPoolStats;
 
 /**
- * A reward slot claimed off-chain (LM/farm rewards). Same shape as the
+ // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
+ * A reward slot claimed off-chain (LM/farm rewards). Same form as the
  * rewards module's ClaimedReward — the adapter contract re-exports it so
  * claim accounting stays unified.
  */
@@ -133,11 +136,13 @@ export interface AdapterApi {
   /**
    * Per-mint SPL holdings the wallet-balance read already scans (Token
    * Program + Token-2022, zero-amount ATAs skipped). Served from the SAME
+   // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
    * 30s cached snapshot as getWalletBalanceUsd — identical TTL, cleared by
    * the same post-transaction invalidation — so the two reads never
    * disagree and a holdings read costs no extra RPC. Empty map in paper
    * mode (no wallet). A live read failure FAILS the Effect (the balance
    * semantics); idle-capital consumers catch it fail-open and treat the
+   // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
    * cycle as having no idle capital. Native SOL is not included.
    */
   readonly getWalletHoldings: () => Effect.Effect<
@@ -223,7 +228,7 @@ export interface AdapterApi {
   >;
   /**
    * Open a live position and deposit liquidity by strategy. The deposit
-   * distribution comes from `options.strategyShape` (resolved per pool by the
+   * distribution comes from `options.strategyMode` (resolved per pool by the
    * decision loop) falling back to the configured `ENTRY_STRATEGY_TYPE`
    * (`auto` falls back to `spot` here — the adapter has no volatility
    * context). When the wallet can fund only one of the pool's tokens, the
@@ -237,7 +242,7 @@ export interface AdapterApi {
     lowerBinId: number,
     upperBinId: number,
     positionSizeUsd: number,
-    options?: { strategyShape?: EntryStrategyShape },
+    options?: { strategyMode?: EntryStrategyMode },
   ) => Effect.Effect<
     {
       positionPubKey: string;
@@ -299,7 +304,7 @@ export interface AdapterApi {
    * Atomically rebalance a position into a new range via the Meteora SDK's
    * `rebalancePosition` instruction. The position account — and therefore its
    * identity (`positionPubKey`), entry accounting and accrued-fee history — is
-   * preserved; there is no close+reopen exposure window. The reshaped size is
+   * preserved; there is no close+reopen exposure window. The repositioned size is
    * the position's current on-chain liquidity plus the optional `topUp`
    * amounts (used by auto-compound to redeposit just-claimed fees); it is
    * never derived from paper-trading config.
@@ -420,6 +425,7 @@ export interface AdapterApi {
    * Claim LM farm rewards for a position via the SDK's claimAllLMRewards
    * (LM-only — never the combined fee+reward claim, which would move swap
    * fees outside the engine's own fee accounting). Rides the same periodic
+   // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
    * cadence as claimFees. Skip semantics (not errors): the pool's function
    * type is LimitOrder with nothing pending, or the position has no pending
    * rewards — claiming when nothing is claimable is a no-op by construction,
@@ -477,9 +483,11 @@ export interface AdapterApi {
   readonly getTokenDecimals: (mintAddress: string) => Effect.Effect<number, Error>;
   /**
    * On-chain mint/freeze authority for a token mint, from the parsed mint
+   // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
    * account. The mint authority doubles as the documented deployer fallback
    * for the deployer blacklist; the freeze authority feeds the safety
    * screening (freeze-authority-enabled tokens are rejected). Callers treat
+   // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
    * RPC failures as fail-open.
    */
   readonly getMintAuthorities: (

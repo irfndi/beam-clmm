@@ -39,7 +39,7 @@ describe("telemetry preference file I/O", () => {
   it("readTelemetryPreference returns the written (disabled) preference", () => {
     const read = readTelemetryPreference();
     expect(read.enabled).toBe(false);
-    expect(typeof read.updatedAt).toBe("string");
+    expect(read.updatedAt).toBeTypeOf("string");
     const parsed = Date.parse(read.updatedAt);
     expect(Number.isFinite(parsed)).toBe(true);
   });

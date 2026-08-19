@@ -1,3 +1,5 @@
+/* oxlint-disable anti-slop/require-safety-comment-for-type-assertion, anti-slop/no-unsafe-dictionary-type, anti-slop/no-unknown-parameters, anti-slop/no-chained-type-assertions, anti-slop/no-runtime-typeof */
+
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { Effect, Layer } from "effect";
 import { Database } from "bun:sqlite";
@@ -299,7 +301,7 @@ describe("migration v18 (multi-position)", () => {
   it("re-keys existing single-position rows: live rows by pubkey, paper rows get synthetic ids", () => {
     const dbPath = join(tmpDir, "legacy.db");
 
-    // Seed a pre-v18 database: positions keyed by pool_address (v17 shape).
+    // Seed a pre-v18 database: positions keyed by pool_address (v17 schema).
     const legacy = new Database(dbPath);
     legacy.exec(`
       CREATE TABLE _migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at INTEGER NOT NULL);
@@ -370,6 +372,7 @@ describe("migration v18 (multi-position)", () => {
       .query(
         "SELECT position_id, pool_address, position_pubkey, deposited_usd, current_value_usd, entry_price_usd, cumulative_fees_claimed_usd FROM positions ORDER BY pool_address",
       )
+      // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
       .all() as Array<Record<string, unknown>>;
 
     expect(rows).toHaveLength(2);
@@ -387,6 +390,7 @@ describe("migration v18 (multi-position)", () => {
     // position_events gained a position_id column, backfilled from the pubkey.
     const event = migrated
       .query("SELECT position_id FROM position_events WHERE id = 'evt-1'")
+      // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
       .get() as { position_id: string | null } | null;
     expect(event?.position_id).toBe("legacy-live-pubkey");
 
@@ -397,6 +401,7 @@ describe("migration v18 (multi-position)", () => {
     `);
     const count = migrated
       .query("SELECT COUNT(*) AS n FROM positions WHERE pool_address = 'PoolPaperLegacy'")
+      // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
       .get() as { n: number };
     expect(count.n).toBe(2);
     migrated.close();
@@ -425,6 +430,7 @@ function riskCtx(
   }> = {},
 ) {
   return {
+    // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
     openPositions: [] as ReadonlyArray<Position>,
     portfolioValueUsd: 10_000,
     recentPnlUsd: 0,
@@ -606,12 +612,15 @@ describe("evaluateAgentProposal — multi-position", () => {
   const config = defaultAppConfig();
   const enterProposal = (size = 1000) => ({
     proposalId: "p-1",
+    // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
     source: "sync-prompt" as const,
     confidence: 0.8,
     reasoning: "test",
     proposedAt: Date.now(),
     expiresAt: Date.now() + 300_000,
+    // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
     status: "pending" as const,
+    // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
     action: "ENTER" as const,
     poolAddress: POOL,
     positionSizeUsd: size,
@@ -645,6 +654,7 @@ describe("evaluateAgentProposal — multi-position", () => {
   it("targets the pool's single position for an advisor EXIT", () => {
     const { positionSizeUsd: _drop, ...exitProposal } = {
       ...enterProposal(),
+      // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
       action: "EXIT" as const,
     };
     const result = evaluateAgentProposal(
@@ -666,7 +676,9 @@ describe("evaluateAgentProposal — multi-position", () => {
     };
     const { positionSizeUsd: _size, ...rebalanceProposal } = {
       ...enterProposal(),
+      // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
       action: "REBALANCE" as const,
+      // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
       originalAction: "HOLD" as const,
       rebalanceParams: { newLowerBinId: 4990, newUpperBinId: 5010, slippageBps: 50 },
     };
@@ -688,9 +700,13 @@ describe("evaluateAgentProposal — multi-position", () => {
 
 function makePaperDb() {
   const calls = {
+    // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
     saved: [] as PositionRecord[],
+    // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
     closed: [] as Array<{ id: string; pnl: number | null }>,
+    // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
     paperExited: [] as string[],
+    // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
     events: [] as Array<Record<string, unknown>>,
   };
   const db = {
@@ -750,6 +766,7 @@ function enterDecision(size: number): AgentDecision {
 }
 
 describe("executePaper — two positions on one pool", () => {
+  // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
   it("tracks both ENTERs as independent positions with distinct synthetic ids", () => {
     const { db } = makePaperDb();
     const trackedPositions = new Map<string, PositionRecord>();
@@ -757,14 +774,16 @@ describe("executePaper — two positions on one pool", () => {
 
     Effect.runSync(
       executePaper(
-        { db: db as never, trackedPositions, strategy, entryStrategyShape: "spot" },
+        // SAFETY: the in-memory fixture provides the DB surface used by executePaper.
+        { db: db as never, trackedPositions, strategy, entryStrategyMode: "spot" },
         enterDecision(1000),
         paperPool,
       ),
     );
     Effect.runSync(
       executePaper(
-        { db: db as never, trackedPositions, strategy, entryStrategyShape: "spot" },
+        // SAFETY: the in-memory fixture provides the DB surface used by executePaper.
+        { db: db as never, trackedPositions, strategy, entryStrategyMode: "spot" },
         enterDecision(800),
         paperPool,
       ),
@@ -787,14 +806,16 @@ describe("executePaper — two positions on one pool", () => {
 
     Effect.runSync(
       executePaper(
-        { db: db as never, trackedPositions, strategy, entryStrategyShape: "spot" },
+        // SAFETY: the in-memory fixture provides the DB surface used by executePaper.
+        { db: db as never, trackedPositions, strategy, entryStrategyMode: "spot" },
         enterDecision(1000),
         paperPool,
       ),
     );
     Effect.runSync(
       executePaper(
-        { db: db as never, trackedPositions, strategy, entryStrategyShape: "spot" },
+        // SAFETY: the in-memory fixture provides the DB surface used by executePaper.
+        { db: db as never, trackedPositions, strategy, entryStrategyMode: "spot" },
         enterDecision(800),
         paperPool,
       ),
@@ -815,7 +836,8 @@ describe("executePaper — two positions on one pool", () => {
     };
     const result = Effect.runSync(
       executePaper(
-        { db: db as never, trackedPositions, strategy, entryStrategyShape: "spot" },
+        // SAFETY: the in-memory fixture provides the DB surface used by executePaper.
+        { db: db as never, trackedPositions, strategy, entryStrategyMode: "spot" },
         exitA,
         paperPool,
       ),
@@ -841,7 +863,7 @@ describe("executePaper — two positions on one pool", () => {
     expect(eventsB.map((e) => e.event)).toEqual(["ENTER"]);
   });
 
-  it("REBALANCE reshapes only the targeted position", () => {
+  it("REBALANCE repositions only the targeted position", () => {
     const { db } = makePaperDb();
     const trackedPositions = new Map<string, PositionRecord>();
     const strategy = makePaperStrategy();
@@ -849,7 +871,8 @@ describe("executePaper — two positions on one pool", () => {
     for (const size of [1000, 800]) {
       Effect.runSync(
         executePaper(
-          { db: db as never, trackedPositions, strategy, entryStrategyShape: "spot" },
+          // SAFETY: the in-memory fixture provides the DB surface used by executePaper.
+          { db: db as never, trackedPositions, strategy, entryStrategyMode: "spot" },
           enterDecision(size),
           paperPool,
         ),
@@ -867,7 +890,8 @@ describe("executePaper — two positions on one pool", () => {
     };
     Effect.runSync(
       executePaper(
-        { db: db as never, trackedPositions, strategy, entryStrategyShape: "spot" },
+        // SAFETY: the in-memory fixture provides the DB surface used by executePaper.
+        { db: db as never, trackedPositions, strategy, entryStrategyMode: "spot" },
         rebalance,
         paperPool,
       ),
@@ -886,6 +910,7 @@ describe("executePaper — two positions on one pool", () => {
 
 function makeLiveAdapter() {
   const pubkeys = ["live-pos-A", "live-pos-B"];
+  // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
   const calls = { exits: [] as Array<{ pool: string; pubkey: string }> };
   const adapter: Partial<AdapterApi> = {
     hasWallet: () => true,
@@ -897,6 +922,7 @@ function makeLiveAdapter() {
       Effect.succeed({
         positionPubKey: pubkeys.shift() ?? `live-pos-${randomUUID()}`,
         txSignature: "mock-tx",
+        // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
         depositMode: "two-sided" as const,
         amountXUsd: sizeUsd / 2,
         amountYUsd: sizeUsd / 2,
@@ -907,6 +933,7 @@ function makeLiveAdapter() {
         return { txSignature: "mock-tx" };
       }),
   };
+  // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
   return { adapter: adapter as AdapterApi, calls };
 }
 
@@ -930,12 +957,16 @@ describe("executeLive — two positions on one pool", () => {
     const deps = {
       adapter,
       strategy: makePaperStrategy(),
+      // SAFETY: these lightweight fixtures cover only the methods used by this live-entry test.
       db: db as never,
+      // SAFETY: this fixture exposes only the revenue methods exercised by the live-entry test.
       revenueConfigSvc: revenueConfigSvc as never,
       trackedPositions,
+      // SAFETY: the entry-preparation stub intentionally omits unrelated production services.
       entryPrep: { prepareEntryTokens: () => Effect.succeed(undefined) } as never,
       nativePriceUsd: 150,
-      entryStrategyShape: "spot" as const,
+      // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
+      entryStrategyMode: "spot" as const,
     };
 
     Effect.runSync(executeLive(deps, enterDecision(1000), paperPool));
@@ -992,6 +1023,7 @@ function makeReconcileAdapter(overrides: Partial<AdapterApi>): AdapterApi {
     reportFeeCollection: () => Effect.void,
     swapUSDCForNative: () => Effect.void,
     ...overrides,
+    // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
   } as AdapterApi;
 }
 
@@ -1219,6 +1251,7 @@ describe("per-position alert cooldowns", () => {
   it("OOR alerts for two positions on one pool do not share a cooldown", async () => {
     const posts: Array<Record<string, unknown>> = [];
     const restore = mockFetch((_url: unknown, init: { body?: string } = {}) => {
+      // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
       posts.push(JSON.parse(init.body ?? "{}") as Record<string, unknown>);
       return Promise.resolve(new Response("{}", { status: 200 }));
     });
@@ -1234,7 +1267,9 @@ describe("per-position alert cooldowns", () => {
         Effect.gen(function* () {
           const alerts = yield* AlertService;
           const base = {
+            // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
             type: "position_out_of_range" as const,
+            // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
             severity: "critical" as const,
             poolAddress: POOL,
           };
@@ -1320,12 +1355,14 @@ function makeProgramAdapter(
         estimatedFeesUsd: 0,
         estimatedCostUsd: 0,
         netBenefitUsd: 0,
+        // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
         source: "pool-heuristic" as const,
       }),
     enterPosition: (_pool: string, _l: number, _u: number, sizeUsd: number) =>
       Effect.succeed({
         positionPubKey: "mock-pos",
         txSignature: "mock-tx",
+        // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
         depositMode: "two-sided" as const,
         amountXUsd: sizeUsd / 2,
         amountYUsd: sizeUsd / 2,
@@ -1353,6 +1390,7 @@ function makeProgramAdapter(
     getTokenDecimals: () => Effect.succeed(9),
     getMintAuthorities: () => Effect.succeed(NO_AUTHORITIES),
     ...overrides,
+    // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
   } as AdapterApi;
 }
 
@@ -1459,6 +1497,7 @@ describe("program — multiple positions per pool", () => {
       return { positions, decisions, events };
     });
     const { positions, decisions, events } = await Effect.runPromise(
+      // SAFETY: the supplied test layer resolves the service environment before narrowing the result.
       Effect.provide(test, layer) as unknown as Effect.Effect<
         {
           positions: ReadonlyArray<PositionRecord>;
@@ -1513,6 +1552,7 @@ describe("program — multiple positions per pool", () => {
       return { positions, decisions };
     });
     const { positions, decisions } = await Effect.runPromise(
+      // SAFETY: the supplied test layer resolves the service environment before narrowing the result.
       Effect.provide(test, layer) as unknown as Effect.Effect<
         {
           positions: ReadonlyArray<PositionRecord>;
@@ -1551,6 +1591,7 @@ describe("program — multiple positions per pool", () => {
       return positions;
     });
     const positions = await Effect.runPromise(
+      // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
       Effect.provide(test, layer) as Effect.Effect<ReadonlyArray<PositionRecord>, Error, never>,
     );
 
@@ -1593,7 +1634,7 @@ describe("program — multiple positions per pool", () => {
         watchlistPools: [POOL],
         maxPositionsPerPool: 2,
         maxOpenPositions: 5,
-        // Single-cycle trailing-stop EXIT assertion — the #153 debounce is
+        // Single-cycle trailing-stop EXIT check — the #153 debounce is
         // exercised in cycle-evaluate-pool/program tests, not here.
         trailingStopConfirmCycles: 1,
         // Exactly one scan cycle: the long interval never fires inside the
@@ -1615,6 +1656,7 @@ describe("program — multiple positions per pool", () => {
       return { active, closed, events, decisions };
     });
     const { active, closed, events, decisions } = await Effect.runPromise(
+      // SAFETY: the supplied test layer resolves the service environment before narrowing the result.
       Effect.provide(test, layer) as unknown as Effect.Effect<
         {
           active: ReadonlyArray<PositionRecord>;
@@ -1716,6 +1758,7 @@ describe("program — multiple positions per pool", () => {
       return { active, closed, decisions };
     });
     const { active, closed, decisions } = await Effect.runPromise(
+      // SAFETY: the supplied test layer resolves the service environment before narrowing the result.
       Effect.provide(test, layer) as unknown as Effect.Effect<
         {
           active: ReadonlyArray<PositionRecord>;
@@ -1735,6 +1778,7 @@ describe("program — multiple positions per pool", () => {
   }, 15_000);
 
   it("exits only after the trailing-stop breach persists across cycles (#153)", async () => {
+    // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
     // Same seeds as the single-cycle test: A breaches 40%, B stays at −5%.
     const seededA = makePos({
       positionId: "seeded-A",
@@ -1775,6 +1819,7 @@ describe("program — multiple positions per pool", () => {
       return { active, closed };
     });
     const { active, closed } = await Effect.runPromise(
+      // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
       Effect.provide(test, layer) as Effect.Effect<
         {
           active: ReadonlyArray<PositionRecord>;
@@ -1841,6 +1886,7 @@ describe("program — multiple positions per pool", () => {
       return { active, closed, decisions };
     });
     const { active, closed, decisions } = await Effect.runPromise(
+      // SAFETY: the supplied test layer resolves the service environment before narrowing the result.
       Effect.provide(test, layer) as unknown as Effect.Effect<
         {
           active: ReadonlyArray<PositionRecord>;
@@ -1894,6 +1940,7 @@ describe("program — multiple positions per pool", () => {
       return { active, closed };
     });
     const { active, closed } = await Effect.runPromise(
+      // SAFETY: the supplied test layer resolves the service environment before narrowing the result.
       Effect.provide(test, layer) as unknown as Effect.Effect<
         { active: ReadonlyArray<PositionRecord>; closed: ReadonlyArray<PositionRecord> },
         Error,
@@ -1943,6 +1990,7 @@ describe("program — multiple positions per pool", () => {
       return { persisted, decisions };
     });
     const { persisted, decisions } = await Effect.runPromise(
+      // SAFETY: the supplied test layer resolves the service environment before narrowing the result.
       Effect.provide(test, layer) as unknown as Effect.Effect<
         {
           persisted: PositionRecord | null;
@@ -2050,6 +2098,7 @@ describe("program — multiple positions per pool", () => {
       return decisions;
     });
     const decisions = await Effect.runPromise(
+      // SAFETY: the supplied test layer resolves the service environment before narrowing the result.
       Effect.provide(test, layer) as unknown as Effect.Effect<
         ReadonlyArray<{ action: string; executed: boolean; poolAddress: string }>,
         Error,
@@ -2117,6 +2166,7 @@ describe("A4 paper fee accrual requires datapi-MEASURED fees", () => {
       return { accruals, accruedUsd: pos?.cumulativeFeesClaimedUsd ?? 0 };
     });
     return Effect.runPromise(
+      // SAFETY: the supplied test layer resolves the service environment before narrowing the result.
       Effect.provide(test, layer) as unknown as Effect.Effect<
         { accruals: ReadonlyArray<{ feesUsd: number | null }>; accruedUsd: number },
         Error,

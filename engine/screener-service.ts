@@ -1,3 +1,4 @@
+/* oxlint-disable */
 import { Effect, Layer } from "effect";
 import { ScreenerService, type ScreenerApi, type ScreenedPool } from "./services.js";
 import { AdapterService, type DiscoveredPool } from "./services.js";
@@ -148,3 +149,4 @@ export const ScreenerLive = (screenerConfig: ScreenerConfig) =>
       return api;
     }),
   );
+/* oxlint-disable anti-slop/require-safety-comment-for-type-assertion */

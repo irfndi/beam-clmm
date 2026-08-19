@@ -43,13 +43,56 @@ interface Bar {
   close: number;
 }
 
+interface JsonObject {
+  readonly [key: string]: JsonValue;
+}
+
+type JsonValue = JsonObject | JsonValue[] | string | number | boolean | null;
+
+function isJsonObject(value: JsonValue): value is JsonObject {
+  return Object.prototype.toString.call(value) === "[object Object]";
+}
+
+function isJsonValue(value: JsonValue): value is JsonValue {
+  const tag = Object.prototype.toString.call(value);
+  return (
+    value === null ||
+    tag === "[object String]" ||
+    tag === "[object Number]" ||
+    tag === "[object Boolean]" ||
+    Object.values(value).every(isJsonValue)
+  );
+}
+
+function property(value: JsonValue, key: string): JsonValue | undefined {
+  return isJsonObject(value) ? value[key] : undefined;
+}
+
+function stringProperty(value: JsonValue, key: string): string | null {
+  const candidate = property(value, key);
+  if (Object.prototype.toString.call(candidate) !== "[object String]") return null;
+  // SAFETY: the tag check above establishes that this JSON value is a string.
+  return candidate as string;
+}
+
+function numberProperty(value: JsonValue, key: string): number | null {
+  const candidate = property(value, key);
+  const tag = Object.prototype.toString.call(candidate);
+  return tag === "[object Number]" || tag === "[object String]" ? Number(candidate) : null;
+}
+
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /** Fetch with a small delay + retry on 429/5xx (GeckoTerminal rate-limits hard). */
-async function getJson(url: string): Promise<any> {
+async function getJson(url: string): Promise<JsonValue> {
   for (let attempt = 0; attempt < 4; attempt++) {
     const res = await fetch(url);
-    if (res.ok) return res.json();
+    if (res.ok) {
+      // SAFETY: the payload is JSON by Fetch contract; all traversed fields are guarded below.
+      const parsed = (await res.json()) as JsonValue;
+      if (!isJsonValue(parsed)) throw new Error(`Invalid JSON response from ${url}`);
+      return parsed;
+    }
     if (res.status === 429 || res.status >= 500) {
       await sleep(1500 * (attempt + 1));
       continue;
@@ -62,16 +105,16 @@ async function getJson(url: string): Promise<any> {
 async function fetchGeckoPoolInfo(pool: string): Promise<GeckoPoolInfo | null> {
   try {
     const d = await getJson(`${GECKO}/pools/${pool}`);
-    const a = d?.data?.attributes ?? {};
+    const attributes = property(property(d, "data") ?? null, "attributes") ?? null;
     return {
       address: pool,
-      name: a.name ?? "",
-      reserveInUsd: Number(a.reserve_in_usd ?? 0),
-      volume24hUsd: Number(a.volume_usd?.h24 ?? 0),
-      feePct: a.pool_fee_percentage != null ? Number(a.pool_fee_percentage) : null,
-      created: a.pool_created_at ?? null,
-      baseSymbol: a.base_token_symbol ?? null,
-      quoteSymbol: a.quote_token_symbol ?? null,
+      name: stringProperty(attributes, "name") ?? "",
+      reserveInUsd: numberProperty(attributes, "reserve_in_usd") ?? 0,
+      volume24hUsd: numberProperty(property(attributes, "volume_usd") ?? null, "h24") ?? 0,
+      feePct: numberProperty(attributes, "pool_fee_percentage"),
+      created: stringProperty(attributes, "pool_created_at"),
+      baseSymbol: stringProperty(attributes, "base_token_symbol"),
+      quoteSymbol: stringProperty(attributes, "quote_token_symbol"),
     };
   } catch (e) {
     log.warn("gecko pool info failed", { pool, err: String(e instanceof Error ? e.message : e) });
@@ -81,7 +124,11 @@ async function fetchGeckoPoolInfo(pool: string): Promise<GeckoPoolInfo | null> {
 
 async function fetchGeckoOhlcv(pool: string): Promise<Bar[]> {
   const d = await getJson(`${GECKO}/pools/${pool}/ohlcv/day?limit=180`);
-  const list: unknown[][] = d?.data?.attributes?.ohlcv_list ?? [];
+  const listValue = property(
+    property(property(d, "data") ?? null, "attributes") ?? null,
+    "ohlcv_list",
+  );
+  const list: readonly JsonValue[] = Array.isArray(listValue) ? listValue : [];
   const bars: Bar[] = [];
   for (const entry of list) {
     if (!Array.isArray(entry) || entry.length < 5) continue;
@@ -102,12 +149,15 @@ async function fetchDexPaprikaDetail(pool: string): Promise<{
 } | null> {
   try {
     const d = await getJson(`${DP}/pools/${pool}`);
-    const toks = Array.isArray(d?.tokens) ? d.tokens : [];
-    const symbols = toks.map((t: any) => t?.symbol ?? "").filter(Boolean) as string[];
+    const tokens = property(d, "tokens");
+    const toks = Array.isArray(tokens) ? tokens : [];
+    const symbols = toks
+      .map((token) => stringProperty(token, "symbol"))
+      .filter((symbol): symbol is string => symbol !== null && symbol.length > 0);
     return {
-      fee: d?.fee != null ? Number(d.fee) : null,
+      fee: numberProperty(d, "fee"),
       symbols: [symbols[0] ?? "", symbols[1] ?? ""],
-      lastPriceUsd: d?.last_price_usd != null ? Number(d.last_price_usd) : null,
+      lastPriceUsd: numberProperty(d, "last_price_usd"),
     };
   } catch (e) {
     log.warn("dexpaprika detail failed", { pool, err: String(e instanceof Error ? e.message : e) });
@@ -123,11 +173,11 @@ function usd(v: number): number {
   return Number.isFinite(v) && v > 0 ? v : 0;
 }
 
-async function backfillPool(db: any, pool: string): Promise<void> {
+async function backfillPool(db: string, pool: string): Promise<void> {
   // Sequential (GeckoTerminal rate-limits parallel bursts); DexPaprika in parallel.
   const ohlcv = await fetchGeckoOhlcv(pool).catch((e) => {
     log.warn("ohlcv failed", { pool, err: String(e instanceof Error ? e.message : e) });
-    return [] as Bar[];
+    return [];
   });
   const [info, dp] = await Promise.all([fetchGeckoPoolInfo(pool), fetchDexPaprikaDetail(pool)]);
 
@@ -259,9 +309,9 @@ async function main(argv: ReadonlyArray<string>): Promise<void> {
 }
 
 const isDirect =
-  typeof Bun !== "undefined" &&
-  (Bun.main?.endsWith("ops/backfill-dexpaprika.ts") ||
-    Bun.main?.endsWith("ops/backfill-dexpaprika.js"));
+  Boolean(globalThis.Bun) &&
+  (globalThis.Bun?.main?.endsWith("ops/backfill-dexpaprika.ts") ||
+    globalThis.Bun?.main?.endsWith("ops/backfill-dexpaprika.js"));
 if (isDirect)
   main(process.argv.slice(2)).catch((e) => {
     log.error("backfill failed", { err: e instanceof Error ? e.message : String(e) });

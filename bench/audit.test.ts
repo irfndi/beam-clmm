@@ -7,7 +7,6 @@ import { AuditService } from "../engine/services.js";
 import { DbLive } from "../engine/db-service.js";
 
 const tmpDir = path.resolve("bench/tmp-audit");
-let testId = 0;
 
 describe("AuditService", () => {
   beforeAll(() => {
@@ -35,12 +34,11 @@ describe("AuditService", () => {
     };
   }
 
-  function run<T, E, R>(effect: Effect.Effect<T, E, R>, layer: unknown): T {
-    return Effect.runSync((Effect.provide as any)(effect, layer));
+  function run<T, E, R, E2>(effect: Effect.Effect<T, E, R>, layer: Layer.Layer<R, E2, never>): T {
+    return Effect.runSync(Effect.provide(effect, layer));
   }
 
   it("records a decision", () => {
-    testId++;
     const layer = makeLayer();
     const api = run(
       Effect.gen(function* () {
@@ -57,7 +55,6 @@ describe("AuditService", () => {
   });
 
   it("returns recent decisions in reverse order", () => {
-    testId++;
     const layer = makeLayer();
     const api = run(
       Effect.gen(function* () {
@@ -76,7 +73,6 @@ describe("AuditService", () => {
   });
 
   it("limits results", () => {
-    testId++;
     const layer = makeLayer();
     const api = run(
       Effect.gen(function* () {
@@ -94,7 +90,6 @@ describe("AuditService", () => {
   });
 
   it("keeps same-cycle same-millisecond decisions unique", () => {
-    testId++;
     const layer = makeLayer();
     const api = run(
       Effect.gen(function* () {
@@ -111,7 +106,6 @@ describe("AuditService", () => {
   });
 
   it("returns empty array when no records", () => {
-    testId++;
     const layer = makeLayer();
     const api = run(
       Effect.gen(function* () {

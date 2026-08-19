@@ -128,7 +128,11 @@ export function computeClmmValueUsd(input: {
   const L = depositedUsd / valuePerLAtEntry;
 
   const valuePerL =
-    currentPriceUsd <= Pa ? belowValuePerL : currentPriceUsd >= Pb ? aboveValuePerL : inRangeValuePerL;
+    currentPriceUsd <= Pa
+      ? belowValuePerL
+      : currentPriceUsd >= Pb
+        ? aboveValuePerL
+        : inRangeValuePerL;
   const value = L * valuePerL;
   return Number.isFinite(value) && value >= 0 ? value : null;
 }

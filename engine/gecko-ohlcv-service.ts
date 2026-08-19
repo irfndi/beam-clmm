@@ -78,14 +78,29 @@ export interface GeckoOhlcvSignals {
 
 export type FetchLike = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
 
-function isObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
+type JsonPrimitive = null | boolean | number | string;
+type JsonValue = JsonPrimitive | JsonObject | ReadonlyArray<JsonValue>;
+type JsonObject = { readonly [key: string]: JsonValue };
+
+function isObject(value: JsonValue | undefined): value is JsonObject {
+  if (Object.prototype.toString.call(value) !== "[object Object]") return false;
+  // SAFETY: the Object tag is checked above and JsonValue excludes host
+  // objects; the value is therefore the JSON object representation.
+  return true;
 }
 
-function readFiniteNumber(value: unknown): number | null {
-  if (typeof value === "number") return Number.isFinite(value) ? value : null;
-  if (typeof value === "string" && value.trim().length > 0) {
+function readFiniteNumber(value: JsonValue | undefined): number | null {
+  if (value === undefined) return null;
+  const tag = Object.prototype.toString.call(value);
+  if (tag === "[object Number]") {
     const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  if (tag === "[object String]") {
+    // SAFETY: the String tag above is the JSON primitive discriminator.
+    const text = value as string;
+    if (text.trim().length === 0) return null;
+    const parsed = Number(text);
     return Number.isFinite(parsed) ? parsed : null;
   }
   return null;
@@ -97,7 +112,7 @@ function readFiniteNumber(value: unknown): number | null {
  * close are dropped (dead/corrupt candle — a positive close is required to
  * compute log returns and drawdown).
  */
-export function parseGeckoOhlcv(raw: unknown): ReadonlyArray<GeckoOhlcvBar> {
+export function parseGeckoOhlcv(raw: JsonValue): ReadonlyArray<GeckoOhlcvBar> {
   if (!isObject(raw)) return [];
   const data = raw["data"];
   if (!isObject(data)) return [];
@@ -170,15 +185,30 @@ export function summarizeGeckoOhlcv(bars: ReadonlyArray<GeckoOhlcvBar>): GeckoOh
     if (bar.high > atlHigh) atlHigh = bar.high;
     totalVolumeQuote += bar.volumeQuote;
   }
-  const latestClose = ascending[ascending.length - 1]!.close;
+  const latestBar = ascending.at(-1);
+  if (latestBar === undefined) {
+    return {
+      bars,
+      atlHigh: 0,
+      latestClose: 0,
+      drawdownFromAth: 0,
+      dailyReturnStddev: 0,
+      totalVolumeQuote: 0,
+      barCount: 0,
+    };
+  }
+  const latestClose = latestBar.close;
   const drawdownFromAth = atlHigh > 0 ? Math.max(0, 1 - latestClose / atlHigh) : 0;
 
   let dailyReturnStddev = 0;
   if (ascending.length >= 2) {
     const logReturns: number[] = [];
     for (let i = 1; i < ascending.length; i++) {
-      const prev = ascending[i - 1]!.close;
-      const cur = ascending[i]!.close;
+      const prevBar = ascending[i - 1];
+      const curBar = ascending[i];
+      if (prevBar === undefined || curBar === undefined) continue;
+      const prev = prevBar.close;
+      const cur = curBar.close;
       if (prev > 0 && cur > 0) {
         logReturns.push(Math.log(cur / prev));
       }
@@ -305,7 +335,9 @@ export async function getGeckoPoolOhlcv(
       });
       return serveFailure();
     }
-    const body: unknown = await res.json();
+    // SAFETY: the response body is parsed as JSON inside the surrounding
+    // failure boundary; malformed JSON follows the existing null path.
+    const body: JsonValue = JSON.parse(await res.text());
     const bars = parseGeckoOhlcv(body);
     if (bars.length === 0) {
       logger.warn("GeckoTerminal OHLCV returned no usable bars", { pool: poolAddress });

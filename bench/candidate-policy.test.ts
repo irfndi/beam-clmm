@@ -90,12 +90,14 @@ describe("hasFreshPriceEvidence / evaluateCandidateHealth", () => {
 
   it("returns hard_safety_failure and market_data/route/screener gates", () => {
     expect(
-      evaluateCandidateHealth(healthInput({ safety: { kind: "hard_safety_failure", reason: "blacklisted" } })),
+      evaluateCandidateHealth(
+        healthInput({ safety: { kind: "hard_safety_failure", reason: "blacklisted" } }),
+      ),
     ).toEqual({ kind: "hard_safety_failure", reason: "blacklisted" });
 
-    expect(
-      evaluateCandidateHealth(healthInput({ marketDataAvailable: false })).kind,
-    ).toBe("transient_failure");
+    expect(evaluateCandidateHealth(healthInput({ marketDataAvailable: false })).kind).toBe(
+      "transient_failure",
+    );
 
     expect(
       evaluateCandidateHealth(
@@ -144,7 +146,11 @@ describe("transitionCandidate", () => {
   it("resets healthy scans on a transient failure while observing", () => {
     let c = transitionCandidate(
       baseCandidate({ state: "observing", healthyScanCount: 2 }),
-      { kind: "scan", observedAt: 4_000, health: { kind: "transient_failure", reason: "route_unavailable" } },
+      {
+        kind: "scan",
+        observedAt: 4_000,
+        health: { kind: "transient_failure", reason: "route_unavailable" },
+      },
       policy,
     );
     expect(c.state).toBe("observing");
@@ -154,7 +160,11 @@ describe("transitionCandidate", () => {
   it("rejects on a hard safety failure and records the reason", () => {
     const c = transitionCandidate(
       baseCandidate({ state: "observing", healthyScanCount: 2, cooldownUntil: 999 }),
-      { kind: "scan", observedAt: 5_000, health: { kind: "hard_safety_failure", reason: "blacklisted" } },
+      {
+        kind: "scan",
+        observedAt: 5_000,
+        health: { kind: "hard_safety_failure", reason: "blacklisted" },
+      },
       policy,
     );
     expect(c.state).toBe("rejected");

@@ -1,3 +1,4 @@
+/* eslint-disable anti-slop/no-unknown-parameters */
 import fs from "fs";
 import path from "path";
 import { getBeamLogsPath } from "./paths.js";
@@ -32,9 +33,10 @@ const LEVEL_COLOR = {
 const RESET = "\x1b[0m";
 
 function emit(level: LogLevel, component: string, msg: string, data?: unknown) {
-  const entry: LogEntry = data !== undefined
-  ? { ts: new Date().toISOString(), level, component, msg, data }
-  : { ts: new Date().toISOString(), level, component, msg };
+  const entry: LogEntry =
+    data !== undefined
+      ? { ts: new Date().toISOString(), level, component, msg, data }
+      : { ts: new Date().toISOString(), level, component, msg };
 
   const color = LEVEL_COLOR[level];
   const tag = `${color}[${level.toUpperCase().padEnd(5)}]${RESET}`;

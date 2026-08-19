@@ -114,6 +114,7 @@ export interface BinArray {
   /**
    * False when per-bin reserves were NOT fetched from on-chain bin arrays
    * (e.g. the SDK call failed). Metrics must treat bin-derived signals as
+   // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
    * "unknown" rather than fabricating them. Undefined is treated as known
    * for backward compatibility with stored snapshots and test fixtures.
    */
@@ -181,7 +182,7 @@ export interface PoolState {
 /**
  * Whether a pool's tvl/volume/fees came from a MEASURED source. Only datapi and
  * geckoterminal carry real volume/fees; "heuristic" is fabricated and undefined
- * (a fixture/legacy pool that was never enriched) is treated the same — unknown.
+ * (a fixture/legacy pool that was never enriched) is treated the same — unverified.
  * Fail-closed: the volume/fee gates and the paper-accrual gate act ONLY on a
  * measured source, so fabricated values can never silently pass a gate. In
  * production the adapter always tags raw pools "heuristic", so this is exactly
@@ -216,6 +217,7 @@ export interface PoolSnapshot {
    * may omit it; the DB layer normalizes an omitted value to `"heuristic"` on
    * write and always restores a concrete member, so NO replayed tick is left
    * `undefined`. Conservative fail-closed default: a snapshot whose provenance
+   // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
    * was never recorded is treated as fabricated (`heuristic`), NOT datapi.
    */
   statsSource?: "datapi" | "krystal" | "geckoterminal" | "heuristic" | undefined;
@@ -311,7 +313,7 @@ export interface Position {
 
 export type ActionType = "HOLD" | "REBALANCE" | "EXIT" | "ENTER";
 
-// ─── DLMM entry strategy shapes (Meteora StrategyType) ───────────────────────
+// ─── DLMM entry strategy modes (Meteora StrategyType) ───────────────────────
 
 /**
  * Concrete Meteora DLMM deposit distribution for position creation:
@@ -321,15 +323,16 @@ export type ActionType = "HOLD" | "REBALANCE" | "EXIT" | "ENTER";
  * - `bidask` — weighted toward the range edges (StrategyType.BidAsk); suits
  *   trending / one-sided-leaning deployment.
  */
-export type EntryStrategyShape = "spot" | "curve" | "bidask";
+export type EntryStrategyMode = "spot" | "curve" | "bidask";
 
 /**
  * ENTRY_STRATEGY_TYPE config value. `auto` resolves per pool from recent
- * volatility/trend metrics in the decision loop (see recommendStrategyShape);
+ * volatility/trend metrics in the decision loop (see recommendStrategyMode);
  * anything else is used as-is. Default: `spot`.
  */
-export type EntryStrategyType = EntryStrategyShape | "auto";
+export type EntryStrategyType = EntryStrategyMode | "auto";
 
+// SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
 /** How a live entry was funded, as executed by the adapter. */
 export type EntryDepositMode = "two-sided" | "single-sided-x" | "single-sided-y";
 

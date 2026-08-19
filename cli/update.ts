@@ -33,7 +33,7 @@ import { Effect } from "effect";
 import { createLogger } from "../engine/logger.js";
 import { findRunningEngineProcess, isProcessAlive, readLockfile } from "./lockfile.js";
 
-if (typeof Bun === "undefined") {
+if (!globalThis.Bun) {
   console.error("The beam update command requires the Bun runtime.");
   process.exit(1);
 }
@@ -201,11 +201,7 @@ function extractTarball(tarballPath: string, destDir: string): void {
 function findBundleRoot(extractedDir: string): string {
   // The bundle tarball contains `dist/` and `lib/` at its root. Some tar
   // tools add a single top-level prefix; tolerate that.
-  const candidates = [
-    extractedDir,
-    join(extractedDir, "beam"),
-    join(extractedDir, "beam-clmm"),
-  ];
+  const candidates = [extractedDir, join(extractedDir, "beam"), join(extractedDir, "beam-clmm")];
   for (const dir of candidates) {
     if (existsSync(join(dir, "dist", "cli", "index.mjs"))) {
       return dir;
@@ -313,7 +309,7 @@ function resolveInstallRoot(): string {
   } catch {}
 
   try {
-    const main = typeof Bun !== "undefined" ? Bun.main : (process.argv[1] ?? "");
+    const main = globalThis.Bun?.main ?? process.argv[1] ?? "";
     if (main) {
       const mainReal = realpathSync(main);
       const mainCandidate = dirname(dirname(mainReal));
@@ -462,11 +458,7 @@ function migrateVersionedInstallDir(installDir: string): string {
 }
 
 function findSourceRoot(extractedDir: string): string {
-  const candidates = [
-    extractedDir,
-    join(extractedDir, "beam"),
-    join(extractedDir, "beam-clmm"),
-  ];
+  const candidates = [extractedDir, join(extractedDir, "beam"), join(extractedDir, "beam-clmm")];
   for (const dir of candidates) {
     if (
       existsSync(join(dir, "package.json")) &&
@@ -675,6 +667,7 @@ export const updateCommand = new Command("update")
         );
       }
       const channel = options.canary ? "canary" : channelValue;
+      // SAFETY: source selection requires r2Url; validation occurs in fetchRelease before this branch.
       const r2Url = options.r2Url as string;
 
       const release = await Effect.runPromise(fetchLatestRelease(repo, channel, r2Url));
@@ -714,8 +707,10 @@ export const updateCommand = new Command("update")
       const installRoot = resolveInstallRoot();
       const fromSource = isSourceInstall(installRoot);
       if (fromSource) {
+        // SAFETY: Commander supplies skipSmokeTest as the declared boolean option.
         await updateFromSource(release, installRoot, workDir, options.skipSmokeTest as boolean);
       } else {
+        // SAFETY: Commander supplies skipSmokeTest as the declared boolean option.
         await updateFromBundle(release, workDir, options.skipSmokeTest as boolean);
       }
 
@@ -738,15 +733,15 @@ export const updateCommand = new Command("update")
       // process (the lockfile is only liveness-checked). The lockfile is the
       // fallback for `beam dev` runs the scan misses.
       const runningPid =
-        runningEngine?.pid ??
-        (lock !== null && isProcessAlive(lock.pid) ? lock.pid : null) ??
-        null;
+        runningEngine?.pid ?? (lock !== null && isProcessAlive(lock.pid) ? lock.pid : null) ?? null;
       if (runningPid !== null) {
         console.log("");
         console.log(
           `RESTART REQUIRED — the running Beam agent (PID ${runningPid}) is still executing the OLD build.`,
         );
-        console.log("  The new version is installed, verified, and will go live on the next restart.");
+        console.log(
+          "  The new version is installed, verified, and will go live on the next restart.",
+        );
         console.log("  Restart it with:");
         console.log("    systemctl --user restart beam-agent.service   (systemd user service)");
         console.log(`    kill ${runningPid} && beam dev                 (manual/foreground run)`);

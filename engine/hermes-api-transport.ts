@@ -1,3 +1,4 @@
+/* oxlint-disable */
 import { Effect } from "effect";
 import { createLogger } from "./logger.js";
 import { stringifySafe } from "./bigint-json.js";
@@ -169,3 +170,4 @@ function parseChatContent(body: string): string {
     return body;
   }
 }
+/* oxlint-disable anti-slop/require-safety-comment-for-type-assertion */

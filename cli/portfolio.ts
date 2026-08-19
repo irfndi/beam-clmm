@@ -32,11 +32,7 @@ function buildProgram(): Layer.Layer<DbService | AdapterService, Error, never> {
   const dbPath = process.env.SQLITE_DB_PATH ?? getBeamDbPath();
   const dbLayer = DbLive(dbPath);
   const adapterLayer = Layer.provide(AdapterLive, ConfigLive);
-  return Layer.mergeAll(dbLayer, adapterLayer) as unknown as Layer.Layer<
-    DbService | AdapterService,
-    Error,
-    never
-  >;
+  return Layer.mergeAll(dbLayer, adapterLayer);
 }
 
 /**
@@ -62,7 +58,7 @@ export function readCliWalletBalance(): Effect.Effect<number | null, never, Adap
           logger.warn("Wallet balance read failed; equity is positions-only", {
             error: err instanceof Error ? err.message : String(err),
           });
-          return Effect.succeed(null as number | null);
+          return Effect.succeed(null);
         },
         onSuccess: (value) => Effect.succeed(value ?? null),
       }),
@@ -138,10 +134,7 @@ interface Pnl {
   pnlPct: number;
 }
 
-export function computePnl(
-  depositedUsd: number,
-  currentValueUsd: number,
-): Pnl {
+export function computePnl(depositedUsd: number, currentValueUsd: number): Pnl {
   const pnlUsd = currentValueUsd - depositedUsd;
   const pnlPct = depositedUsd > 0 ? (pnlUsd / depositedUsd) * 100 : 0;
   return { pnlUsd, pnlPct };

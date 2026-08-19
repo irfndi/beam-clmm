@@ -25,6 +25,31 @@ export interface BeamCredentials {
   createdAt: string;
 }
 
+type JsonValue =
+  | null
+  | string
+  | number
+  | boolean
+  | JsonValue[]
+  | { readonly [key: string]: JsonValue };
+type JsonRecord = { readonly [key: string]: JsonValue };
+
+function isRecord(value: JsonValue): value is JsonRecord {
+  return Object.prototype.toString.call(value) === "[object Object]";
+}
+
+function isStringValue(value: JsonValue | undefined): value is string {
+  return Object.prototype.toString.call(value) === "[object String]";
+}
+
+function parseCredentials(value: JsonValue): BeamCredentials | null {
+  if (!isRecord(value)) return null;
+  const { apiKey, userId, createdAt } = value;
+  return isStringValue(apiKey) && isStringValue(userId) && isStringValue(createdAt)
+    ? { apiKey, userId, createdAt }
+    : null;
+}
+
 interface ApiRequestOptions {
   apiKey?: string;
   signal?: AbortSignal;
@@ -32,7 +57,7 @@ interface ApiRequestOptions {
 
 export async function beamApiPost<T = unknown>(
   path: string,
-  body: Record<string, unknown>,
+  body: JsonRecord,
   options: ApiRequestOptions = {},
 ): Promise<ApiResponse<T>> {
   const headers = new Headers({ "Content-Type": "application/json" });
@@ -56,6 +81,7 @@ export async function beamApiPost<T = unknown>(
         error: `Beam API error: ${response.status} ${response.statusText}`,
       };
     }
+    // SAFETY: the caller supplies T for the documented endpoint response shape.
     const json = (await response.json()) as T;
     return { ok: true, status: response.status, data: json };
   } catch (err) {
@@ -87,6 +113,7 @@ export async function beamApiGet<T = unknown>(
         error: `Beam API error: ${response.status} ${response.statusText}`,
       };
     }
+    // SAFETY: the caller supplies T for the documented endpoint response shape.
     const json = (await response.json()) as T;
     return { ok: true, status: response.status, data: json };
   } catch (err) {
@@ -105,7 +132,8 @@ export function readCredentials(): {
 } | null {
   try {
     if (!fs.existsSync(CREDENTIALS_FILE)) return null;
-    return JSON.parse(fs.readFileSync(CREDENTIALS_FILE, "utf-8"));
+    // SAFETY: parseCredentials validates the JSON object before returning credentials.
+    return parseCredentials(JSON.parse(fs.readFileSync(CREDENTIALS_FILE, "utf-8")) as JsonValue);
   } catch {
     return null;
   }

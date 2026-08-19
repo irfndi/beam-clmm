@@ -32,6 +32,7 @@ function sha256(file: string): string {
 }
 
 const pkgPath = path.join(repoRoot, "package.json");
+// SAFETY: package.json is repository-owned and the release script only reads its version field.
 const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf-8")) as { version: string };
 // In CI the git tag is the source of truth; package.json may be stale at the
 // tagged commit. Prefer VERSION env so bundles are named after the release.

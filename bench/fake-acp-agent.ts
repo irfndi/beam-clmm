@@ -15,7 +15,27 @@ const PERMISSION_REQUEST_ID = 9001;
 let awaitingPermissionAck = false;
 let pendingPromptId: number | undefined;
 
-function send(msg: Record<string, unknown>): void {
+type JsonValue = string | number | boolean | null | undefined | JsonObject | JsonValue[];
+type JsonObject = { readonly [key: string]: JsonValue };
+interface RequestFrame {
+  id?: number;
+  method?: string;
+  params?: JsonObject;
+}
+
+function isJsonObject(value: JsonValue): value is JsonObject {
+  return Object.prototype.toString.call(value) === "[object Object]";
+}
+
+function isStringValue(value: JsonValue | undefined): value is string {
+  return Object.prototype.toString.call(value) === "[object String]";
+}
+
+function isNumberValue(value: JsonValue | undefined): value is number {
+  return Object.prototype.toString.call(value) === "[object Number]";
+}
+
+function send(msg: JsonObject): void {
   process.stdout.write(JSON.stringify(msg) + "\n");
 }
 
@@ -42,9 +62,18 @@ function sendReply(promptId: number | undefined): void {
 const rl = readline.createInterface({ input: process.stdin });
 rl.on("line", (line) => {
   if (!line.trim()) return;
-  let req: { id?: number; method?: string; params?: Record<string, unknown> };
+  let req: RequestFrame;
   try {
-    req = JSON.parse(line) as { id?: number; method?: string; params?: Record<string, unknown> };
+    // SAFETY: the fixture receives newline-delimited JSON and validates its object shape below.
+    const parsed = JSON.parse(line) as JsonValue;
+    if (!isJsonObject(parsed)) return;
+    const id = isNumberValue(parsed.id) ? parsed.id : undefined;
+    const method = isStringValue(parsed.method) ? parsed.method : undefined;
+    const params = isJsonObject(parsed.params) ? parsed.params : undefined;
+    req = {};
+    if (id !== undefined) req.id = id;
+    if (method !== undefined) req.method = method;
+    if (params !== undefined) req.params = params;
   } catch {
     return;
   }
@@ -54,7 +83,7 @@ rl.on("line", (line) => {
   // reply (a response carrying our id and no method). The content is irrelevant;
   // receiving it (rather than timing out) proves the host answers inbound ACP requests.
   if (awaitingPermissionAck) {
-    if (id === PERMISSION_REQUEST_ID && typeof method !== "string") {
+    if (id === PERMISSION_REQUEST_ID && !isStringValue(method)) {
       awaitingPermissionAck = false;
       sendReply(pendingPromptId);
     }
@@ -62,7 +91,7 @@ rl.on("line", (line) => {
   }
 
   if (method === "initialize") {
-    if (typeof params?.protocolVersion !== "number") {
+    if (!isNumberValue(params?.protocolVersion)) {
       send({
         jsonrpc: "2.0",
         id,

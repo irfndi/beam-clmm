@@ -25,6 +25,10 @@ const logger = createLogger("status-cli");
  *  operator checks status. */
 export type StrandedLookupState = "ok" | "unavailable" | "unpriceable";
 
+function priceLookupState(price: number): StrandedLookupState {
+  return price > 0 ? "ok" : "unpriceable";
+}
+
 export type StrandedSettlementClassification =
   | { readonly kind: "stranded"; readonly valueUsd: number }
   | { readonly kind: "dust"; readonly valueUsd: number }
@@ -39,10 +43,8 @@ export type StrandedSettlementClassification =
  * two. Outage → Unavailable (retry later); unresolvable → Unpriceable
  * (permanent; a retry can never succeed). Exported for unit coverage.
  */
-export function decimalsFailureState(err: unknown): StrandedLookupState {
-  return err instanceof Error && err.message.includes("Cannot resolve decimals")
-    ? "unpriceable"
-    : "unavailable";
+export function decimalsFailureState(message: string): StrandedLookupState {
+  return message.includes("Cannot resolve decimals") ? "unpriceable" : "unavailable";
 }
 
 /**
@@ -160,11 +162,7 @@ function buildProgram(): Layer.Layer<
   const auditLayer = Layer.provide(AuditLive, dbLayer);
   const configLayer = ConfigLive;
   const adapterLayer = Layer.provide(AdapterLive, configLayer);
-  return Layer.mergeAll(dbLayer, auditLayer, configLayer, adapterLayer) as unknown as Layer.Layer<
-    DbService | AuditService | ConfigService | AdapterService,
-    Error,
-    never
-  >;
+  return Layer.mergeAll(dbLayer, auditLayer, configLayer, adapterLayer);
 }
 
 export const statusCommand = new Command("status")
@@ -427,7 +425,7 @@ network; with no stranded settlements it is fully offline.`,
                 const price = p[mint] ?? 0;
                 return {
                   mint,
-                  state: (price > 0 ? "ok" : "unpriceable") as StrandedLookupState,
+                  state: priceLookupState(price),
                   value: price,
                 };
               }),
@@ -444,7 +442,7 @@ network; with no stranded settlements it is fully offline.`,
                   return [
                     mint,
                     {
-                      state: (price > 0 ? "ok" : "unpriceable") as StrandedLookupState,
+                      state: priceLookupState(price),
                       value: price,
                     },
                   ] as const;
@@ -478,7 +476,7 @@ network; with no stranded settlements it is fully offline.`,
                   Effect.catch((err) =>
                     Effect.succeed({
                       mint,
-                      state: decimalsFailureState(err),
+                      state: decimalsFailureState(String(err)),
                       value: 0,
                     }),
                   ),
@@ -621,8 +619,8 @@ network; with no stranded settlements it is fully offline.`,
           );
         }).pipe(Effect.provide(program)),
       );
-    } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : String(err);
+    } catch (err) {
+      const message = String(err);
       logger.error(`Status command failed: ${message}`);
       console.error(`✗ Failed to load status: ${message}`);
       process.exit(1);

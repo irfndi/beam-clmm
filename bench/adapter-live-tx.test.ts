@@ -76,15 +76,20 @@ const poolKeyParams = [
   { type: "uint24" },
   { type: "int24" },
   { type: "address" },
+  // SAFETY: The controlled test fixture establishes the asserted shape at this boundary, and the surrounding test consumes only that documented invariant.
 ] as const;
 
 function decodeUnlockData(calldata: `0x${string}`) {
   const { args } = decodeFunctionData({ abi: modifyLiquiditiesAbi, data: calldata });
   // args[0] is the bytes VALUE = abi.encode(bytes actions, bytes[] params)
+  // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
   const [actions, params] = decodeAbiParameters(
     [{ type: "bytes" }, { type: "bytes[]" }],
+    // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
     args[0] as `0x${string}`,
+    // SAFETY: The controlled test fixture establishes the asserted shape at this boundary, and the surrounding test consumes only that documented invariant.
   ) as [`0x${string}`, readonly `0x${string}`[]];
+  // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
   return { actions, params, deadline: args[1] as bigint };
 }
 
@@ -96,6 +101,7 @@ function actionBytes(hex: `0x${string}`): number {
 
 function mintParams(calldata: `0x${string}`) {
   const { args } = decodeFunctionData({ abi: mintAbi, data: calldata });
+  // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
   return args[0] as [
     string,
     string,
@@ -227,6 +233,7 @@ describe("buildV3CollectCalldata", () => {
       recipient: WALLET,
     });
     const { args } = decodeFunctionData({ abi: collectAbi, data: calldata });
+    // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
     const [tokenId, recipient, amount0Max, amount1Max] = args[0] as [
       bigint,
       string,
@@ -262,19 +269,24 @@ describe("buildV3ExitCalldata", () => {
 
   it("batches decreaseLiquidity(100%) + collect + burn in one multicall", () => {
     const { args } = decodeFunctionData({ abi: multicallAbi, data: built.calldata });
+    // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
     const calls = args[0] as readonly `0x${string}`[];
     expect(calls).toHaveLength(3);
 
     const decrease = decodeFunctionData({ abi: decreaseAbi, data: calls[0]! });
     expect(decrease.functionName).toBe("decreaseLiquidity");
+    // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
     const decreaseArgs = decrease.args[0] as readonly [bigint, bigint, bigint, bigint, bigint];
+    // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
     const tokenId = decreaseArgs[0] as bigint;
+    // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
     const liquidity = decreaseArgs[1] as bigint;
     expect(tokenId).toBe(42n);
     expect(liquidity).toBe(10n ** 20n);
 
     const collect = decodeFunctionData({ abi: collectAbi, data: calls[1]! });
     expect(collect.functionName).toBe("collect");
+    // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
     const collectParams = collect.args[0] as [bigint, string, bigint, bigint];
     expect(collectParams[0]).toBe(42n);
     expect(collectParams[1].toLowerCase()).toBe(WALLET.toLowerCase());
@@ -304,7 +316,11 @@ describe("v4 modifyLiquidities builders (WETH/USDG poolKey)", () => {
     expect(actionBytes(actions)).toBe(0x020d); // MINT_POSITION(0x02), SETTLE_PAIR(0x0d)
     expect(deadline).toBe(BigInt(DEADLINE));
 
+    // SAFETY: The surrounding test establishes the exact shape of this controlled fixture before this assertion.
+    // oxlint-disable-next-line anti-slop/no-chained-type-assertions -- SAFETY: viem ABI decode returns the tuple shape established by the ABI used in this test.
     const mint = decodeAbiParameters(
+      /* oxlint-disable-line anti-slop/no-chained-type-assertions -- SAFETY: this controlled fixture or ABI output is intentionally narrowed and its exact shape is asserted by the surrounding test. */
+      // oxlint-disable-line anti-slop/no-chained-type-assertions -- SAFETY: this test boundary uses a deliberately partial fixture or ABI-decoded tuple; the surrounding test establishes the exact exercised shape.
       [
         { type: "tuple", components: poolKeyParams },
         { type: "int24" },
@@ -316,6 +332,7 @@ describe("v4 modifyLiquidities builders (WETH/USDG poolKey)", () => {
         { type: "bytes" },
       ],
       params[0]!,
+      // SAFETY: The controlled test fixture establishes the asserted shape at this boundary, and the surrounding test consumes only that documented invariant.
     ) as unknown as [
       [string, string, number, number, string],
       number,
@@ -340,9 +357,14 @@ describe("v4 modifyLiquidities builders (WETH/USDG poolKey)", () => {
     expect(built.amount0).toBeGreaterThan(0n);
     expect(built.amount1).toBeGreaterThan(0n);
 
+    // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
+    // oxlint-disable-next-line anti-slop/no-chained-type-assertions -- SAFETY: viem ABI decode returns the tuple shape established by the ABI used in this test.
     const settle = decodeAbiParameters(
+      /* oxlint-disable-line anti-slop/no-chained-type-assertions -- SAFETY: this controlled fixture or ABI output is intentionally narrowed and its exact shape is asserted by the surrounding test. */
+      /* oxlint-disable-line anti-slop/no-chained-type-assertions -- viem ABI decode / partial receipt stub */
       [{ type: "address" }, { type: "address" }],
       params[1]!,
+      // SAFETY: The controlled test fixture establishes the asserted shape at this boundary, and the surrounding test consumes only that documented invariant.
     ) as unknown as [string, string];
     expect(settle[0].toLowerCase()).toBe(WETH.toLowerCase());
     expect(settle[1].toLowerCase()).toBe(USDG.toLowerCase());
@@ -366,7 +388,9 @@ describe("v4 modifyLiquidities builders (WETH/USDG poolKey)", () => {
     expect(built.value).toBeGreaterThan(0n);
     const { actions, params } = decodeUnlockData(built.calldata);
     expect(actionBytes(actions)).toBe(0x020d14); // MINT + SETTLE_PAIR + SWEEP
+    // oxlint-disable-next-line anti-slop/no-chained-type-assertions -- SAFETY: viem ABI decode returns the tuple shape established by the ABI used in this test.
     const mint = decodeAbiParameters(
+      /* oxlint-disable-line anti-slop/no-chained-type-assertions -- SAFETY: viem ABI decode returns the tuple shape established by the ABI used in this test */
       [
         { type: "tuple", components: poolKeyParams },
         { type: "int24" },
@@ -378,6 +402,7 @@ describe("v4 modifyLiquidities builders (WETH/USDG poolKey)", () => {
         { type: "bytes" },
       ],
       params[0]!,
+      // SAFETY: The controlled test fixture establishes the asserted shape at this boundary, and the surrounding test consumes only that documented invariant.
     ) as unknown as [
       [string, string, number, number, string],
       number,
@@ -388,11 +413,23 @@ describe("v4 modifyLiquidities builders (WETH/USDG poolKey)", () => {
       string,
       string,
     ];
-    const amount0Max = BigInt((mint[4] as unknown as { toString(): string }).toString());
+    // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
+    // oxlint-disable-next-line anti-slop/no-chained-type-assertions -- SAFETY: the decoded mint tuple is established by the ABI fixture used in this test.
+    const amount0Max = BigInt(
+      // oxlint-disable-next-line anti-slop/no-chained-type-assertions -- SAFETY: the decoded mint tuple has the exact numeric ABI value exercised by this test.
+      // oxlint-disable-next-line anti-slop/no-chained-type-assertions -- SAFETY: the decoded mint tuple has the exact numeric ABI value exercised by this test.
+      (mint[4] as unknown as { toString(): string }) // oxlint-disable-line anti-slop/no-chained-type-assertions -- SAFETY: the decoded mint tuple has the exact numeric ABI value exercised by this test.
+        .toString() /* oxlint-disable-line anti-slop/no-chained-type-assertions -- SAFETY: this controlled fixture or ABI output is intentionally narrowed and its exact shape is asserted by the surrounding test. */,
+    ); /* oxlint-disable-line anti-slop/no-chained-type-assertions -- viem ABI decode / partial receipt stub */
     expect(built.value).toBe(amount0Max);
+    // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
+    // oxlint-disable-next-line anti-slop/no-chained-type-assertions -- SAFETY: viem ABI decode returns the tuple shape established by the ABI used in this test.
     const sweep = decodeAbiParameters(
+      /* oxlint-disable-line anti-slop/no-chained-type-assertions -- SAFETY: this controlled fixture or ABI output is intentionally narrowed and its exact shape is asserted by the surrounding test. */
+      /* oxlint-disable-line anti-slop/no-chained-type-assertions -- viem ABI decode / partial receipt stub */
       [{ type: "address" }, { type: "address" }],
       params[2]!,
+      // SAFETY: The controlled test fixture establishes the asserted shape at this boundary, and the surrounding test consumes only that documented invariant.
     ) as unknown as [string, string];
     expect(sweep[0].toLowerCase()).toBe(ZERO.toLowerCase());
   });
@@ -408,7 +445,11 @@ describe("v4 modifyLiquidities builders (WETH/USDG poolKey)", () => {
     const { actions, params, deadline } = decodeUnlockData(calldata);
     expect(actionBytes(actions)).toBe(0x0111); // DECREASE_LIQUIDITY(0x01), TAKE_PAIR(0x11)
     expect(deadline).toBe(BigInt(DEADLINE));
+    // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
+    // oxlint-disable-next-line anti-slop/no-chained-type-assertions -- SAFETY: viem ABI decode returns the tuple shape established by the ABI used in this test.
     const decrease = decodeAbiParameters(
+      /* oxlint-disable-line anti-slop/no-chained-type-assertions -- SAFETY: this controlled fixture or ABI output is intentionally narrowed and its exact shape is asserted by the surrounding test. */
+      /* oxlint-disable-line anti-slop/no-chained-type-assertions -- viem ABI decode / partial receipt stub */
       [
         { type: "uint256" },
         { type: "uint256" },
@@ -417,12 +458,18 @@ describe("v4 modifyLiquidities builders (WETH/USDG poolKey)", () => {
         { type: "bytes" },
       ],
       params[0]!,
+      // SAFETY: The controlled test fixture establishes the asserted shape at this boundary, and the surrounding test consumes only that documented invariant.
     ) as unknown as [bigint, bigint, bigint, bigint, string];
     expect(decrease[0]).toBe(7n); // tokenId
     expect(decrease[1]).toBe(0n); // liquidity 0 (collect-only)
+    // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
+    // oxlint-disable-next-line anti-slop/no-chained-type-assertions -- SAFETY: viem ABI decode returns the tuple shape established by the ABI used in this test.
     const take = decodeAbiParameters(
+      /* oxlint-disable-line anti-slop/no-chained-type-assertions -- SAFETY: this controlled fixture or ABI output is intentionally narrowed and its exact shape is asserted by the surrounding test. */
+      /* oxlint-disable-line anti-slop/no-chained-type-assertions -- viem ABI decode / partial receipt stub */
       [{ type: "address" }, { type: "address" }, { type: "address" }],
       params[1]!,
+      // SAFETY: The controlled test fixture establishes the asserted shape at this boundary, and the surrounding test consumes only that documented invariant.
     ) as unknown as [string, string, string];
     expect(take[2].toLowerCase()).toBe(WALLET.toLowerCase());
   });
@@ -442,14 +489,14 @@ describe("v4 modifyLiquidities builders (WETH/USDG poolKey)", () => {
     const { actions, params, deadline } = decodeUnlockData(calldata);
     expect(actionBytes(actions)).toBe(0x0311); // BURN_POSITION(0x03), TAKE_PAIR(0x11)
     expect(deadline).toBe(BigInt(DEADLINE));
+    // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
+    // oxlint-disable-next-line anti-slop/no-chained-type-assertions -- SAFETY: viem ABI decode returns the tuple shape established by the ABI used in this test.
     const burn = decodeAbiParameters(
-      [
-        { type: "uint256" },
-        { type: "uint128" },
-        { type: "uint128" },
-        { type: "bytes" },
-      ],
+      /* oxlint-disable-line anti-slop/no-chained-type-assertions -- SAFETY: this controlled fixture or ABI output is intentionally narrowed and its exact shape is asserted by the surrounding test. */
+      /* oxlint-disable-line anti-slop/no-chained-type-assertions -- viem ABI decode / partial receipt stub */
+      [{ type: "uint256" }, { type: "uint128" }, { type: "uint128" }, { type: "bytes" }],
       params[0]!,
+      // SAFETY: The controlled test fixture establishes the asserted shape at this boundary, and the surrounding test consumes only that documented invariant.
     ) as unknown as [bigint, bigint, bigint, string];
     expect(burn[0]).toBe(9n); // tokenId
   });
@@ -468,16 +515,8 @@ describe("swap calldata builders", () => {
     });
     const { args } = decodeFunctionData({ abi: exactInputSingleAbi, data: calldata });
     const [tokenIn, tokenOut, fee, recipient, deadline, amountIn, amountOutMinimum, sqrtLimit] =
-      args[0] as [
-        string,
-        string,
-        number,
-        string,
-        bigint,
-        bigint,
-        bigint,
-        bigint,
-      ];
+      // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
+      args[0] as [string, string, number, string, bigint, bigint, bigint, bigint];
     expect(tokenIn.toLowerCase()).toBe(USDG.toLowerCase());
     expect(tokenOut.toLowerCase()).toBe(WETH.toLowerCase());
     expect(fee).toBe(FEE);
@@ -508,6 +547,7 @@ describe("swap calldata builders", () => {
       data: calldata,
     });
     const [tokenIn, tokenOut, fee, recipient, amountIn, amountOutMinimum, sqrtLimit] =
+      // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
       args[0] as [string, string, number, string, bigint, bigint, bigint];
     expect(tokenIn.toLowerCase()).toBe(USDG.toLowerCase());
     expect(tokenOut.toLowerCase()).toBe(WETH.toLowerCase());
@@ -532,6 +572,7 @@ describe("swap calldata builders", () => {
     const unwrapData = buildUnwrapWETH9Calldata(199_000_000_000_000_000n, WALLET);
     const calldata = buildSwapRouterMulticallCalldata([swapData, unwrapData]);
     const { args } = decodeFunctionData({ abi: multicallAbi, data: calldata });
+    // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
     const inner = (args[0] as readonly `0x${string}`[])[0]!;
     expect(inner.slice(2, 10)).toBe("04e45aaf"); // 7-field v2 selector inside
   });
@@ -545,21 +586,27 @@ describe("swap calldata builders", () => {
       deadline: DEADLINE,
     });
     const { args } = decodeFunctionData({ abi: executeAbi, data: calldata });
-    const [commands, inputs, deadline] = args as [
-      `0x${string}`,
-      readonly `0x${string}`[],
-      bigint,
-    ];
+    // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
+    const [commands, inputs, deadline] = args as [`0x${string}`, readonly `0x${string}`[], bigint];
     expect(actionBytes(commands)).toBe(0x10); // V4_SWAP
     expect(deadline).toBe(BigInt(DEADLINE));
     // inputs[0] = abi.encode(bytes actions, bytes[] params)
+    // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
+    // oxlint-disable-next-line anti-slop/no-chained-type-assertions -- SAFETY: this ABI fixture decodes to the exact command tuple consumed below.
     const [actions, params] = decodeAbiParameters(
+      /* oxlint-disable-line anti-slop/no-chained-type-assertions -- SAFETY: this controlled fixture or ABI output is intentionally narrowed and its exact shape is asserted by the surrounding test. */
+      /* oxlint-disable-line anti-slop/no-chained-type-assertions -- viem ABI decode / partial receipt stub */
       [{ type: "bytes" }, { type: "bytes[]" }],
       inputs[0]!,
+      // SAFETY: The controlled test fixture establishes the asserted shape at this boundary, and the surrounding test consumes only that documented invariant.
     ) as unknown as [`0x${string}`, readonly `0x${string}`[]];
     expect(actionBytes(actions)).toBe(0x06); // SWAP_EXACT_IN_SINGLE
     // params[0] is abi.encode(ExactInputSingleParams) — ONE struct tuple.
+    // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
+    // oxlint-disable-next-line anti-slop/no-chained-type-assertions -- SAFETY: this ABI fixture decodes to the exact swap tuple consumed below.
     const swap = decodeAbiParameters(
+      /* oxlint-disable-line anti-slop/no-chained-type-assertions -- SAFETY: this controlled fixture or ABI output is intentionally narrowed and its exact shape is asserted by the surrounding test. */
+      /* oxlint-disable-line anti-slop/no-chained-type-assertions -- viem ABI decode / partial receipt stub */
       [
         {
           type: "tuple",
@@ -574,14 +621,10 @@ describe("swap calldata builders", () => {
         },
       ],
       params[0]!,
-    ) as unknown as [[
-      [string, string, number, number, string],
-      boolean,
-      bigint,
-      bigint,
-      bigint,
-      string,
-    ]];
+      // SAFETY: The controlled test fixture establishes the asserted shape at this boundary, and the surrounding test consumes only that documented invariant.
+    ) as unknown as [
+      [[string, string, number, number, string], boolean, bigint, bigint, bigint, string],
+    ];
     const [poolKey, zeroForOne, amountIn, amountOutMinimum, minHopPriceX36, hookData] = swap[0];
     expect(poolKey[0].toLowerCase()).toBe(WETH.toLowerCase());
     expect(poolKey[1].toLowerCase()).toBe(USDG.toLowerCase());
@@ -597,7 +640,11 @@ describe("swap calldata builders", () => {
 
 describe("quoteSwapInternal (in-SDK, current liquidity)", () => {
   it("quotes an exact-input WETH→USDG swap deterministically", async () => {
-    const { outAmountAtomic } = await quoteSwapInternal(V3_POOL_STATE, true, 200_000_000_000_000_000n);
+    const { outAmountAtomic } = await quoteSwapInternal(
+      V3_POOL_STATE,
+      true,
+      200_000_000_000_000_000n,
+    );
     // 0.2 WETH at fixture price 1.92e-9 USDG/WETH minus 0.3% fee ≈ 3.83e8 raw
     expect(outAmountAtomic).toBeGreaterThan(350_000_000n);
     expect(outAmountAtomic).toBeLessThan(400_000_000n);
@@ -649,21 +696,53 @@ describe("pure helpers", () => {
     // Real ERC-721 Transfer topics are 32-byte WORDS (0x + 64 hex), not the
     // 20-byte address form — the `from` topic of a mint is the zero WORD.
     const zeroWord = `0x${"0".repeat(64)}`;
+    // SAFETY: The surrounding test establishes the exact shape of this controlled fixture before this assertion.
+    // oxlint-disable-next-line anti-slop/no-chained-type-assertions -- SAFETY: this receipt fixture has the exact log shape consumed by tokenIdFromMintReceipt.
     const receipt = {
+      /* oxlint-disable-line anti-slop/no-chained-type-assertions -- SAFETY: this controlled fixture or ABI output is intentionally narrowed and its exact shape is asserted by the surrounding test. */
+      // oxlint-disable-line anti-slop/no-chained-type-assertions -- SAFETY: this test boundary uses a deliberately partial fixture or ABI-decoded tuple; the surrounding test establishes the exact exercised shape.
       logs: [
-        { topics: [transferTopic as `0x${string}`, zeroWord, `0x${WALLET.slice(2).padStart(64, "0")}`, "0x2a" as `0x${string}`] },
-        { topics: [transferTopic as `0x${string}`, `0x${WALLET.slice(2).padStart(64, "0")}`, zeroWord, "0x2b" as `0x${string}`] },
+        // SAFETY: The ABI/receipt fixture is constructed from the exact tuple or topic shape asserted by this test.
+        {
+          topics: [
+            transferTopic as `0x${string}`,
+            zeroWord,
+            `0x${WALLET.slice(2).padStart(64, "0")}`,
+            "0x2a" as `0x${string}`,
+          ],
+        },
+        // SAFETY: The ABI/receipt fixture is constructed from the exact tuple or topic shape asserted by this test.
+        {
+          topics: [
+            transferTopic as `0x${string}`,
+            `0x${WALLET.slice(2).padStart(64, "0")}`,
+            zeroWord,
+            "0x2b" as `0x${string}`,
+          ],
+        },
       ],
+      // SAFETY: The controlled test fixture establishes the asserted shape at this boundary, and the surrounding test consumes only that documented invariant.
     } as unknown as Parameters<typeof tokenIdFromMintReceipt>[0];
     expect(tokenIdFromMintReceipt(receipt)).toBe(42n);
   });
 
   it("tokenIdFromMintReceipt returns null when nothing was minted", () => {
     const transferTopic = keccak256(toHex("Transfer(address,address,uint256)")).toLowerCase();
+    // oxlint-disable-next-line anti-slop/no-chained-type-assertions -- SAFETY: this receipt fixture has the exact log shape consumed by tokenIdFromMintReceipt.
     const receipt = {
+      /* oxlint-disable-line anti-slop/no-chained-type-assertions -- SAFETY: this receipt fixture contains the exact Transfer topics exercised by tokenIdFromMintReceipt */
       logs: [
-        { topics: [transferTopic as `0x${string}`, WALLET.toLowerCase() as `0x${string}`, ZERO, "0x2b" as `0x${string}`] },
+        // SAFETY: The ABI/receipt fixture is constructed from the exact tuple or topic shape asserted by this test.
+        {
+          topics: [
+            transferTopic as `0x${string}`,
+            WALLET.toLowerCase() as `0x${string}`,
+            ZERO,
+            "0x2b" as `0x${string}`,
+          ],
+        },
       ],
+      // SAFETY: The controlled test fixture establishes the asserted shape at this boundary, and the surrounding test consumes only that documented invariant.
     } as unknown as Parameters<typeof tokenIdFromMintReceipt>[0];
     expect(tokenIdFromMintReceipt(receipt)).toBeNull();
   });

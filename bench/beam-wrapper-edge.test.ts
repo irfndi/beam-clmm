@@ -40,8 +40,12 @@ exit 0
   // wrapper's root resolution (awk is absent from stubDir on both macOS and
   // Ubuntu, where /bin is a symlink to /usr/bin — so the awk test below can
   // use a PATH with no awk while still resolving these tools).
-  writeFileSync(path.join(stubDir, "dirname"), '#!/bin/bash\nexec /usr/bin/dirname "$@"\n', { mode: 0o755 });
-  writeFileSync(path.join(stubDir, "readlink"), '#!/bin/bash\nexec /usr/bin/readlink "$@"\n', { mode: 0o755 });
+  writeFileSync(path.join(stubDir, "dirname"), '#!/bin/bash\nexec /usr/bin/dirname "$@"\n', {
+    mode: 0o755,
+  });
+  writeFileSync(path.join(stubDir, "readlink"), '#!/bin/bash\nexec /usr/bin/readlink "$@"\n', {
+    mode: 0o755,
+  });
   // bash shim so a PATH of just stubDir (no /bin) can still launch the
   // wrapper: execFileSync("bash", ...) resolves bash via PATH, and stubDir
   // alone excludes awk on both platforms.
@@ -62,6 +66,7 @@ function runBeam(
   args: string[],
   opts: { path?: string; home?: string; script?: string } = {},
 ): RunResult {
+  // SAFETY: process.env is copied into a child-process environment whose values are strings.
   const env = {
     ...(process.env as Record<string, string>),
     FAKE_BUN_VERSION: "1.4.0",
@@ -76,6 +81,7 @@ function runBeam(
     });
     return { status: 0, stdout, stderr: "" };
   } catch (err) {
+    // SAFETY: execFileSync errors expose these documented subprocess fields.
     const e = err as { status?: number; stdout?: string | Buffer; stderr?: string | Buffer };
     return {
       status: e.status ?? 1,

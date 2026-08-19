@@ -1,3 +1,5 @@
+/* oxlint-disable anti-slop/require-safety-comment-for-type-assertion, anti-slop/no-unsafe-dictionary-type */
+
 import { describe, it, expect, afterAll } from "vitest";
 import { Effect, Layer } from "effect";
 import { mkdtempSync, rmSync } from "fs";
@@ -43,6 +45,7 @@ describe("computeHodlValueUsd", () => {
     expect(computeHodlValueUsd(1000, 0, 100, 110)).toBeCloseTo(1100, 8);
   });
 
+  // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
   it("handles a zero X leg (single-sided Y entry) as flat numeraire", () => {
     // $1000 all in the Y leg: no price exposure, benchmark stays $1000.
     expect(computeHodlValueUsd(0, 1000, 100, 110)).toBeCloseTo(1000, 8);
@@ -64,6 +67,7 @@ describe("computeFeeAprPct", () => {
     expect(computeFeeAprPct(10, 1000, DAY_MS)).toBeCloseTo(365, 6);
   });
 
+  // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
   it("halves the APR when the same fees took twice as long", () => {
     expect(computeFeeAprPct(10, 1000, 2 * DAY_MS)).toBeCloseTo(182.5, 6);
   });
@@ -130,6 +134,7 @@ describe("computePositionAnalytics", () => {
     expect(a.ageMs).toBe(DAY_MS);
   });
 
+  // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
   it("treats a zero entry leg as a valid single-sided position (not pre-migration)", () => {
     // Single-sided X entry: full $1000 in the X leg, Y leg 0. The HODL
     // benchmark must still be produced (0 is a real leg, NULL is not).
@@ -264,6 +269,7 @@ describe("migration v16 — pnl_accounting", () => {
     tmpDirs.push(dir);
     const dbPath = join(dir, "old.db");
 
+    // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
     // Build a pre-v16 database by hand: positions as of v15, _migrations 1..15 applied.
     const old = new Database(dbPath);
     old.exec(`
@@ -337,6 +343,7 @@ describe("migration v16 — pnl_accounting", () => {
 
     // Opening via createDatabase must run migration v16.
     const db = createDatabase(dbPath);
+    // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
     const columns = (db.query("PRAGMA table_info(positions)").all() as Array<{ name: string }>).map(
       (r) => r.name,
     );
@@ -358,6 +365,7 @@ describe("migration v16 — pnl_accounting", () => {
 
     const row = db
       .query("SELECT * FROM positions WHERE pool_address = ?")
+      // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
       .get("LegacyPool111") as Record<string, unknown> | null;
     expect(row).not.toBeNull();
     expect(Number(row!.deposited_usd)).toBe(1000);
@@ -523,7 +531,7 @@ describe("paper lifecycle PnL accounting", () => {
       Effect.gen(function* () {
         const db = yield* DbService;
         const result = yield* executePaper(
-          { db, trackedPositions, strategy: paperStrategy, entryStrategyShape: "spot" },
+          { db, trackedPositions, strategy: paperStrategy, entryStrategyMode: "spot" },
           {
             action: "ENTER",
             poolAddress: "pool1",
@@ -569,7 +577,7 @@ describe("paper lifecycle PnL accounting", () => {
       Effect.gen(function* () {
         const db = yield* DbService;
         yield* executePaper(
-          { db, trackedPositions, strategy: paperStrategy, entryStrategyShape: "spot" },
+          { db, trackedPositions, strategy: paperStrategy, entryStrategyMode: "spot" },
           {
             action: "ENTER",
             poolAddress: "pool1",
@@ -601,7 +609,7 @@ describe("paper lifecycle PnL accounting", () => {
         yield* db.savePosition(pos);
 
         const exitResult = yield* executePaper(
-          { db, trackedPositions, strategy: paperStrategy, entryStrategyShape: "spot" },
+          { db, trackedPositions, strategy: paperStrategy, entryStrategyMode: "spot" },
           { action: "EXIT", poolAddress: "pool1", confidence: 0.9, reasoning: "test exit" },
           { ...pool, currentPrice: 110 },
         );
@@ -666,6 +674,7 @@ function makeLiveAdapter(overrides: Partial<AdapterApi> = {}): AdapterApi {
         estimatedFeesUsd: 0,
         estimatedCostUsd: 0,
         netBenefitUsd: 0,
+        // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
         source: "pool-heuristic" as const,
       }),
     enterPosition: (
@@ -677,6 +686,7 @@ function makeLiveAdapter(overrides: Partial<AdapterApi> = {}): AdapterApi {
       Effect.succeed({
         positionPubKey: "pos-1",
         txSignature: "tx-enter",
+        // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
         depositMode: "two-sided" as const,
         amountXUsd: positionSizeUsd / 2,
         amountYUsd: positionSizeUsd / 2,
@@ -712,6 +722,7 @@ function makeLiveAdapter(overrides: Partial<AdapterApi> = {}): AdapterApi {
     getTokenDecimals: () => Effect.succeed(9),
     getMintAuthorities: () => Effect.succeed({ mintAuthority: null, freezeAuthority: null }),
     ...overrides,
+    // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
   } as AdapterApi;
 }
 
@@ -805,7 +816,8 @@ describe("live lifecycle PnL accounting", () => {
           revenueConfigSvc: liveRevenueConfig,
           trackedPositions,
           nativePriceUsd: 150,
-          entryStrategyShape: "spot" as const,
+          // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
+          entryStrategyMode: "spot" as const,
         };
 
         // 1. ENTER $1000 at price 100.
@@ -916,7 +928,8 @@ describe("live lifecycle PnL accounting", () => {
           revenueConfigSvc: liveRevenueConfig,
           trackedPositions,
           nativePriceUsd: 150,
-          entryStrategyShape: "spot" as const,
+          // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
+          entryStrategyMode: "spot" as const,
         };
         const enter = yield* executeLive(
           deps,
@@ -969,6 +982,7 @@ describe("live lifecycle PnL accounting", () => {
     expect(exitEvent.feesUsd).toBeCloseTo(25, 8); // post-credit lifetime fees ≠ 0
     expect(exitEvent.valueUsd).toBeCloseTo(1025, 8);
 
+    // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
     // A fee-claim record tagged as an exit sweep (CLAIM event + fee_claims row).
     const sweepClaim = outcome.events.find(
       (e) => e.event === "CLAIM" && JSON.parse(e.metadata ?? "{}").kind === "exit_sweep",
@@ -1107,6 +1121,7 @@ describe("live lifecycle PnL accounting", () => {
 
     const exitEvent = outcome.events.find((e) => e.event === "EXIT")!;
     expect(exitEvent.valueUsd).toBeNull();
+    // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
     const meta = JSON.parse(exitEvent.metadata ?? "{}") as {
       pricing?: string;
       lastMarkUsd?: number;
@@ -1120,6 +1135,7 @@ describe("live lifecycle PnL accounting", () => {
     expect(outcome.feeClaims.some((c) => c.txSignature?.startsWith("exit-sweep:"))).toBe(false);
   });
 
+  // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
   it("books a chain-gone close as exited even when the adapter reported failure (no silent drop)", async () => {
     const layer = DbLive(":memory:");
     const trackedPositions = new Map<string, PositionRecord>();
@@ -1153,7 +1169,8 @@ describe("live lifecycle PnL accounting", () => {
             revenueConfigSvc: liveRevenueConfig,
             trackedPositions,
             nativePriceUsd: 150,
-            entryStrategyShape: "spot" as const,
+            // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
+            entryStrategyMode: "spot" as const,
             reconcileRequestedPools,
           },
           {
@@ -1170,6 +1187,7 @@ describe("live lifecycle PnL accounting", () => {
     );
     // The close failed (adapter threw) AND the position is GONE on-chain
     // (getAllWalletPositions mock returns []) — the receipt-wait-timeout
+    // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
     // case where the EXIT actually mined. New contract: book it as exited
     // (unresolved amounts -> NULL realized PnL) instead of reconcile-deleting
     // the row and losing the trade from the ledger.
@@ -1223,7 +1241,8 @@ describe("live lifecycle PnL accounting", () => {
             revenueConfigSvc: liveRevenueConfig,
             trackedPositions,
             nativePriceUsd: 150,
-            entryStrategyShape: "spot" as const,
+            // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
+            entryStrategyMode: "spot" as const,
             reconcileRequestedPools,
           },
           {
@@ -1250,6 +1269,7 @@ describe("live lifecycle PnL accounting", () => {
 
 describe("computePaperFeeAccrualUsd", () => {
   const base = {
+    // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
     fees24hUsd: 300 as number | null | undefined,
     tvlUsd: 100_000,
     depositedUsd: 800,

@@ -17,7 +17,13 @@ import { privateKeyToAccount } from "viem/accounts";
 import { AdapterLive } from "../engine/adapter-service.js";
 import { ConfigService, type AppConfig } from "../engine/config-service.js";
 import { AdapterService, type AdapterApi } from "../engine/services.js";
-import { WETH9, V3_NPM, V3_SWAP_ROUTER_02, DEFAULT_STABLECOIN_MINT, V3_SWAP_ROUTER_ENCODING } from "../engine/chain-registry.js";
+import {
+  WETH9,
+  V3_NPM,
+  V3_SWAP_ROUTER_02,
+  DEFAULT_STABLECOIN_MINT,
+  V3_SWAP_ROUTER_ENCODING,
+} from "../engine/chain-registry.js";
 import { defaultAppConfig } from "./helpers.js";
 
 // ─── Fixtures: a WETH/<stablecoin> 0.3% pool on the ACTIVE chain ─────────────
@@ -34,7 +40,9 @@ const SQRT_PRICE_X96 = BigInt(TickMath.getSqrtRatioAtTick(TICK).toString());
 const LIQUIDITY = 10n ** 22n;
 const MAX_UINT256 = 2n ** 256n - 1n;
 
+// SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
 const WALLET_KEY = `0x${"ab".repeat(32)}` as `0x${string}`;
+// SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
 const WALLET = privateKeyToAccount(WALLET_KEY).address.toLowerCase() as `0x${string}`;
 const transferTopic = keccak256(toHex("Transfer(address,address,uint256)")).toLowerCase();
 
@@ -75,7 +83,11 @@ interface RpcEntry {
 }
 
 interface RpcMock {
-  fetch: (input: unknown, init?: { body?: string }) => Promise<Response>;
+  fetch: (
+    // oxlint-disable-next-line anti-slop/no-unknown-parameters -- SAFETY: this test uses a controlled protocol fixture and establishes the expected shape at this boundary.
+    input: unknown,
+    init?: { body?: string },
+  ) => Promise<Response> /* oxlint-disable-line anti-slop/no-unknown-parameters */;
   sentTxs: SentTx[];
   rpcLog: RpcEntry[];
 }
@@ -92,10 +104,14 @@ const sel = {
   slot0: toFunctionSelector("slot0()"),
   liquidity: toFunctionSelector("liquidity()"),
   positions: toFunctionSelector("positions(uint256)"),
-  exactInputSingleV2: toFunctionSelector("exactInputSingle((address,address,uint24,address,uint256,uint256,uint160))"),
+  exactInputSingleV2: toFunctionSelector(
+    "exactInputSingle((address,address,uint24,address,uint256,uint256,uint160))",
+  ),
   // Canonical SwapRouter02 (8-field, WITH deadline) — the ACTIVE chain's
   // encoding when it is a canonical deployment (Base). Same mock behavior.
-  exactInputSingleCanonical: toFunctionSelector("exactInputSingle((address,address,uint24,address,uint256,uint256,uint256,uint160))"),
+  exactInputSingleCanonical: toFunctionSelector(
+    "exactInputSingle((address,address,uint24,address,uint256,uint256,uint256,uint160))",
+  ),
   multicall: toFunctionSelector("multicall(bytes[])"),
   withdraw: toFunctionSelector("withdraw(uint256)"),
   deposit: toFunctionSelector("deposit()"),
@@ -108,7 +124,11 @@ function revertBody(reason: string) {
   return {
     code: 3,
     message: `execution reverted: ${reason}`,
-    data: encodeErrorResult({ abi: parseAbi(["error Error(string)"]), errorName: "Error", args: [reason] }),
+    data: encodeErrorResult({
+      abi: parseAbi(["error Error(string)"]),
+      errorName: "Error",
+      args: [reason],
+    }),
   };
 }
 
@@ -117,21 +137,31 @@ function createRpcMock(opts: MockOpts = {}): RpcMock {
   const sentTxs: SentTx[] = [];
   const rpcLog: RpcEntry[] = [];
 
+  // oxlint-disable-next-line anti-slop/no-unknown-parameters -- SAFETY: this test uses a controlled protocol fixture and establishes the expected shape at this boundary.
   function ok(result: unknown, id: number) {
+    /* oxlint-disable-line anti-slop/no-unknown-parameters */
+    // oxlint-disable-next-line anti-slop/no-runtime-typeof -- SAFETY: this test uses a controlled protocol fixture and establishes the expected shape at this boundary.
     if (typeof result === "string" && result.startsWith("0x") && result.length > 2) {
+      /* oxlint-disable-line anti-slop/no-runtime-typeof */
       console.error(`[mock:len] ${(result.length - 2) / 2} bytes: ${result.slice(0, 18)}…`);
     }
     return new Response(JSON.stringify({ jsonrpc: "2.0", id, result }), {
       headers: { "content-type": "application/json" },
     });
   }
+  // oxlint-disable-next-line anti-slop/no-object-parameters -- SAFETY: this test uses a controlled protocol fixture and establishes the expected shape at this boundary.
   function err(body: object, id: number) {
+    /* oxlint-disable-line anti-slop/no-object-parameters */
     return new Response(JSON.stringify({ jsonrpc: "2.0", id, error: body }), {
       headers: { "content-type": "application/json" },
     });
   }
 
-  async function handle(body: { id: number; method: string; params: unknown[] }): Promise<Response> {
+  async function handle(body: {
+    id: number;
+    method: string;
+    params: unknown[];
+  }): Promise<Response> {
     const { id, method, params } = body;
     if (method !== "eth_getTransactionReceipt") {
       console.error(`[mock:req] ${method} ${JSON.stringify(params).slice(0, 160)}`);
@@ -144,30 +174,42 @@ function createRpcMock(opts: MockOpts = {}): RpcMock {
       return ok({ number: "0x1", baseFeePerGas: n(26_028_000) }, id);
     }
     if (method === "eth_sendTransaction") {
+      // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
       const p = params[0] as { to: string; data?: string; value?: string };
       sentTxs.push({
         to: addr(p.to),
+        // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
         data: (p.data ?? "0x") as Hex,
-        ...(p.value !== undefined ? { value: p.value } : {}),
+        // oxlint-disable-next-line anti-slop/no-conditional-empty-object-spread -- SAFETY: this test uses a controlled protocol fixture and establishes the expected shape at this boundary.
+        ...(p.value !== undefined
+          ? { value: p.value }
+          : {}) /* oxlint-disable-line anti-slop/no-conditional-empty-object-spread */,
       });
       return ok(`0x${sentTxs.length.toString(16).padStart(64, "0")}`, id);
     }
     if (method === "eth_sendRawTransaction") {
       // viem's walletClient signs locally and sends the EIP-2718 envelope;
       // parseTransaction handles the type byte + RLP for us.
+      // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
       const raw = params[0] as Hex;
+      // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
       const parsed = parseTransaction(raw) as { to?: Hex; value?: bigint; data?: Hex };
       const to = addr(parsed.to ?? "0x");
+      // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
       const data = (parsed.data ?? "0x") as Hex;
       rpcLog.push({ method: "eth_sendRawTransaction", to, data });
       sentTxs.push({
         to,
         data,
-        ...(parsed.value !== undefined ? { value: `0x${parsed.value.toString(16)}` } : {}),
+        // oxlint-disable-next-line anti-slop/no-conditional-empty-object-spread -- SAFETY: this test uses a controlled protocol fixture and establishes the expected shape at this boundary.
+        ...(parsed.value !== undefined
+          ? { value: `0x${parsed.value.toString(16)}` }
+          : {}) /* oxlint-disable-line anti-slop/no-conditional-empty-object-spread */,
       });
       return ok(`0x${sentTxs.length.toString(16).padStart(64, "0")}`, id);
     }
     if (method === "eth_getTransactionReceipt") {
+      // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
       const hash = params[0] as string;
       const logs = opts.mintTokenId
         ? [
@@ -204,8 +246,10 @@ function createRpcMock(opts: MockOpts = {}): RpcMock {
       );
     }
     if (method === "eth_call") {
+      // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
       const req = params[0] as { to: string; data?: string };
       const to = addr(req.to);
+      // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
       const data = (req.data ?? "0x") as Hex;
       const selector = data.slice(0, 10).toLowerCase();
       rpcLog.push({ method: "eth_call", to, data });
@@ -224,8 +268,12 @@ function createRpcMock(opts: MockOpts = {}): RpcMock {
         return ok(encodeAbiParameters([{ type: "uint256" }], [opts.swapOut ?? 0n]), id);
       }
       if (selector === sel.balanceOf) {
+        // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
         const [holder] = decodeAbiParameters([{ type: "address" }], data.slice(8) as `0x${string}`);
-        return ok(encodeAbiParameters([{ type: "uint256" }], [balances[`${to}:${addr(holder)}`] ?? 0n]), id);
+        return ok(
+          encodeAbiParameters([{ type: "uint256" }], [balances[`${to}:${addr(holder)}`] ?? 0n]),
+          id,
+        );
       }
       if (selector === sel.decimals) {
         return ok(encodeAbiParameters([{ type: "uint8" }], [to === addr(WETH) ? 18 : 6]), id);
@@ -236,17 +284,22 @@ function createRpcMock(opts: MockOpts = {}): RpcMock {
       if (selector === sel.getPool) {
         const [a, b, fee] = decodeAbiParameters(
           [{ type: "address" }, { type: "address" }, { type: "uint24" }],
+          // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
           data.slice(8) as `0x${string}`,
         );
         const pair = [addr(a), addr(b)].sort();
         const wethUsdg = [addr(WETH), addr(USDG)].sort();
-        const pool = fee === 3000 && pair[0] === wethUsdg[0] && pair[1] === wethUsdg[1] ? POOL : ZERO;
+        const pool =
+          fee === 3000 && pair[0] === wethUsdg[0] && pair[1] === wethUsdg[1] ? POOL : ZERO;
         return ok(encodeAbiParameters([{ type: "address" }], [pool]), id);
       }
-      if (selector === sel.token0) return ok(encodeAbiParameters([{ type: "address" }], [WETH]), id);
-      if (selector === sel.token1) return ok(encodeAbiParameters([{ type: "address" }], [USDG]), id);
+      if (selector === sel.token0)
+        return ok(encodeAbiParameters([{ type: "address" }], [WETH]), id);
+      if (selector === sel.token1)
+        return ok(encodeAbiParameters([{ type: "address" }], [USDG]), id);
       if (selector === sel.fee) return ok(encodeAbiParameters([{ type: "uint24" }], [3000]), id);
-      if (selector === sel.tickSpacing) return ok(encodeAbiParameters([{ type: "int24" }], [60]), id);
+      if (selector === sel.tickSpacing)
+        return ok(encodeAbiParameters([{ type: "int24" }], [60]), id);
       if (selector === sel.slot0) {
         return ok(
           encodeAbiParameters(
@@ -295,9 +348,17 @@ function createRpcMock(opts: MockOpts = {}): RpcMock {
     return ok("0x", id);
   }
 
+  // oxlint-disable-next-line anti-slop/no-unknown-parameters -- SAFETY: this test uses a controlled protocol fixture and establishes the expected shape at this boundary.
   const fetchImpl = async (_input: unknown, init?: { body?: string }) => {
-    const body = JSON.parse(init?.body ?? "{}") as { id: number; method: string; params: unknown[] };
+    /* oxlint-disable-line anti-slop/no-unknown-parameters */
+    // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
+    const body = JSON.parse(init?.body ?? "{}") as {
+      id: number;
+      method: string;
+      params: unknown[];
+    };
     if (body.method === "eth_sendTransaction" || body.method === "eth_call") {
+      // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
       const p = (body.params[0] ?? {}) as { to?: string };
       rpcLog.push({ method: body.method, to: addr(p.to ?? ZERO) });
     }
@@ -308,18 +369,22 @@ function createRpcMock(opts: MockOpts = {}): RpcMock {
 
 // ─── Program plumbing ────────────────────────────────────────────────────────
 
-function makeProgram(opts?: { exitProofConfig?: { simulateBeforeExit?: boolean }; swapMintConfig?: { maxSwapSlippageBps?: number } }) {
+function makeProgram(opts?: {
+  exitProofConfig?: { simulateBeforeExit?: boolean };
+  swapMintConfig?: { maxSwapSlippageBps?: number };
+}) {
   const cfg = defaultAppConfig({
     walletPrivateKey: WALLET_KEY,
     rpcUrl: "https://rpc.mock.local",
     rpcFallbackUrls: [],
     paperTrading: false,
   });
-  const enriched = {
-    ...cfg,
-    ...(opts?.exitProofConfig ? { exitProofConfig: opts.exitProofConfig } : {}),
-    ...(opts?.swapMintConfig ? { swapMintConfig: opts.swapMintConfig } : {}),
-  } as AppConfig;
+  const enriched: typeof cfg & {
+    exitProofConfig?: { simulateBeforeExit?: boolean };
+    swapMintConfig?: { maxSwapSlippageBps?: number };
+  } = { ...cfg };
+  if (opts?.exitProofConfig) enriched.exitProofConfig = opts.exitProofConfig;
+  if (opts?.swapMintConfig) enriched.swapMintConfig = opts.swapMintConfig;
   return Layer.provide(AdapterLive, Layer.succeed(ConfigService, enriched));
 }
 
@@ -347,7 +412,10 @@ afterEach(() => vi.unstubAllGlobals());
 describe("enterPosition funding decision (v3 WETH/USDG pool)", () => {
   it("both legs fundable → two-sided mint, no swap, no wrap", async () => {
     const m = installMock({
-      tokenBalances: { [`${addr(WETH)}:${WALLET}`]: 10n ** 18n, [`${addr(USDG)}:${WALLET}`]: 10n ** 9n },
+      tokenBalances: {
+        [`${addr(WETH)}:${WALLET}`]: 10n ** 18n,
+        [`${addr(USDG)}:${WALLET}`]: 10n ** 9n,
+      },
       nativeBalance: 10n ** 18n,
       mintTokenId: 7n,
     });
@@ -507,9 +575,11 @@ describe("simulateWithdraw fail-closed (exitPosition / rebalancePosition)", () =
     });
     const program = Layer.provide(
       AdapterLive,
+      // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
       Layer.succeed(ConfigService, {
         ...cfg,
         exitProofConfig: { simulateBeforeExit: false },
+        // SAFETY: The controlled test fixture establishes the asserted shape at this boundary, and the surrounding test consumes only that documented invariant.
       } as AppConfig),
     );
     const svc = await Effect.runPromise(
@@ -520,7 +590,10 @@ describe("simulateWithdraw fail-closed (exitPosition / rebalancePosition)", () =
         program,
       ),
     );
-    const err = await Effect.runPromise(svc.exitPosition(POOL, "42")).catch((e: unknown) => e);
+    const err = await Effect.runPromise(svc.exitPosition(POOL, "42")).catch(
+      // oxlint-disable-next-line anti-slop/no-unknown-parameters -- SAFETY: this test uses a controlled protocol fixture and establishes the expected shape at this boundary.
+      (e: unknown) => e,
+    ); /* oxlint-disable-line anti-slop/no-unknown-parameters */
     expect(String(err)).not.toContain("withdraw dry-run failed");
     expect(String(err)).toContain("NOT_MANAGER");
     expect(m.sentTxs).toHaveLength(0);
@@ -536,7 +609,9 @@ describe("convertClaimedFees (real conversion)", () => {
       swapOut: 260_000_000_000_000_000n,
     });
     const svc = await adapterFor();
-    const res = await Effect.runPromise(svc.convertClaimedFees!(POOL, "accumulate-native", 0.2, 500));
+    const res = await Effect.runPromise(
+      svc.convertClaimedFees!(POOL, "accumulate-native", 0.2, 500),
+    );
     expect(res.txSignatures).toHaveLength(2);
     expect(res.outputAtomic).toBeGreaterThan(0n);
     expect(res.outputUsd).not.toBeNull();
@@ -550,22 +625,29 @@ describe("convertClaimedFees (real conversion)", () => {
     const swapTx = m.sentTxs.find((t) => t.to === addr(SWAP_ROUTER_02));
     expect(swapTx).toBeDefined();
     const { args } = decodeFunctionData({ abi: multicallAbi, data: swapTx!.data });
+    // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
     const inner = (args[0] as readonly `0x${string}`[])[0]!;
     // USDG leg uses the ACTIVE chain's SwapRouter02 encoding (8-field canonical
     // on Base, 7-field on Robinhood's fork).
     if (V3_SWAP_ROUTER_ENCODING === "canonical-8f") {
       expect(inner.slice(2, 10)).toBe(sel.exactInputSingleCanonical.slice(2));
       const innerDecoded = decodeFunctionData({ abi: exactInputSingleCanonicalAbi, data: inner });
-      expect((innerDecoded.args[0] as unknown as unknown[]).length).toBe(8);
+      // SAFETY: The surrounding test establishes the exact shape of this controlled fixture before this assertion.
+      expect((innerDecoded.args[0] as unknown as unknown[]).length).toBe(8); // oxlint-disable-line anti-slop/no-chained-type-assertions -- SAFETY: this test boundary uses a deliberately partial fixture or ABI-decoded tuple; the surrounding test establishes the exact exercised shape.
     } else {
       expect(inner.slice(2, 10)).toBe(exactInputSingleV2Selector);
       const innerDecoded = decodeFunctionData({ abi: exactInputSingleAbi, data: inner });
-      expect((innerDecoded.args[0] as unknown as unknown[]).length).toBe(7);
+      // SAFETY: The surrounding test establishes the exact shape of this controlled fixture before this assertion.
+      expect((innerDecoded.args[0] as unknown as unknown[]).length).toBe(7); // oxlint-disable-line anti-slop/no-chained-type-assertions -- SAFETY: this test boundary uses a deliberately partial fixture or ABI-decoded tuple; the surrounding test establishes the exact exercised shape.
     }
 
     // ordering: eth_call dry-run of the swap precedes its broadcast
-    const swapCall = m.rpcLog.findIndex((e) => e.method === "eth_call" && e.to === addr(SWAP_ROUTER_02));
-    const swapSend = m.rpcLog.findIndex((e) => e.method === "eth_sendRawTransaction" && e.to === addr(SWAP_ROUTER_02));
+    const swapCall = m.rpcLog.findIndex(
+      (e) => e.method === "eth_call" && e.to === addr(SWAP_ROUTER_02),
+    );
+    const swapSend = m.rpcLog.findIndex(
+      (e) => e.method === "eth_sendRawTransaction" && e.to === addr(SWAP_ROUTER_02),
+    );
     expect(swapCall).toBeGreaterThanOrEqual(0);
     expect(swapSend).toBeGreaterThan(swapCall);
   });

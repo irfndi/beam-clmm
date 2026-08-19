@@ -1,5 +1,6 @@
+/* eslint-disable anti-slop/no-runtime-typeof, anti-slop/no-unknown-parameters, anti-slop/no-unsafe-dictionary-type, anti-slop/require-safety-comment-for-type-assertion, anti-slop/no-conditional-empty-object-spread, require-yield */
 import { Effect, Layer } from "effect";
-import type { Database } from "bun:sqlite";
+import type { Database, SQLQueryBindings } from "bun:sqlite";
 import { createDatabase, hasVecMemoryTable } from "./db.js";
 import { getEmbedding } from "./embeddings.js";
 import type {
@@ -30,17 +31,11 @@ import { PersistenceContractError } from "./errors.js";
  * stringify/narrow each column into the concrete owner record type. The
  * dictionary is local to this module and never escapes it.
  */
-type SqlRawRow = { [key: string]: unknown };
+type SqlRawValue = string | number | bigint | boolean | null;
+type SqlRawCell = SqlRawValue | undefined;
+type SqlRawRow = Record<string, SqlRawCell>;
 
 /** Intermediate parse shape for a serialized BinArray bin (JSON round-trip). */
-interface RawBin {
-  binId: unknown;
-  price: unknown;
-  reserveX: unknown;
-  reserveY: unknown;
-  liquiditySupply: unknown;
-}
-
 export interface PositionRecord {
   /**
    * Position identity and primary key: the on-chain position pubkey for live
@@ -113,16 +108,31 @@ export interface AuditRecord {
   error: string | null;
 }
 
-function queryOne<T>(db: Database, sql: string, ...params: unknown[]): T | null {
-  return (db.query(sql) as unknown as { get(...p: unknown[]): T | null }).get(...params);
+function queryOne<T>(db: Database, sql: string, ...params: SQLQueryBindings[]): T | null {
+  // SAFETY: Bun's declaration models variadic bindings as a one-element tuple;
+  // SQLite accepts the full binding list and every caller supplies only
+  // SQLQueryBindings values.
+  return db.query<T, SQLQueryBindings>(sql).get(...(params as [SQLQueryBindings]));
 }
 
-function queryAll<T>(db: Database, sql: string, ...params: unknown[]): T[] {
-  return (db.query(sql) as unknown as { all(...p: unknown[]): T[] }).all(...params);
+function queryAll<T>(db: Database, sql: string, ...params: SQLQueryBindings[]): T[] {
+  return db.query<T, SQLQueryBindings>(sql).all(...(params as [SQLQueryBindings]));
 }
 
-function runOne(db: Database, sql: string, ...params: unknown[]): void {
-  (db.run as unknown as (sql: string, ...params: unknown[]) => void)(sql, ...params);
+function runOne(db: Database, sql: string, ...params: SQLQueryBindings[]): void {
+  db.run(sql, params);
+}
+
+function toError(value: unknown): Error {
+  return value instanceof Error ? value : new Error(String(value));
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function readSqlText(value: SqlRawCell, fallback = ""): string {
+  return value == null ? fallback : String(value);
 }
 
 function isVecMemoryMissingError(e: unknown): boolean {
@@ -144,15 +154,59 @@ function serializeBinArray(binArray: BinArray): string {
 }
 
 function deserializeBinArray(json: string): BinArray {
-  const raw = JSON.parse(json) as { bins: RawBin[] };
-  raw.bins = raw.bins.map((b) => ({
-    binId: Number(b.binId),
-    price: Number(b.price),
-    reserveX: BigInt(String(b.reserveX)),
-    reserveY: BigInt(String(b.reserveY)),
-    liquiditySupply: BigInt(String(b.liquiditySupply)),
-  }));
-  return raw as unknown as BinArray;
+  const parsed: unknown = JSON.parse(json);
+  if (!isRecord(parsed) || !("bins" in parsed) || !Array.isArray(parsed.bins)) {
+    throw new Error("Invalid serialized BinArray: bins must be an array");
+  }
+  const source = parsed;
+  const readNumber = (value: unknown, field: string): number => {
+    const result = Number(value);
+    if (!Number.isFinite(result)) throw new Error(`Invalid serialized BinArray ${field}`);
+    return result;
+  };
+  const readBigInt = (value: unknown, field: string): bigint => {
+    try {
+      return BigInt(String(value));
+    } catch {
+      throw new Error(`Invalid serialized BinArray ${field}`);
+    }
+  };
+  const binsRaw = source["bins"];
+  if (!Array.isArray(binsRaw)) throw new Error("Invalid serialized BinArray bins");
+  const bins = binsRaw.map((value: unknown) => {
+    if (!isRecord(value)) {
+      throw new Error("Invalid serialized BinArray bin");
+    }
+    if (
+      !("binId" in value) ||
+      !("price" in value) ||
+      !("reserveX" in value) ||
+      !("reserveY" in value) ||
+      !("liquiditySupply" in value)
+    ) {
+      throw new Error("Invalid serialized BinArray bin fields");
+    }
+    return {
+      binId: readNumber(value.binId, "binId"),
+      price: readNumber(value.price, "price"),
+      reserveX: readBigInt(value.reserveX, "reserveX"),
+      reserveY: readBigInt(value.reserveY, "reserveY"),
+      liquiditySupply: readBigInt(value.liquiditySupply, "liquiditySupply"),
+    };
+  });
+  if (!("lowerBinId" in source) || !("upperBinId" in source) || !("activeBinId" in source)) {
+    throw new Error("Invalid serialized BinArray bounds");
+  }
+  return {
+    lowerBinId: readNumber(source.lowerBinId, "lowerBinId"),
+    upperBinId: readNumber(source.upperBinId, "upperBinId"),
+    bins,
+    activeBinId: readNumber(source.activeBinId, "activeBinId"),
+    ...(typeof source["binStep"] === "number" ? { binStep: source["binStep"] } : {}),
+    ...(typeof source["reservesKnown"] === "boolean"
+      ? { reservesKnown: source["reservesKnown"] }
+      : {}),
+  };
 }
 
 export const DbLive = (dbPath?: string) =>
@@ -510,7 +564,7 @@ export const DbLive = (dbPath?: string) =>
                         expiresAt,
                       );
                     },
-                    catch: (error) => error as Error,
+                    catch: toError,
                   });
                 }),
                 (e) => (isVecMemoryMissingError(e) ? Effect.void : Effect.fail(e)),
@@ -563,14 +617,12 @@ export const DbLive = (dbPath?: string) =>
                           JSON.stringify(embedding),
                           k,
                         ),
-                      catch: (error) => error as Error,
+                      catch: toError,
                     });
                     candidates = rows
                       .filter((row) => Number(row.expiresAt ?? 0) > now)
                       .filter((row) =>
-                        poolAddress
-                          ? String((row.pool_address ?? "") as unknown) === poolAddress
-                          : true,
+                        poolAddress ? readSqlText(row.pool_address) === poolAddress : true,
                       );
                     if (candidates.length >= topK || k >= maxK) break;
                     k = Math.min(k * 2, maxK);
@@ -597,12 +649,10 @@ export const DbLive = (dbPath?: string) =>
 
                   return ranked.map(({ row }) => ({
                     id: String(row.id),
-                    category: String(row.category) as MemoryCategory,
-                    content: String((row.content ?? "") as unknown),
-                    poolAddress: row.pool_address ? String(row.pool_address as unknown) : undefined,
-                    outcome: row.outcome
-                      ? (String(row.outcome as unknown) as MemoryEntry["outcome"])
-                      : undefined,
+                    category: parseMemoryCategory(row.category),
+                    content: readSqlText(row.content),
+                    poolAddress: row.pool_address ? readSqlText(row.pool_address) : undefined,
+                    outcome: parseMemoryOutcome(row.outcome),
                     pnlUsd:
                       row.pnlUsd !== undefined && row.pnlUsd !== null
                         ? Number(row.pnlUsd)
@@ -708,15 +758,14 @@ export const DbLive = (dbPath?: string) =>
 
         getRotationObservations: () =>
           Effect.sync(() => {
-            const rows = db
-              .query(
-                "SELECT pair_key as pairKey, obs_count as obsCount, updated_at as updatedAt FROM rotation_state",
-              )
-              .all() as ReadonlyArray<{
+            const rows = queryAll<{
               pairKey: string;
               obsCount: number;
               updatedAt: number;
-            }>;
+            }>(
+              db,
+              "SELECT pair_key as pairKey, obs_count as obsCount, updated_at as updatedAt FROM rotation_state",
+            );
             return rows;
           }),
 
@@ -912,21 +961,21 @@ export const DbLive = (dbPath?: string) =>
 
         saveSignalSnapshot: (snapshot) =>
           Effect.sync(() => {
-            const result = (
-              db.run as (sql: string, ...params: unknown[]) => { lastInsertRowid: number | bigint }
-            )(
+            const result = db.run(
               `INSERT INTO signal_snapshots (pool_address, timestamp, fee_il_ratio, volume_authenticity, bin_utilization, tvl_usd, tvl_velocity, volatility_stddev, bin_step, action, confidence) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-              snapshot.poolAddress,
-              snapshot.timestamp,
-              snapshot.feeIlRatio,
-              snapshot.volumeAuthenticity,
-              snapshot.binUtilization,
-              snapshot.tvlUsd,
-              snapshot.tvlVelocity,
-              snapshot.volatilityStddev,
-              snapshot.binStep,
-              snapshot.action,
-              snapshot.confidence,
+              [
+                snapshot.poolAddress,
+                snapshot.timestamp,
+                snapshot.feeIlRatio,
+                snapshot.volumeAuthenticity,
+                snapshot.binUtilization,
+                snapshot.tvlUsd,
+                snapshot.tvlVelocity,
+                snapshot.volatilityStddev,
+                snapshot.binStep,
+                snapshot.action,
+                snapshot.confidence,
+              ],
             );
             return Number(result.lastInsertRowid);
           }),
@@ -1336,11 +1385,7 @@ export const DbLive = (dbPath?: string) =>
         getSettlementJob: (id) =>
           Effect.try({
             try: () => {
-              const row = queryOne<SqlRawRow>(
-                db,
-                "SELECT * FROM settlement_jobs WHERE id = ?",
-                id,
-              );
+              const row = queryOne<SqlRawRow>(db, "SELECT * FROM settlement_jobs WHERE id = ?", id);
               return row === null ? null : rowToSettlementJob(row);
             },
             catch: (error) => error as Error,
@@ -1399,7 +1444,7 @@ export const DbLive = (dbPath?: string) =>
     }),
   );
 
-function parseTokenCandidateState(value: unknown): TokenCandidateState {
+function parseTokenCandidateState(value: SqlRawCell): TokenCandidateState {
   switch (value) {
     case "discovered":
     case "observing":
@@ -1417,7 +1462,7 @@ function parseTokenCandidateState(value: unknown): TokenCandidateState {
   }
 }
 
-function parseExecutionOperationType(value: unknown): ExecutionOperationType {
+function parseExecutionOperationType(value: SqlRawCell): ExecutionOperationType {
   switch (value) {
     case "entry":
     case "exit":
@@ -1433,7 +1478,7 @@ function parseExecutionOperationType(value: unknown): ExecutionOperationType {
   }
 }
 
-function parseExecutionOperationStatus(value: unknown): ExecutionOperationStatus {
+function parseExecutionOperationStatus(value: SqlRawCell): ExecutionOperationStatus {
   switch (value) {
     case "planned":
     case "prepared":
@@ -1451,7 +1496,7 @@ function parseExecutionOperationStatus(value: unknown): ExecutionOperationStatus
   }
 }
 
-function parseSettlementJobStatus(value: unknown): SettlementJobStatus {
+function parseSettlementJobStatus(value: SqlRawCell): SettlementJobStatus {
   switch (value) {
     case "pending":
     case "prepared":
@@ -1469,7 +1514,7 @@ function parseSettlementJobStatus(value: unknown): SettlementJobStatus {
   }
 }
 
-function parseSettlementAsset(value: unknown): SettlementAsset {
+function parseSettlementAsset(value: SqlRawCell): SettlementAsset {
   if (value === "ETH") return value;
   throw new PersistenceContractError({
     entity: "settlement_job",
@@ -1492,7 +1537,7 @@ function rowToTokenCandidate(row: SqlRawRow): TokenCandidateRecord {
     eligibleAt: row.eligible_at === null ? null : Number(row.eligible_at),
     enteredAt: row.entered_at === null ? null : Number(row.entered_at),
     cooldownUntil: row.cooldown_until === null ? null : Number(row.cooldown_until),
-    rejectionReason: row.rejection_reason === null ? null : String(row.rejection_reason as unknown),
+    rejectionReason: row.rejection_reason === null ? null : readSqlText(row.rejection_reason),
     createdAt: Number(row.created_at),
     updatedAt: Number(row.updated_at),
   };
@@ -1503,15 +1548,15 @@ function rowToExecutionOperation(row: SqlRawRow): ExecutionOperationRecord {
     id: String(row.id),
     walletAddress: String(row.wallet_address),
     agentInstanceId: String(row.agent_instance_id),
-    candidateId: row.candidate_id === null ? null : String(row.candidate_id as unknown),
-    positionId: row.position_id === null ? null : String(row.position_id as unknown),
+    candidateId: row.candidate_id === null ? null : readSqlText(row.candidate_id),
+    positionId: row.position_id === null ? null : readSqlText(row.position_id),
     poolAddress: String(row.pool_address),
     tokenMint: String(row.token_mint),
     operationType: parseExecutionOperationType(row.operation_type),
     status: parseExecutionOperationStatus(row.status),
-    amountAtomic: row.amount_atomic === null ? null : String(row.amount_atomic as unknown),
-    txSignature: row.tx_signature === null ? null : String(row.tx_signature as unknown),
-    error: row.error === null ? null : String(row.error as unknown),
+    amountAtomic: row.amount_atomic === null ? null : readSqlText(row.amount_atomic),
+    txSignature: row.tx_signature === null ? null : readSqlText(row.tx_signature),
+    error: row.error === null ? null : readSqlText(row.error),
     createdAt: Number(row.created_at),
     updatedAt: Number(row.updated_at),
   };
@@ -1530,15 +1575,15 @@ function rowToSettlementJob(row: SqlRawRow): SettlementJobRecord {
     status: parseSettlementJobStatus(row.status),
     attempts: Number(row.attempts),
     nextRetryAt: row.next_retry_at === null ? null : Number(row.next_retry_at),
-    txSignature: row.tx_signature === null ? null : String(row.tx_signature as unknown),
+    txSignature: row.tx_signature === null ? null : readSqlText(row.tx_signature),
     confirmedOutputAtomic:
-      row.confirmed_output_atomic == null ? null : String(row.confirmed_output_atomic as unknown),
+      row.confirmed_output_atomic == null ? null : readSqlText(row.confirmed_output_atomic),
     outputUsd: row.output_usd == null ? null : Number(row.output_usd),
     executionCostUsd: row.execution_cost_usd == null ? null : Number(row.execution_cost_usd),
     finalizedAt: row.finalized_at == null ? null : Number(row.finalized_at),
     realizedPnlUsd: row.realized_pnl_usd == null ? null : Number(row.realized_pnl_usd),
     expiresAt: Number(row.expires_at),
-    error: row.error === null ? null : String(row.error as unknown),
+    error: row.error === null ? null : readSqlText(row.error),
     createdAt: Number(row.created_at),
     updatedAt: Number(row.updated_at),
   };
@@ -1554,15 +1599,25 @@ function rowToSafetyPause(row: SqlRawRow): SafetyPauseRecord {
   };
 }
 
+function parseMemoryCategory(value: SqlRawCell): MemoryCategory {
+  if (value === "pattern" || value === "warning" || value === "outcome") return value;
+  return "pattern";
+}
+
+function parseMemoryOutcome(value: SqlRawCell): MemoryEntry["outcome"] {
+  if (value === "profit" || value === "loss" || value === "neutral") return value;
+  return undefined;
+}
+
 function rowToPosition(row: SqlRawRow): PositionRecord {
   return {
     positionId: String(row.position_id),
     poolAddress: String(row.pool_address),
-    positionPubKey: row.position_pubkey ? String(row.position_pubkey as unknown) : null,
+    positionPubKey: row.position_pubkey ? readSqlText(row.position_pubkey) : null,
     depositedUsd: Number(row.deposited_usd ?? 0),
     currentValueUsd: Number(row.current_value_usd ?? 0),
-    tokenXSymbol: String((row.token_x_symbol ?? "") as unknown),
-    tokenYSymbol: String((row.token_y_symbol ?? "") as unknown),
+    tokenXSymbol: readSqlText(row.token_x_symbol),
+    tokenYSymbol: readSqlText(row.token_y_symbol),
     activeBinId: Number(row.active_bin_id ?? 0),
     lowerBinId: Number(row.lower_bin_id ?? 0),
     upperBinId: Number(row.upper_bin_id ?? 0),
@@ -1586,8 +1641,8 @@ function rowToPosition(row: SqlRawRow): PositionRecord {
     cumulativeRewardsClaimedUsd: Number(row.cumulative_rewards_claimed_usd ?? 0),
     closedAt: row.closed_at != null ? Number(row.closed_at) : null,
     realizedPnlUsd: row.realized_pnl_usd != null ? Number(row.realized_pnl_usd) : null,
-    positionMode: row.position_mode != null ? String(row.position_mode as unknown) : null,
-    tpLadderJson: row.tp_ladder_json != null ? String(row.tp_ladder_json as unknown) : null,
+    positionMode: row.position_mode != null ? readSqlText(row.position_mode) : null,
+    tpLadderJson: row.tp_ladder_json != null ? readSqlText(row.tp_ladder_json) : null,
     invalidationStopPrice:
       row.invalidation_stop_price != null ? Number(row.invalidation_stop_price) : null,
   };
@@ -1597,13 +1652,13 @@ function rowToPositionEvent(row: SqlRawRow): PositionEventRecord {
   return {
     id: String(row.id),
     poolAddress: String(row.pool_address),
-    positionPubKey: row.position_pubkey ? String(row.position_pubkey as unknown) : null,
-    positionId: row.position_id ? String(row.position_id as unknown) : null,
+    positionPubKey: row.position_pubkey ? readSqlText(row.position_pubkey) : null,
+    positionId: row.position_id ? readSqlText(row.position_id) : null,
     event: String(row.event) as PositionEventType,
     valueUsd: row.value_usd != null ? Number(row.value_usd) : null,
     feesUsd: row.fees_usd != null ? Number(row.fees_usd) : null,
     price: row.price != null ? Number(row.price) : null,
-    metadata: row.metadata != null ? String(row.metadata as unknown) : null,
+    metadata: row.metadata != null ? readSqlText(row.metadata) : null,
     createdAt: Number(row.created_at ?? 0),
   };
 }
@@ -1612,7 +1667,7 @@ function rowToPositionEvent(row: SqlRawRow): PositionEventRecord {
 // known members (legacy NULL, an unexpected literal) is treated as the
 // conservative, fail-closed "heuristic" — never silently upgraded to "datapi",
 // so an unknown provenance keeps the measured-fee-rate gate disabled on replay.
-function parseStatsSource(value: unknown): "datapi" | "geckoterminal" | "heuristic" {
+function parseStatsSource(value: SqlRawCell): "datapi" | "geckoterminal" | "heuristic" {
   if (value === "datapi" || value === "geckoterminal" || value === "heuristic") return value;
   return "heuristic";
 }
@@ -1628,13 +1683,12 @@ function rowToSnapshot(row: SqlRawRow): PoolSnapshot {
     apr: Number(row.apr),
     currentPrice: Number(row.current_price),
     binStep: Number(row.bin_step),
-    tokenXSymbol: String((row.token_x_symbol ?? "") as unknown),
-    tokenYSymbol: String((row.token_y_symbol ?? "") as unknown),
+    tokenXSymbol: readSqlText(row.token_x_symbol),
+    tokenYSymbol: readSqlText(row.token_y_symbol),
     binArray: deserializeBinArray(String(row.bin_array_json)),
     statsSource: parseStatsSource(row.stats_source),
-    drawdown24h: row.drawdown24h === null || row.drawdown24h === undefined
-      ? null
-      : Number(row.drawdown24h),
+    drawdown24h:
+      row.drawdown24h === null || row.drawdown24h === undefined ? null : Number(row.drawdown24h),
   };
 }
 
@@ -1642,17 +1696,17 @@ function rowToAudit(row: SqlRawRow): AuditRecord {
   return {
     id: String(row.id),
     timestamp: Number(row.timestamp ?? 0),
-    cycleId: String((row.cycle_id ?? "") as unknown),
-    poolAddress: String((row.pool_address ?? "") as unknown),
-    action: String((row.action ?? "") as unknown),
+    cycleId: readSqlText(row.cycle_id),
+    poolAddress: readSqlText(row.pool_address),
+    action: readSqlText(row.action),
     confidence: Number(row.confidence ?? 0),
-    reasoning: String((row.reasoning ?? "") as unknown),
-    metricsJson: row.metrics_json ? String(row.metrics_json as unknown) : null,
-    riskResultJson: row.risk_result_json ? String(row.risk_result_json as unknown) : null,
+    reasoning: readSqlText(row.reasoning),
+    metricsJson: row.metrics_json ? readSqlText(row.metrics_json) : null,
+    riskResultJson: row.risk_result_json ? readSqlText(row.risk_result_json) : null,
     executed: Boolean(row.executed),
     paperTrading: Boolean(row.paper_trading),
-    txSignature: row.tx_signature ? String(row.tx_signature as unknown) : null,
-    error: row.error ? String(row.error as unknown) : null,
+    txSignature: row.tx_signature ? readSqlText(row.tx_signature) : null,
+    error: row.error ? readSqlText(row.error) : null,
   };
 }
 

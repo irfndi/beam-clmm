@@ -137,7 +137,12 @@ describe("migration v20 autonomous token durability", () => {
          ORDER BY name`,
       )
       .all()
-      .map((row) => String((row as { readonly name: unknown }).name));
+      // SAFETY: sqlite schema fixes this row to a single string `name` column.
+      .map((row) => {
+        // SAFETY: sqlite schema fixes this row to a single string `name` column.
+        return String((row as { readonly name: string }).name);
+      });
+    // SAFETY: COUNT(*) always returns one numeric `count` column.
     const migrationCount = reopened
       .query("SELECT COUNT(*) AS count FROM _migrations WHERE version = 20")
       .get() as { readonly count: number };
@@ -173,9 +178,11 @@ describe("migration v20 autonomous token durability", () => {
     const upgraded = createDatabase(dbPath);
 
     // Then
+    // SAFETY: COUNT(*) always returns one numeric `count` column.
     const migrationCount = upgraded
       .query("SELECT COUNT(*) AS count FROM _migrations WHERE version = 20")
       .get() as { readonly count: number };
+    // SAFETY: COUNT(*) always returns one numeric `count` column.
     const tableCount = upgraded
       .query(
         `SELECT COUNT(*) AS count FROM sqlite_master
@@ -186,7 +193,9 @@ describe("migration v20 autonomous token durability", () => {
            'wallet_safety_pauses'
          )`,
       )
+      // SAFETY: COUNT(*) always returns one numeric `count` column.
       .get() as { readonly count: number };
+    // SAFETY: the fixture creates legacy_marker(value TEXT NOT NULL).
     const marker = upgraded.query("SELECT value FROM legacy_marker").get() as {
       readonly value: string;
     };

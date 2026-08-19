@@ -17,20 +17,8 @@ interface LockfileData {
   readonly timestamp: number;
 }
 
-// The three guards below (isNodeError/isObject/isLockfileData) hand-roll the boundary contract for a JSON lockfile read from disk and thrown errors. Their `unknown` params, the Record<string, unknown> narrow, and numeric typeof checks ARE the parse-at-boundary step, not unsafe escape hatches, so they are exempted here.
-function isNodeError(err: unknown): err is NodeJS.ErrnoException {
-  return err instanceof Error && "code" in err;
-}
-
-function isObject(err: unknown): err is Record<string, unknown> {
-  return typeof err === "object" && err !== null;
-}
-
-function isLockfileData(parsed: unknown): parsed is LockfileData {
-  if (!isObject(parsed)) return false;
-  if (typeof parsed.pid !== "number") return false;
-  if (typeof parsed.timestamp !== "number") return false;
-  return true;
+function isLockfileData(parsed: LockfileData | null): parsed is LockfileData {
+  return parsed !== null && Number.isFinite(parsed.pid) && Number.isFinite(parsed.timestamp);
 }
 
 export function ensureLockfileDir(lockfileDir = LOCKFILE_DIR): void {
@@ -42,13 +30,14 @@ export function ensureLockfileDir(lockfileDir = LOCKFILE_DIR): void {
 export function readLockfile(lockfilePath = LOCKFILE_PATH): LockfileData | null {
   try {
     const content = fs.readFileSync(lockfilePath, "utf-8");
-    const parsed: unknown = JSON.parse(content);
+    // SAFETY: isLockfileData validates both numeric fields before the record is returned.
+    const parsed = JSON.parse(content) as LockfileData | null;
     if (isLockfileData(parsed)) {
       return parsed;
     }
     return null;
   } catch (err) {
-    if (isNodeError(err) && err.code === "ENOENT") {
+    if (err instanceof Error && "code" in err && err.code === "ENOENT") {
       return null;
     }
     return null;
@@ -92,8 +81,7 @@ export function findRunningEngineProcess(
       timeout: 3000,
     });
     if (result.error || !result.stdout) return null;
-    const stdout =
-      typeof result.stdout === "string" ? result.stdout : result.stdout.toString("utf-8");
+    const stdout = result.stdout.toString();
     const lines = stdout.trim().split("\n").slice(1);
     for (const line of lines) {
       const trimmed = line.trim();
@@ -148,7 +136,7 @@ export function acquireLock(
       }
       return { acquired: true };
     } catch (err) {
-      if (isNodeError(err) && err.code === "EEXIST") {
+      if (err instanceof Error && "code" in err && err.code === "EEXIST") {
         const existing = readLockfile(lockfilePath);
         return { acquired: false, existing };
       }
@@ -188,7 +176,7 @@ export function acquireLock(
   try {
     fs.renameSync(lockfilePath, backupPath);
   } catch (err) {
-    if (!isNodeError(err) || err.code !== "ENOENT") {
+    if (!(err instanceof Error && "code" in err && err.code === "ENOENT")) {
       throw err;
     }
     // The lock vanished between our read and rename — another launcher is
@@ -214,7 +202,9 @@ export function acquireLock(
           // Best-effort cleanup of the restored lock.
         }
       } catch (restoreErr) {
-        if (!isNodeError(restoreErr) || restoreErr.code !== "EEXIST") {
+        if (
+          !(restoreErr instanceof Error && "code" in restoreErr && restoreErr.code === "EEXIST")
+        ) {
           throw restoreErr;
         }
       }
@@ -243,7 +233,7 @@ export function releaseLock(lockfilePath = LOCKFILE_PATH): void {
       fs.unlinkSync(lockfilePath);
     }
   } catch (err) {
-    if (isNodeError(err) && err.code === "ENOENT") {
+    if (err instanceof Error && "code" in err && err.code === "ENOENT") {
       return;
     }
     // Best-effort cleanup; ignore other errors.

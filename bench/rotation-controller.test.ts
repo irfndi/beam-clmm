@@ -140,7 +140,12 @@ describe("evaluateRotation", () => {
   });
 
   test("holds when the challenger is not admissible (rule 9)", () => {
-    const d = evaluateRotation([makeSeat()], [makeChallenger({ admissible: false })], makeCfg(), confirmed());
+    const d = evaluateRotation(
+      [makeSeat()],
+      [makeChallenger({ admissible: false })],
+      makeCfg(),
+      confirmed(),
+    );
     expect(d.action).toBe("hold");
     if (d.action === "hold") expect(d.reason).toContain("not admissible");
   });
@@ -210,7 +215,12 @@ describe("evaluateRotation", () => {
 
   test("superiority gate is inclusive at the exact boundary (candNet == incumbent x 1.25)", () => {
     const seat = makeSeat(); // incumbent net 35, need 43.75
-    const boundary = makeChallenger({ fees24hUsd: 100, positionShare: 0.5, expectedInRangePct: 90, costsPerDayUsd: 1.25 }); // net 43.75
+    const boundary = makeChallenger({
+      fees24hUsd: 100,
+      positionShare: 0.5,
+      expectedInRangePct: 90,
+      costsPerDayUsd: 1.25,
+    }); // net 43.75
     const d = evaluateRotation([seat], [boundary], makeCfg(), confirmed());
     expect(d.action).toBe("rotate");
   });
@@ -270,12 +280,25 @@ describe("evaluateRotation", () => {
   });
 
   test("skips a challenger that targets the seat's own pool", () => {
-    const d = evaluateRotation([makeSeat()], [makeChallenger({ pool: "seat-A" })], makeCfg(), confirmed());
-    expect(d).toEqual({ action: "hold", reason: expect.stringContaining("no rotation candidates") });
+    const d = evaluateRotation(
+      [makeSeat()],
+      [makeChallenger({ pool: "seat-A" })],
+      makeCfg(),
+      confirmed(),
+    );
+    expect(d).toEqual({
+      action: "hold",
+      reason: expect.stringContaining("no rotation candidates"),
+    });
   });
 
   test("rotates to a valid challenger when a same-pool challenger is also present", () => {
-    const d = evaluateRotation([makeSeat()], [makeChallenger({ pool: "seat-A" }), makeChallenger()], makeCfg(), confirmed());
+    const d = evaluateRotation(
+      [makeSeat()],
+      [makeChallenger({ pool: "seat-A" }), makeChallenger()],
+      makeCfg(),
+      confirmed(),
+    );
     expect(d.action).toBe("rotate");
     if (d.action === "rotate") expect(d.enterPool).toBe("chal-B");
   });

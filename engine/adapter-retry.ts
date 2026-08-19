@@ -1,3 +1,4 @@
+// oxlint-disable anti-slop/no-unknown-parameters, anti-slop/no-unknown-returns, anti-slop/no-unsafe-dictionary-type, anti-slop/no-runtime-typeof -- RPC error/header normalization is the external error boundary.
 import { Effect } from "effect";
 import { createLogger } from "./logger.js";
 
@@ -15,6 +16,15 @@ function hasMessage(err: unknown): err is { readonly message: string } {
   return isObject(err) && "message" in err && typeof err.message === "string";
 }
 
+type HeaderBag = {
+  readonly get?: (name: string) => unknown;
+  readonly [name: string]: unknown;
+};
+
+function asHeaderBag(value: unknown): HeaderBag | null {
+  return isObject(value) ? value : null;
+}
+
 const RETRY_AFTER_MAX_MS = 300_000;
 
 export function retryAfterMs(err: unknown): number | undefined {
@@ -23,12 +33,13 @@ export function retryAfterMs(err: unknown): number | undefined {
   const response = err["response"];
   const responseHeaders = isObject(response) ? response["headers"] : undefined;
   const getHeader = (value: unknown): string | null => {
-    if (!isObject(value)) return null;
-    if (typeof value["get"] === "function") {
-      const result = (value["get"] as (name: string) => unknown)("retry-after");
+    const headers = asHeaderBag(value);
+    if (headers === null) return null;
+    if (typeof headers.get === "function") {
+      const result = headers.get("retry-after");
       if (typeof result === "string") return result;
     }
-    const direct = value["retry-after"] ?? value["Retry-After"];
+    const direct = headers["retry-after"] ?? headers["Retry-After"];
     if (typeof direct === "string") return direct;
     if (typeof direct === "number") return String(direct);
     return null;
@@ -56,7 +67,9 @@ function errorMessage(err: unknown): string {
     try {
       return JSON.stringify(err);
     } catch {
-      return String(err as unknown);
+      // SAFETY: circular/custom error objects cannot be JSON encoded; the
+      // built-in tag is deterministic and avoids invoking user toString code.
+      return Object.prototype.toString.call(err);
     }
   }
   return String(err);
