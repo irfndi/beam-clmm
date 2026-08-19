@@ -39,7 +39,7 @@ function buildLayer(
   const mockConfig = Layer.succeed(ConfigService, {
     walletPrivateKey: "",
     rpcUrl: "",
-    rpcFallbackUrl: "",
+    rpcFallbackUrls: [],
     paperTrading: true,
     ...AUTONOMOUS_TOKEN_CONFIG_DEFAULTS,
     scanIntervalMs: 600_000,

@@ -250,11 +250,7 @@ const readEngineStatusApiKey = (): string | null => {
     const credentialsFile = join(getBeamUserConfigDir(), "credentials.json");
     if (!existsSync(credentialsFile)) return null;
     const value = JSON.parse(readFileSync(credentialsFile, "utf-8")) as CredentialsFile;
-    if (
-      typeof value === "object" &&
-      value !== null &&
-      typeof value.apiKey === "string"
-    ) {
+    if (typeof value === "object" && value !== null && typeof value.apiKey === "string") {
       return value.apiKey;
     }
     return null;
@@ -343,6 +339,12 @@ const PREVIOUS_SNAPSHOT_WINDOW_MS = 26 * 60 * 60 * 1000;
 
 /** How often pool_snapshots pruning runs (rows older than the retention window are deleted). */
 const SNAPSHOT_PRUNE_INTERVAL_MS = 24 * 60 * 60 * 1000;
+/** Persist at most one pool snapshot per five-minute UTC bucket. */
+const SNAPSHOT_BUCKET_MS = 5 * 60 * 1000;
+
+export function snapshotBucketTimestamp(timestamp: number): number {
+  return Math.floor(timestamp / SNAPSHOT_BUCKET_MS) * SNAPSHOT_BUCKET_MS;
+}
 
 /**
  * Fee-Truth range floor: widen a (lower, upper) tick range so the FULL price
@@ -2571,6 +2573,10 @@ export const program = Effect.gen(function* () {
   let scanCount = 0;
   let lastAgentCheckinAt = 0;
   let lastWalletBalanceUsd = config.paperPortfolioUsd;
+  // Cycle-scoped read results. evaluatePool runs serially, so these are safe
+  // to share and avoid repeating identical DB/RPC work for every pool.
+  let closedPositionsThisCycle: ReadonlyArray<PositionRecord> = [];
+  let positionValuesThisCycle: ReadonlyMap<string, number | null> | null = null;
   // False until the first SUCCESSFUL live chain wallet read. The session-local
   // seed (config.paperPortfolioUsd, default $10,000) is fictional for live mode;
   // this flag keeps it from ever authorizing a live entry during an RPC outage
@@ -3082,7 +3088,9 @@ export const program = Effect.gen(function* () {
               binUtilization: 0,
               tokenX: rank.pool.tokenX,
               tokenY: rank.pool.tokenY,
-              ...(rank.pool.createdAtMs === undefined ? {} : { createdAtMs: rank.pool.createdAtMs }),
+              ...(rank.pool.createdAtMs === undefined
+                ? {}
+                : { createdAtMs: rank.pool.createdAtMs }),
             }))
           : yield* screener.screenPools(scanOrdinal).pipe(
               Effect.catch((error) => {
@@ -3589,7 +3597,9 @@ export const program = Effect.gen(function* () {
           poolTvlUsd: candidate.pool?.tvlUsd,
           countedOpenPositions: ownBook.open,
           countedPoolPositions: ownBook.pool,
-          ...(config.challengePoolShareCapPct !== undefined ? { challengePoolShareCapPct: config.challengePoolShareCapPct } : {}),
+          ...(config.challengePoolShareCapPct !== undefined
+            ? { challengePoolShareCapPct: config.challengePoolShareCapPct }
+            : {}),
         });
         if (!allocation.approved) {
           idleRedeployLogger.info("Idle redeploy capped by allocation", {
@@ -4262,8 +4272,8 @@ export const program = Effect.gen(function* () {
             (isInsufficientTokenBalanceError(executionError) ||
               // dp8 pre-broadcast sim rejection: zero-cost abort before any
               // broadcast — never arms the execution_failures pause.
-              ((executionError ?? "").includes("mint simulation failed pre-broadcast") ||
-                (executionError ?? "").includes("fell short pre-broadcast")))
+              (executionError ?? "").includes("mint simulation failed pre-broadcast") ||
+              (executionError ?? "").includes("fell short pre-broadcast"))
           )
         ) {
           // Issue #170: in SOL-funded mode a redeploy failing on a funding
@@ -4377,6 +4387,11 @@ export const program = Effect.gen(function* () {
       };
 
       console.info("Scan cycle started", { cycleId: cycle.cycleId });
+
+      closedPositionsThisCycle = yield* db
+        .getClosedPositions()
+        .pipe(Effect.catch(() => Effect.succeed([] as ReadonlyArray<PositionRecord>)));
+      positionValuesThisCycle = null;
 
       let oldestSettlementAgeMs = 0;
       yield* refreshAutonomousCandidates(scanCount);
@@ -4530,6 +4545,27 @@ export const program = Effect.gen(function* () {
         );
       } else {
         lastWalletBalanceUsd = config.paperPortfolioUsd;
+      }
+
+      // One batched mark pass replaces one position enumeration + pool-state
+      // and price read chain per held position. On failure, keep the existing
+      // per-position fail-open fallback below rather than blocking exits.
+      if (
+        adapter.hasWallet() &&
+        !config.paperTrading &&
+        adapter.getAllPositionValuesUsd !== undefined
+      ) {
+        const walletAddress = adapter.getWalletAddress();
+        if (walletAddress !== null) {
+          positionValuesThisCycle = yield* adapter.getAllPositionValuesUsd(walletAddress).pipe(
+            Effect.catch((err) => {
+              console.warn("Batched position marks unavailable; using per-position fallback", {
+                err: String(err),
+              });
+              return Effect.succeed(null);
+            }),
+          );
+        }
       }
 
       // Challenge hard floor (safety audit): track all-time peak equity and
@@ -5182,8 +5218,13 @@ export const program = Effect.gen(function* () {
 
       // TVL velocity + IL price-drift need a previous reference point, so the
       // previous snapshot must be read BEFORE persisting the current one.
+      const snapshotTimestamp = snapshotBucketTimestamp(pool.timestamp);
       const previousSnapshots = yield* db
-        .getSnapshots(poolAddress, pool.timestamp - PREVIOUS_SNAPSHOT_WINDOW_MS, pool.timestamp)
+        .getSnapshots(
+          poolAddress,
+          snapshotTimestamp - PREVIOUS_SNAPSHOT_WINDOW_MS,
+          snapshotTimestamp - 1,
+        )
         .pipe(Effect.catch(() => Effect.succeed([] as ReadonlyArray<PoolSnapshot>)));
       const previousSnapshot =
         previousSnapshots.length > 0 ? previousSnapshots[previousSnapshots.length - 1] : undefined;
@@ -5196,7 +5237,7 @@ export const program = Effect.gen(function* () {
       yield* db
         .saveSnapshot({
           poolAddress,
-          timestamp: pool.timestamp,
+          timestamp: snapshotTimestamp,
           activeBinId: pool.activeBinId,
           tvlUsd: pool.tvlUsd,
           volume24hUsd: pool.volume24hUsd,
@@ -5712,11 +5753,15 @@ export const program = Effect.gen(function* () {
       // and never fails — null falls through to the price-anchored mark.
       for (const pos of poolPositions) {
         const realMark =
-          pos.positionPubKey != null && adapter.getPositionValueUsd != null
-            ? yield* adapter
-                .getPositionValueUsd(poolAddress, pos.positionPubKey)
-                .pipe(Effect.catch(() => Effect.succeed(null)))
-            : null;
+          pos.positionPubKey == null
+            ? null
+            : positionValuesThisCycle !== null && positionValuesThisCycle.has(pos.positionPubKey)
+              ? (positionValuesThisCycle.get(pos.positionPubKey) ?? null)
+              : adapter.getPositionValueUsd != null
+                ? yield* adapter
+                    .getPositionValueUsd(poolAddress, pos.positionPubKey)
+                    .pipe(Effect.catch(() => Effect.succeed(null)))
+                : null;
         // Explicit null check (not `??`): the adapter contract returns null
         // when the mark is unavailable, never 0 — a genuine 0-valued position
         // is real data (dust) and must not silently fall back to the
@@ -6210,9 +6255,7 @@ export const program = Effect.gen(function* () {
         walletBalanceUsd + openPositions.reduce((sum, p) => sum + p.currentValueUsd, 0);
       const dayStart = new Date(Date.now()).setUTCHours(0, 0, 0, 0);
       const dayKey = new Date(dayStart).toISOString().slice(0, 10);
-      const closedToday = yield* db
-        .getClosedPositions()
-        .pipe(Effect.catch(() => Effect.succeed([])));
+      const closedToday = closedPositionsThisCycle;
       const realizedTodayUsd = closedToday.reduce(
         (sum, position) =>
           position.closedAt !== null &&
@@ -6896,7 +6939,9 @@ export const program = Effect.gen(function* () {
                 poolAddress,
                 config.paperTrading,
               ).pool,
-              ...(config.challengePoolShareCapPct !== undefined ? { challengePoolShareCapPct: config.challengePoolShareCapPct } : {}),
+              ...(config.challengePoolShareCapPct !== undefined
+                ? { challengePoolShareCapPct: config.challengePoolShareCapPct }
+                : {}),
             });
             if (!faAllocation.approved) {
               console.info(
@@ -7109,9 +7154,7 @@ export const program = Effect.gen(function* () {
           // reverts 'unknown reason' (verified 2026-08-16/17 — ~$0.5/day
           // bleed). Skip v4 pools entirely: audited, not a failure.
           const v4Disabled =
-            config.entryV4Enabled === false &&
-            !config.paperTrading &&
-            poolAddress.length === 66;
+            config.entryV4Enabled === false && !config.paperTrading && poolAddress.length === 66;
           if (!enterGateRejected && v4Disabled) {
             yield* audit
               .recordDecision({
@@ -7267,7 +7310,9 @@ export const program = Effect.gen(function* () {
                   poolAddress,
                   config.paperTrading,
                 ).pool,
-                ...(config.challengePoolShareCapPct !== undefined ? { challengePoolShareCapPct: config.challengePoolShareCapPct } : {}),
+                ...(config.challengePoolShareCapPct !== undefined
+                  ? { challengePoolShareCapPct: config.challengePoolShareCapPct }
+                  : {}),
               });
               if (!allocation.approved) {
                 console.info(`[alloc-gate] Skipping ENTER ${poolAddress} — ${allocation.reason}`);
@@ -8234,7 +8279,9 @@ export const program = Effect.gen(function* () {
               reconcileRequestedPools,
               memory,
               unpricedExitWarnedPools,
-              ...(autonomousCandidateId !== undefined ? { candidateId: autonomousCandidateId } : {}),
+              ...(autonomousCandidateId !== undefined
+                ? { candidateId: autonomousCandidateId }
+                : {}),
               ...(autonomousExecution ? { autonomous: autonomousExecution } : {}),
             },
             decision,
@@ -8293,7 +8340,9 @@ export const program = Effect.gen(function* () {
               reconcileRequestedPools,
               memory,
               unpricedExitWarnedPools,
-              ...(autonomousCandidateId !== undefined ? { candidateId: autonomousCandidateId } : {}),
+              ...(autonomousCandidateId !== undefined
+                ? { candidateId: autonomousCandidateId }
+                : {}),
               ...(autonomousExecution ? { autonomous: autonomousExecution } : {}),
             },
             decision,
@@ -8411,8 +8460,8 @@ export const program = Effect.gen(function* () {
                 // execution_failures pause every cycle the pool is re-decided
                 // (observed oscillation 2026-08-16), pausing the agent for a
                 // doomed-but-free rejection.
-                ((executionError ?? "").includes("mint simulation failed pre-broadcast") ||
-                (executionError ?? "").includes("fell short pre-broadcast")))
+                (executionError ?? "").includes("mint simulation failed pre-broadcast") ||
+                (executionError ?? "").includes("fell short pre-broadcast"))
             )
           ) {
             cycle.poolsFailed++;

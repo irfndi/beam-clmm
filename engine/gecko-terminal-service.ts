@@ -63,6 +63,19 @@ const DEFAULT_REQUEST_INTERVAL_MS = 2_100;
 let nextGeckoRequestAt = 0;
 let requestIntervalMs = DEFAULT_REQUEST_INTERVAL_MS;
 
+// ─── Response cache (TTL) ────────────────────────────────────────────────
+// Krystal is primary (measured fees); gecko is fallback. Without a cache the
+// fallback serializes N pools × 2.1s = 63s per 30-pool cycle. A 10-min TTL
+// matches the Krystal universe TTL and the 24h-volume half-life — volume
+// barely moves intraday — so one bulk failure still pays one gecko round per
+// 10 min instead of per pool per cycle.
+const GECKO_CACHE_TTL_MS = 10 * 60 * 1000;
+const geckoCache = new Map<string, { stats: GeckoPoolStats | null; at: number }>();
+
+export function clearGeckoCache(): void {
+  geckoCache.clear();
+}
+
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
 /** TEST-ONLY: override the minimum inter-request interval (call with 0 to
@@ -206,8 +219,15 @@ export async function getGeckoPoolStats(
     readonly baseUrl?: string;
     readonly timeoutMs?: number;
     readonly fetchImpl?: FetchLike;
+    readonly bypassCache?: boolean;
   },
 ): Promise<GeckoPoolStats | null> {
+  if (!options.bypassCache) {
+    const cached = geckoCache.get(poolAddress);
+    if (cached !== undefined && Date.now() - cached.at < GECKO_CACHE_TTL_MS) {
+      return cached.stats;
+    }
+  }
   const fetchImpl = options.fetchImpl ?? fetch;
   const timeoutMs = options.timeoutMs ?? REQUEST_TIMEOUT_MS;
   const base = (options.baseUrl ?? process.env.GECKO_TERMINAL_API_URL ?? DEFAULT_BASE_URL)
@@ -248,14 +268,17 @@ export async function getGeckoPoolStats(
       logger.warn("GeckoTerminal pool has no reserve — treating stats as unavailable", {
         pool: poolAddress,
       });
+      geckoCache.set(poolAddress, { stats: null, at: Date.now() });
       return null;
     }
+    geckoCache.set(poolAddress, { stats: parsed, at: Date.now() });
     return parsed;
   } catch (err) {
     logger.warn("GeckoTerminal fetch failed — falling through to next stats source", {
       pool: poolAddress,
       error: err instanceof Error ? err.message : String(err),
     });
+    geckoCache.set(poolAddress, { stats: null, at: Date.now() });
     return null;
   }
 }

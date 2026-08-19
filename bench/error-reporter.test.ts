@@ -27,6 +27,9 @@ function makeReporter(overrides?: Partial<ErrorReporterConfig>): ErrorReporter {
     enabled: true,
     batchSize: 5,
     flushIntervalMs: 60_000,
+    // Tiny backoff so failure-resilience tests don't wait the production
+    // ~2-min retry window.
+    retryDelayMs: 1,
     ...overrides,
   });
   r.setAppVersion("1.0.0-test");

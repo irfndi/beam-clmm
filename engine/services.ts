@@ -195,6 +195,10 @@ export interface AdapterApi {
     poolAddress: string,
     positionPubKey: string,
   ) => Effect.Effect<number | null, never>;
+  /** Batch principal marks for all live positions with deduplicated reads. */
+  readonly getAllPositionValuesUsd?: (
+    walletAddress: string,
+  ) => Effect.Effect<ReadonlyMap<string, number | null>, Error>;
   /**
    * Estimate the benefit of rebalancing `positionPubKey` into a new range.
    * Reserved for a real on-chain atomic-rebalance simulation; the EVM port
@@ -233,7 +237,7 @@ export interface AdapterApi {
     lowerBinId: number,
     upperBinId: number,
     positionSizeUsd: number,
-  options?: { strategyShape?: EntryStrategyShape },
+    options?: { strategyShape?: EntryStrategyShape },
   ) => Effect.Effect<
     {
       positionPubKey: string;
@@ -385,10 +389,7 @@ export interface AdapterApi {
   readonly verifyExitRoute?: (
     poolAddress: string,
     positionSizeUsd: number,
-  ) => Effect.Effect<
-    { ok: boolean; reason: string | null; proceedsUsd: number | null },
-    Error
-  >;
+  ) => Effect.Effect<{ ok: boolean; reason: string | null; proceedsUsd: number | null }, Error>;
   /**
    * eth_call dry-run of the EXACT burn+collect calldata the engine would
    * broadcast for this position (exitPosition/rebalancePosition), returning
@@ -1088,10 +1089,17 @@ export interface DbApi {
   readonly getSnapshotCount: (poolAddress: string) => Effect.Effect<number, Error>;
   readonly pruneSnapshots: (olderThanMs: number) => Effect.Effect<number, Error>;
   readonly getRotationObservations: () => Effect.Effect<
-    ReadonlyArray<{ readonly pairKey: string; readonly obsCount: number; readonly updatedAt: number }>,
+    ReadonlyArray<{
+      readonly pairKey: string;
+      readonly obsCount: number;
+      readonly updatedAt: number;
+    }>,
     Error
   >;
-  readonly saveRotationObservation: (pairKey: string, obsCount: number) => Effect.Effect<void, Error>;
+  readonly saveRotationObservation: (
+    pairKey: string,
+    obsCount: number,
+  ) => Effect.Effect<void, Error>;
   readonly saveFeedback: (entry: {
     id: string;
     agentId: string;

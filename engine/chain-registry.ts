@@ -24,12 +24,18 @@ export interface ChainDeployment {
   readonly name: string;
   /** Default/public RPC. Users override via RPC_URL / BEAM_<CHAIN>_RPC_URL. */
   readonly defaultRpc: string;
-  readonly nativeCurrency: { readonly name: string; readonly symbol: string; readonly decimals: number };
+  readonly nativeCurrency: {
+    readonly name: string;
+    readonly symbol: string;
+    readonly decimals: number;
+  };
   /** Uniswap v3 factory. */
   readonly v3Factory: Address;
   /** Uniswap v3 NonfungiblePositionManager. */
   readonly v3Npm: Address;
   readonly v3TickLens: Address;
+  /** Multicall3 deployment used to batch read-only pool state. */
+  readonly multicall3: Address;
   /** Uniswap v4 PositionManager + StateView (v4 pools). Required: every
    *  registered chain has an official v4 deployment. */
   readonly v4PositionManager: Address;
@@ -68,6 +74,7 @@ const BASE: ChainDeployment = {
   v3Factory: getAddress("0x33128a8fC17869897dcE68Ed026d694621f6FDfD"),
   v3Npm: getAddress("0x03a520b32C04BF3bEEf7BEb72E919cf822Ed34f1"),
   v3TickLens: getAddress("0x0CdeE061c75D43c82520eD998C23ac2991c9ac6d"),
+  multicall3: getAddress("0xcA11bde05977b3631167028862bE2a173976CA11"),
   v3SwapRouter02: getAddress("0x2626664c2603336E57B271c5C0b26F421741e481"),
   v3SwapRouterEncoding: "canonical-8f",
   // v4 (developers.uniswap.org/docs/protocols/v4/deployments — Base: 8453)
@@ -93,6 +100,7 @@ const ROBINHOOD: ChainDeployment = {
   v3Factory: getAddress("0x1f7d7550b1b028f7571e69a784071f0205fd2efa"),
   v3Npm: getAddress("0x73991a25c818bf1f1128deaab1492d45638de0d3"),
   v3TickLens: getAddress("0x7dfd4f31be6814d2906bde155c3e1b146eac1468"),
+  multicall3: getAddress("0xcA11bde05977b3631167028862bE2a173976CA11"),
   v4PositionManager: getAddress("0x58daec3116aae6d93017baaea7749052e8a04fa7"),
   v4StateView: getAddress("0xF3334192D15450CdD385c8B70e03f9A6bD9E673b"),
   universalRouter: getAddress("0x06AfBA43Fd06227fA663b0DAecF536f6EaA6bf99"),
@@ -137,6 +145,7 @@ export const BEAM_CHAIN_NAME = DEPLOYMENT.name;
 export const V3_FACTORY = DEPLOYMENT.v3Factory;
 export const V3_NPM = DEPLOYMENT.v3Npm;
 export const V3_TICK_LENS = DEPLOYMENT.v3TickLens;
+export const MULTICALL3 = DEPLOYMENT.multicall3;
 export const V4_POSITION_MANAGER = DEPLOYMENT.v4PositionManager;
 export const V4_STATE_VIEW = DEPLOYMENT.v4StateView;
 export const UNIVERSAL_ROUTER = DEPLOYMENT.universalRouter;
@@ -157,7 +166,11 @@ export const ROBINHOOD_CHAIN = {
 } as const;
 
 /** List every registered chain (for setup/CLI surfaces). */
-export function listChains(): ReadonlyArray<{ readonly key: string; readonly chainId: number; readonly name: string }> {
+export function listChains(): ReadonlyArray<{
+  readonly key: string;
+  readonly chainId: number;
+  readonly name: string;
+}> {
   return CHAIN_DEPLOYMENTS.map((c) => ({
     key: c.key,
     chainId: c.chainId,

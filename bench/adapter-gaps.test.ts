@@ -312,7 +312,7 @@ function makeProgram(opts?: { exitProofConfig?: { simulateBeforeExit?: boolean }
   const cfg = defaultAppConfig({
     walletPrivateKey: WALLET_KEY,
     rpcUrl: "https://rpc.mock.local",
-    rpcFallbackUrl: "",
+    rpcFallbackUrls: [],
     paperTrading: false,
   });
   const enriched = {
@@ -502,7 +502,7 @@ describe("simulateWithdraw fail-closed (exitPosition / rebalancePosition)", () =
     const cfg = defaultAppConfig({
       walletPrivateKey: WALLET_KEY,
       rpcUrl: "https://rpc.mock.local",
-      rpcFallbackUrl: "",
+      rpcFallbackUrls: [],
       paperTrading: false,
     });
     const program = Layer.provide(

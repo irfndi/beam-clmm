@@ -34,7 +34,7 @@ export const setupCommand = new Command("setup")
         options.rpcUrl ||
         process.env.ROBINHOOD_RPC_URL ||
         "https://rpc.mainnet.chain.robinhood.com";
-      rpcFallbackUrl = options.rpcFallbackUrl || process.env.ROBINHOOD_RPC_FALLBACK_URL || "";
+      rpcFallbackUrl = options.rpcFallbackUrl || process.env.RPC_FALLBACK_URLS || process.env.ROBINHOOD_RPC_FALLBACK_URL || "";
       // Read wallet key from file if provided, otherwise from env
       if (options.walletKeyFile) {
         try {
@@ -72,9 +72,9 @@ export const setupCommand = new Command("setup")
 
           rpcFallbackUrl: () =>
             p.text({
-              message: "Fallback RPC URL (optional)",
-              placeholder: "https://...",
-              initialValue: process.env.ROBINHOOD_RPC_FALLBACK_URL ?? "",
+              message: "Fallback RPC URL(s) (optional, comma-separated)",
+              placeholder: "https://robinhood-rpc.publicnode.com",
+              initialValue: process.env.RPC_FALLBACK_URLS ?? process.env.ROBINHOOD_RPC_FALLBACK_URL ?? "",
             }),
 
           walletKey: () =>
@@ -133,7 +133,7 @@ export const setupCommand = new Command("setup")
     const envContent = [
       "# RPC providers",
       `ROBINHOOD_RPC_URL=${escapeEnv(rpcUrl)}`,
-      `ROBINHOOD_RPC_FALLBACK_URL=${escapeEnv(rpcFallbackUrl)}`,
+      `RPC_FALLBACK_URLS=${escapeEnv(rpcFallbackUrl)}`,
       "",
       "# Wallet (optional — leave empty for paper trading)",
       `WALLET_PRIVATE_KEY=${escapeEnv(walletKey)}`,

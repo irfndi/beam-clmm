@@ -127,7 +127,11 @@ const DEFAULT_RETRY_OPTIONS: Required<Omit<RetryOptions, "rateLimitBaseDelayMs">
   maxRetries: 5,
   baseDelayMs: 1000,
   maxDelayMs: 30000,
-  rateLimitBaseDelayMs: 5_000,
+  // Public RPCs (Robinhood chain.robinhood.com, Base) return "Rate Limit Hit,
+  // limit will reset in 60 seconds" — the wait must cover the full reset
+  // window or retries exhaust before the endpoint recovers. 60s base (plus
+  // retry-after from the response) beats the generic 30s cap for 429s.
+  rateLimitBaseDelayMs: 60_000,
 };
 
 export function retryEffectWithBackoff<T, E>(
@@ -146,7 +150,14 @@ export function retryEffectWithBackoff<T, E>(
           return Effect.fail(err);
         }
         const effectiveBase = isRateLimitError(err) ? rateLimitBaseDelayMs : baseDelayMs;
-        const exponentialDelay = Math.min(maxDelayMs, effectiveBase * 2 ** attemptNumber);
+        // Rate-limit retries must be allowed to span the full reset window
+        // (60s on Robinhood/Base public RPCs) — the generic maxDelayMs cap
+        // (30s) would otherwise exhaust every retry before the endpoint
+        // recovers. Only the non-rate-limit backoff obeys maxDelayMs.
+        const capped = isRateLimitError(err)
+          ? effectiveBase * 2 ** attemptNumber
+          : Math.min(maxDelayMs, effectiveBase * 2 ** attemptNumber);
+        const exponentialDelay = capped;
         const jitter = Math.random() * exponentialDelay * 0.5;
         const delay = Math.max(Math.floor(exponentialDelay + jitter), retryAfterMs(err) ?? 0);
         return Effect.sync(() =>

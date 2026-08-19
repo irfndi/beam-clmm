@@ -31,6 +31,10 @@ interface CliArgs {
   dbPath: string;
 }
 
+export function replayUsesMeasuredVolume(source: PoolState["statsSource"]): boolean {
+  return source === "datapi" || source === "krystal";
+}
+
 function parseArgs(argv: ReadonlyArray<string>): CliArgs {
   const out: CliArgs = {
     days: 7,
@@ -245,7 +249,10 @@ export function runBacktestFromTicks(
     const metrics = strategy.computeMetrics(tick.pool, tick.binArray, previousTvl);
     // Match computeMetrics' wiring so this standalone auth score stays consistent
     // with metrics.volumeAuthenticity: fees are measured only under the Data API.
-    const auth = strategy.checkVolumeAuthenticity(tick.pool, tick.pool.statsSource === "datapi");
+    const auth = strategy.checkVolumeAuthenticity(
+      tick.pool,
+      replayUsesMeasuredVolume(tick.pool.statsSource),
+    );
     if (
       !strategy.passesPreFilter(tick.pool, auth.score, metrics.binUtilization, 50_000, 0.7, 0.3)
     ) {

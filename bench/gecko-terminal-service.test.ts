@@ -1,8 +1,9 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeEach } from "vitest";
 import {
   parseGeckoPoolStats,
   enrichPoolFromGecko,
   getGeckoPoolStats,
+  clearGeckoCache,
   type GeckoPoolStats,
 } from "../engine/gecko-terminal-service.js";
 import type { PoolState } from "../engine/types.js";
@@ -135,6 +136,8 @@ describe("enrichPoolFromGecko", () => {
 // ─── getGeckoPoolStats ────────────────────────────────────────────────────────
 
 describe("getGeckoPoolStats", () => {
+  beforeEach(() => clearGeckoCache());
+
   const okBody = {
     data: {
       attributes: {

@@ -3,6 +3,7 @@ import {
   createPublicClient,
   createWalletClient,
   decodeAbiParameters,
+  decodeFunctionResult,
   decodeFunctionData,
   encodeAbiParameters,
   encodeFunctionData,
@@ -75,6 +76,7 @@ import {
   V3_FACTORY,
   V3_NPM,
   V3_TICK_LENS,
+  MULTICALL3,
   V4_POSITION_MANAGER,
   V4_STATE_VIEW,
   UNIVERSAL_ROUTER,
@@ -155,6 +157,9 @@ const v3PoolAbi = parseAbi([
 ]);
 const tickLensAbi = parseAbi([
   "function getPopulatedTicksInWord(address pool, int16 tickBitmapIndex) view returns ((int24,int128,uint128)[])",
+]);
+const multicall3Abi = parseAbi([
+  "function aggregate3((address target,bool allowFailure,bytes callData)[] calls) view returns ((bool success,bytes returnData)[] returnData)",
 ]);
 const v3NpmAbi = parseAbi([
   "function balanceOf(address) view returns (uint256)",
@@ -251,10 +256,7 @@ const swapRouter02V2Abi = parseAbi([
 ]);
 const universalRouterAbi = parseAbi(["function execute(bytes,bytes[],uint256) payable"]);
 
-const weth9Abi = parseAbi([
-  "function deposit() payable",
-  "function withdraw(uint256)",
-]);
+const weth9Abi = parseAbi(["function deposit() payable", "function withdraw(uint256)"]);
 
 /** Permit2 (canonical 0x000…22D4 deployment, used by the v4 PositionManager
  *  and UniversalRouter as a forwarder). */
@@ -305,11 +307,7 @@ export function usdToAtomic(usd: number, priceUsd: number, decimals: number): bi
 }
 
 /** Half-width tick range (±rangeBps) around the current tick, spacing-aligned. */
-export function tickRangeAround(
-  tick: number,
-  tickSpacing: number,
-  rangeBps = 500,
-): TickRange {
+export function tickRangeAround(tick: number, tickSpacing: number, rangeBps = 500): TickRange {
   const half = Math.round(Math.log(1 + rangeBps / 10_000) / Math.log(1.0001));
   return {
     tickLower: nearestUsableTick(tick - half, tickSpacing),
@@ -717,9 +715,7 @@ export interface UniversalRouterV4SwapCalldataArgs {
  * [abi.encode(ExactInputSingleParams)]; ExactInputSingleParams carries
  * (PoolKey, zeroForOne, amountIn, amountOutMinimum, minHopPriceX36, hookData).
  */
-export function buildUniversalRouterV4SwapCalldata(
-  args: UniversalRouterV4SwapCalldataArgs,
-): Hex {
+export function buildUniversalRouterV4SwapCalldata(args: UniversalRouterV4SwapCalldataArgs): Hex {
   const { poolKey, zeroForOne, amountIn, amountOutMinimum, deadline } = args;
   if (amountIn > MAX_UINT160 || amountOutMinimum > MAX_UINT160) {
     throw new Error("v4 swap amount exceeds uint160");
@@ -749,13 +745,7 @@ export function buildUniversalRouterV4SwapCalldata(
     ],
     [
       [
-        [
-          poolKey.currency0,
-          poolKey.currency1,
-          poolKey.fee,
-          poolKey.tickSpacing,
-          poolKey.hooks,
-        ],
+        [poolKey.currency0, poolKey.currency1, poolKey.fee, poolKey.tickSpacing, poolKey.hooks],
         zeroForOne,
         amountIn,
         amountOutMinimum,
@@ -764,7 +754,10 @@ export function buildUniversalRouterV4SwapCalldata(
       ],
     ],
   );
-  const unlockData = encodeAbiParameters([{ type: "bytes" }, { type: "bytes[]" }], ["0x06", [swapParams]]);
+  const unlockData = encodeAbiParameters(
+    [{ type: "bytes" }, { type: "bytes[]" }],
+    ["0x06", [swapParams]],
+  );
   return encodeFunctionData({
     abi: universalRouterAbi,
     functionName: "execute",
@@ -1022,9 +1015,7 @@ export function positionAmountsAtSqrtPrice(
 }
 
 /** Extract the minted tokenId from a mint receipt (ERC-721 Transfer from 0x0). */
-export function tokenIdFromMintReceipt(
-  receipt: Pick<TransactionReceipt, "logs">,
-): bigint | null {
+export function tokenIdFromMintReceipt(receipt: Pick<TransactionReceipt, "logs">): bigint | null {
   for (const log of receipt.logs) {
     const topic0 = log.topics[0]?.toLowerCase();
     const from = log.topics[1]?.toLowerCase();
@@ -1050,7 +1041,8 @@ const NOT_IMPLEMENTED = (what: string) =>
     ),
   );
 
-export const AdapterLive = Layer.effect(AdapterService,
+export const AdapterLive = Layer.effect(
+  AdapterService,
   Effect.gen(function* () {
     const config = yield* ConfigService;
     const rpcUrl = config.rpcUrl || DEFAULT_RPC;
@@ -1065,9 +1057,17 @@ export const AdapterLive = Layer.effect(AdapterService,
     const retryCount = config.rpcRetryCount ?? 4;
     const rawTransport = () => http(rpcUrl, { timeout: 45_000, retryCount: retryCount });
     const publicClient = createPublicClient({
-      transport: config.rpcFallbackUrl
-        ? fallback([rawTransport(), http(config.rpcFallbackUrl, { timeout: 45_000, retryCount })])
-        : rawTransport(),
+      // RPC_FALLBACK_URLS (comma-separated) wraps each fallback in a viem
+      // fallback() chain: on 429/timeout the primary, the next endpoint
+      // (e.g. keyless PublicNode for Robinhood) takes over, keeping scans
+      // healthy without a paid RPC key.
+      transport:
+        config.rpcFallbackUrls.length > 0
+          ? fallback([
+              rawTransport(),
+              ...config.rpcFallbackUrls.map((url) => http(url, { timeout: 45_000, retryCount })),
+            ])
+          : rawTransport(),
     });
 
     // Fee-truth two-seat knobs: read the nested SwapMintConfig/ExitProofConfig
@@ -1111,8 +1111,8 @@ export const AdapterLive = Layer.effect(AdapterService,
       getContract({ address, abi: v3PoolAbi, client: { public: publicClient } });
     const v3Npm = () =>
       getContract({ address: V3_NPM, abi: v3NpmAbi, client: { public: publicClient } });
-    const tickLens = () =>
-      getContract({ address: V3_TICK_LENS, abi: tickLensAbi, client: { public: publicClient } });
+    const multicall3 = () =>
+      getContract({ address: MULTICALL3, abi: multicall3Abi, client: { public: publicClient } });
     const v4StateView = () =>
       getContract({
         address: V4_STATE_VIEW,
@@ -1125,6 +1125,22 @@ export const AdapterLive = Layer.effect(AdapterService,
         abi: v4PositionManagerAbi,
         client: { public: publicClient },
       });
+
+    async function aggregate3Read(
+      calls: ReadonlyArray<{ readonly target: Address; readonly callData: Hex }>,
+    ): Promise<ReadonlyArray<{ readonly success: boolean; readonly returnData: Hex }>> {
+      const result = await multicall3().read.aggregate3([
+        calls.map((call) => ({
+          target: call.target,
+          allowFailure: false,
+          callData: call.callData,
+        })),
+      ]);
+      return result.map((item) => ({
+        success: item.success,
+        returnData: item.returnData,
+      }));
+    }
 
     async function getDecimals(mint: string): Promise<number> {
       if (isNative(mint)) return 18;
@@ -1140,7 +1156,8 @@ export const AdapterLive = Layer.effect(AdapterService,
         // The settlement stablecoin (USDG) and native ETH are the only tokens
         // the engine needs to price without a live decimals() call.
         if (mintKey === STABLECOIN_MINT.toLowerCase()) decimals = 6;
-        else throw new Error(`decimals() read failed for ${mint}; cannot determine token precision`);
+        else
+          throw new Error(`decimals() read failed for ${mint}; cannot determine token precision`);
       }
       decimalsCache.set(mintKey, decimals);
       return decimals;
@@ -1169,7 +1186,9 @@ export const AdapterLive = Layer.effect(AdapterService,
       const owner = requireWallet();
       let nonce = nonces.get(owner);
       if (nonce === undefined) {
-        nonce = BigInt(await publicClient.getTransactionCount({ address: owner, blockTag: "pending" }));
+        nonce = BigInt(
+          await publicClient.getTransactionCount({ address: owner, blockTag: "pending" }),
+        );
       }
       nonces.set(owner, nonce + 1n);
       return nonce;
@@ -1225,7 +1244,10 @@ export const AdapterLive = Layer.effect(AdapterService,
     }): Promise<{ txSignature: string; receipt: TransactionReceipt }> {
       const owner = requireWallet();
       const wc = walletClient;
-      if (!wc) throw new Error("live transactions disabled: WALLET_PRIVATE_KEY is not configured (paper mode)");
+      if (!wc)
+        throw new Error(
+          "live transactions disabled: WALLET_PRIVATE_KEY is not configured (paper mode)",
+        );
       const { to, data, value = 0n } = params;
       try {
         await publicClient.call({ account: owner, to, data, value });
@@ -1447,9 +1469,13 @@ export const AdapterLive = Layer.effect(AdapterService,
         // address or zero fee means the lookup failed; fail closed.
         const ZERO = "0x0000000000000000000000000000000000000000";
         if (
-          !c0 || !c1 || !hooksRaw ||
-          c0.toLowerCase() === ZERO || c1.toLowerCase() === ZERO ||
-          Number(feeRaw) <= 0 || Number(spacingRaw) <= 0
+          !c0 ||
+          !c1 ||
+          !hooksRaw ||
+          c0.toLowerCase() === ZERO ||
+          c1.toLowerCase() === ZERO ||
+          Number(feeRaw) <= 0 ||
+          Number(spacingRaw) <= 0
         ) {
           throw new Error("poolKeys returned an invalid/zero key");
         }
@@ -1464,9 +1490,7 @@ export const AdapterLive = Layer.effect(AdapterService,
         return resolved;
       } catch (e) {
         if (existing) return existing;
-        throw new Error(
-          `v4 pool ${id} key unresolved on-chain (${underlyingErrorMessage(e)})`,
-        );
+        throw new Error(`v4 pool ${id} key unresolved on-chain (${underlyingErrorMessage(e)})`);
       }
     }
 
@@ -1780,14 +1804,10 @@ export const AdapterLive = Layer.effect(AdapterService,
       }
       const v3 = await findV3PoolForPair(tokenIn, tokenOut);
       if (!v3) {
-        throw new Error(
-          `no direct v3 or registered v4 pool for ${tokenIn} -> ${tokenOut}`,
-        );
+        throw new Error(`no direct v3 or registered v4 pool for ${tokenIn} -> ${tokenOut}`);
       }
       const state = await v3PoolQuoteState(v3.pool);
-      const inputAddr = isNative(tokenIn)
-        ? WETH9.toLowerCase()
-        : getAddress(tokenIn).toLowerCase();
+      const inputAddr = isNative(tokenIn) ? WETH9.toLowerCase() : getAddress(tokenIn).toLowerCase();
       const zeroForOne = inputAddr === state.token0.toLowerCase();
       const { outAmountAtomic } = await quoteSwapInternal(state, zeroForOne, amountIn);
       return {
@@ -1836,9 +1856,7 @@ export const AdapterLive = Layer.effect(AdapterService,
      *  currency. */
     function routerInputAddress(mint: string, router: SwapRoute["router"]): Address {
       if (router === "swaprouter02") return isNative(mint) ? WETH9 : getAddress(mint);
-      return isNative(mint)
-        ? "0x0000000000000000000000000000000000000000"
-        : getAddress(mint);
+      return isNative(mint) ? "0x0000000000000000000000000000000000000000" : getAddress(mint);
     }
 
     async function approveInputForRoute(
@@ -1900,7 +1918,14 @@ export const AdapterLive = Layer.effect(AdapterService,
       amountOutMinimum: bigint,
     ): Promise<string> {
       const deadline = Math.floor(Date.now() / 1000) + 300; // swaps: 5-min deadline
-      const calldata = buildSwapCalldataV2(route, tokenIn, tokenOut, amountIn, amountOutMinimum, deadline);
+      const calldata = buildSwapCalldataV2(
+        route,
+        tokenIn,
+        tokenOut,
+        amountIn,
+        amountOutMinimum,
+        deadline,
+      );
       const value = isNative(tokenIn) ? amountIn : 0n;
       if (!isNative(tokenIn)) {
         await approveInputForRoute(tokenIn, route, amountIn);
@@ -2020,7 +2045,10 @@ export const AdapterLive = Layer.effect(AdapterService,
             encodeAbiParameters([{ type: "address" }, { type: "uint256" }], [target, 0n]),
           );
           const inner2 = keccak256(
-            encodeAbiParameters([{ type: "address" }, { type: "bytes32" }], [getAddress(tokenAddr), inner1]),
+            encodeAbiParameters(
+              [{ type: "address" }, { type: "bytes32" }],
+              [getAddress(tokenAddr), inner1],
+            ),
           );
           const permitSlot = keccak256(
             encodeAbiParameters([{ type: "address" }, { type: "bytes32" }], [owner, inner2]),
@@ -2203,11 +2231,7 @@ export const AdapterLive = Layer.effect(AdapterService,
       for (const fee of [3000, 500, 10_000]) {
         for (const base of [WETH9, STABLECOIN_MINT]) {
           try {
-            const pool = await factory.read.getPool([
-              getAddress(mint),
-              getAddress(base),
-              fee,
-            ]);
+            const pool = await factory.read.getPool([getAddress(mint), getAddress(base), fee]);
             if (pool !== "0x0000000000000000000000000000000000000000") {
               candidates.push({ pool, base });
             }
@@ -2232,8 +2256,7 @@ export const AdapterLive = Layer.effect(AdapterService,
           const scale = 10 ** (decimals - baseDecimals);
           const priceInBase =
             token0.toLowerCase() === mintAddr ? rawPrice * scale : 1 / (rawPrice * scale);
-          const priceUsd =
-            cand.base === WETH9 ? priceInBase * wethUsd : priceInBase;
+          const priceUsd = cand.base === WETH9 ? priceInBase * wethUsd : priceInBase;
           if (priceUsd > 0 && (best === null || liquidity > best.liquidity)) {
             best = { priceUsd, liquidity };
           }
@@ -2247,14 +2270,38 @@ export const AdapterLive = Layer.effect(AdapterService,
     /** One v3 pool read → engine PoolState (statsSource heuristic until a
      *  GeckoTerminal integration for Robinhood Chain lands). */
     async function v3PoolState(poolAddress: Address): Promise<PoolState> {
-      const poolContract = v3Pool(poolAddress);
-      const [token0, token1, tickSpacing, slot0, liquidity] = await Promise.all([
-        poolContract.read.token0(),
-        poolContract.read.token1(),
-        poolContract.read.tickSpacing(),
-        poolContract.read.slot0(),
-        poolContract.read.liquidity(),
-      ]);
+      const calls = ["token0", "token1", "tickSpacing", "slot0", "liquidity"] as const;
+      const results = await aggregate3Read(
+        calls.map((functionName) => ({
+          target: poolAddress,
+          callData: encodeFunctionData({ abi: v3PoolAbi, functionName }),
+        })),
+      );
+      const token0 = decodeFunctionResult({
+        abi: v3PoolAbi,
+        functionName: "token0",
+        data: results[0]!.returnData,
+      });
+      const token1 = decodeFunctionResult({
+        abi: v3PoolAbi,
+        functionName: "token1",
+        data: results[1]!.returnData,
+      });
+      const tickSpacing = decodeFunctionResult({
+        abi: v3PoolAbi,
+        functionName: "tickSpacing",
+        data: results[2]!.returnData,
+      });
+      const slot0 = decodeFunctionResult({
+        abi: v3PoolAbi,
+        functionName: "slot0",
+        data: results[3]!.returnData,
+      });
+      const liquidity = decodeFunctionResult({
+        abi: v3PoolAbi,
+        functionName: "liquidity",
+        data: results[4]!.returnData,
+      });
       const tick = Number(slot0[1]);
       const price0 = await priceUsd(token0).catch(() => 0);
       const tvlUsd = (Number(liquidity) / 1e18) * (price0 || 0) * 4; // rough reserve proxy
@@ -2262,8 +2309,16 @@ export const AdapterLive = Layer.effect(AdapterService,
         address: poolAddress.toLowerCase(),
         tokenX: token0.toLowerCase(),
         tokenY: token1.toLowerCase(),
-        tokenXSymbol: isNative(token0) ? "ETH" : token0.toLowerCase() === WETH9.toLowerCase() ? "WETH" : "TOKEN",
-        tokenYSymbol: isNative(token1) ? "ETH" : token1.toLowerCase() === WETH9.toLowerCase() ? "WETH" : "TOKEN",
+        tokenXSymbol: isNative(token0)
+          ? "ETH"
+          : token0.toLowerCase() === WETH9.toLowerCase()
+            ? "WETH"
+            : "TOKEN",
+        tokenYSymbol: isNative(token1)
+          ? "ETH"
+          : token1.toLowerCase() === WETH9.toLowerCase()
+            ? "WETH"
+            : "TOKEN",
         tvlUsd: tvlUsd || 0,
         volume24hUsd: 0,
         fees24hUsd: 0,
@@ -2279,19 +2334,46 @@ export const AdapterLive = Layer.effect(AdapterService,
 
     /** Bin array = populated ticks around the active tick via TickLens. */
     async function v3BinArray(poolAddress: Address): Promise<BinArray> {
-      const poolContract = v3Pool(poolAddress);
-      const [slot0, tickSpacing] = await Promise.all([
-        poolContract.read.slot0(),
-        poolContract.read.tickSpacing(),
+      const poolState = await aggregate3Read([
+        {
+          target: poolAddress,
+          callData: encodeFunctionData({ abi: v3PoolAbi, functionName: "slot0" }),
+        },
+        {
+          target: poolAddress,
+          callData: encodeFunctionData({ abi: v3PoolAbi, functionName: "tickSpacing" }),
+        },
       ]);
+      const slot0 = decodeFunctionResult({
+        abi: v3PoolAbi,
+        functionName: "slot0",
+        data: poolState[0]!.returnData,
+      });
+      const tickSpacing = decodeFunctionResult({
+        abi: v3PoolAbi,
+        functionName: "tickSpacing",
+        data: poolState[1]!.returnData,
+      });
       const activeTick = Number(slot0[1]);
-      const lens = tickLens();
       const word = activeTick >> 8;
       const bins: BinData[] = [];
-      for (const w of [word - 1, word, word + 1]) {
-        const populated = (await lens.read.getPopulatedTicksInWord([poolAddress, w])) as unknown as ReadonlyArray<
-          readonly [number, bigint, bigint]
-        >;
+      const words = [word - 1, word, word + 1];
+      const lensResults = await aggregate3Read(
+        words.map((w) => ({
+          target: V3_TICK_LENS,
+          callData: encodeFunctionData({
+            abi: tickLensAbi,
+            functionName: "getPopulatedTicksInWord",
+            args: [poolAddress, w],
+          }),
+        })),
+      );
+      for (const result of lensResults) {
+        const populated = decodeFunctionResult({
+          abi: tickLensAbi,
+          functionName: "getPopulatedTicksInWord",
+          data: result.returnData,
+        }) as ReadonlyArray<readonly [number, bigint, bigint]>;
         for (const p of populated) {
           bins.push({
             binId: Number(p[0]),
@@ -2435,8 +2517,7 @@ export const AdapterLive = Layer.effect(AdapterService,
         const id = log.args.id;
         const to = log.args.to;
         if (id === undefined || to === undefined) continue;
-        const order =
-          (log.blockNumber ?? 0n) * 1_000_000n + BigInt(log.logIndex ?? 0);
+        const order = (log.blockNumber ?? 0n) * 1_000_000n + BigInt(log.logIndex ?? 0);
         const prev = latest.get(id.toString());
         if (prev === undefined || order > prev.order) {
           latest.set(id.toString(), { to: getAddress(to), order });
@@ -2527,9 +2608,7 @@ export const AdapterLive = Layer.effect(AdapterService,
       // thousands of chunks — the gecko/subgraph indexer is the
       // completeness path (follow-up).
       const CHUNK = 10_000n;
-      const windowBlocks = BigInt(
-        Number(process.env.DISCOVERY_BLOCK_WINDOW ?? 2_000_000),
-      );
+      const windowBlocks = BigInt(Number(process.env.DISCOVERY_BLOCK_WINDOW ?? 2_000_000));
       const fromStart = latest > windowBlocks ? latest - windowBlocks : 8930n;
       const pools = new Map<string, DiscoveredPool>();
       for (let from = fromStart; from <= latest; from += CHUNK) {
@@ -2577,77 +2656,83 @@ export const AdapterLive = Layer.effect(AdapterService,
       // the boot sequence refuses to start when this mismatches. A transport
       // error surfaces here too — the caller decides fail-open vs fail-closed.
       verifyChainId: () => Effect.tryPromise(() => publicClient.getChainId()),
-      getWalletBalanceUsd: () => Effect.gen(function* () {
-        if (!walletAddress) return 0;
-        const [nativeWei, stable] = yield* Effect.tryPromise(async () => {
-          const [n, s] = await Promise.all([
-            getBalance(NATIVE_MINT, walletAddress),
-            getBalance(STABLECOIN_MINT, walletAddress),
-          ]);
-          return [n, s] as const;
-        });
-        const ethPrice = yield* Effect.tryPromise(() => priceUsd(NATIVE_MINT));
-        return (Number(nativeWei) / 1e18) * ethPrice + Number(stable) / 1e6;
-      }),
-      getWalletHoldings: () => Effect.gen(function* () {
-        const holdings = new Map<string, { amountAtomic: bigint; decimals: number }>();
-        if (!walletAddress) return holdings;
-        yield* Effect.tryPromise(async () => {
-          const [n, s] = await Promise.all([
-            getBalance(NATIVE_MINT, walletAddress),
-            getBalance(STABLECOIN_MINT, walletAddress),
-          ]);
-          holdings.set(NATIVE_MINT, { amountAtomic: n, decimals: 18 });
-          holdings.set(STABLECOIN_MINT, { amountAtomic: s, decimals: 6 });
-          // Also include every distinct token this engine trades (the v4 pool
-          // registry currencies + WETH9): a stray LP leg left in the wallet
-          // (swap overshoot, partial collect, failed entry) is otherwise
-          // invisible to the orphan-settlement sweep and the wallet snapshot.
-          // Concretely: the WETH/LEMON entry left 7,376 LEMON in the wallet
-          // after the stop-loss collect; getWalletHoldings reported only
-          // ETH+USDG, so the sweep never sold it and the snapshot showed
-          // $9.65 against a ~$19.7 real balance (2026-08-14). Batched in
-          // parallel, bounded by the registry; only non-zero balances stored.
-          const mints = new Set<string>([WETH9.toLowerCase()]);
-          for (const key of Object.values(V4_POOL_REGISTRY)) {
-            mints.add(key.currency0.toLowerCase());
-            mints.add(key.currency1.toLowerCase());
-          }
-          // Per-read timeout: the registry can hold hundreds of currencies and
-          // a single hanging RPC must never stall the whole cycle (observed
-          // 5min+ hang in the settlement sweep's holdings read). A timed-out
-          // token is skipped for this call; balances re-qualify next cycle.
-          const TIMEOUT_MS = 3_000;
-          const withTimeout = <T,>(p: Promise<T>, ms: number): Promise<T | null> =>
-            Promise.race([
-              p,
-              new Promise<null>((resolve) => setTimeout(() => resolve(null), ms)),
+      getWalletBalanceUsd: () =>
+        Effect.gen(function* () {
+          if (!walletAddress) return 0;
+          const [nativeWei, stable] = yield* Effect.tryPromise(async () => {
+            const [n, s] = await Promise.all([
+              getBalance(NATIVE_MINT, walletAddress),
+              getBalance(STABLECOIN_MINT, walletAddress),
             ]);
-          const reads = await Promise.all(
-            [...mints].map(async (mint) => {
-              try {
-                const bal = await withTimeout(getBalance(mint, walletAddress), TIMEOUT_MS);
-                if (bal === null || bal <= 0n) return null;
-                const decimals =
-                  (await withTimeout(getDecimals(mint).catch(() => 0), TIMEOUT_MS)) ?? 0;
-                return { mint, bal, decimals } as const;
-              } catch {
-                return null;
-              }
-            }),
-          );
-          for (const r of reads) {
-            if (r !== null && r.bal > 0n) {
-              holdings.set(r.mint, { amountAtomic: r.bal, decimals: r.decimals });
+            return [n, s] as const;
+          });
+          const ethPrice = yield* Effect.tryPromise(() => priceUsd(NATIVE_MINT));
+          return (Number(nativeWei) / 1e18) * ethPrice + Number(stable) / 1e6;
+        }),
+      getWalletHoldings: () =>
+        Effect.gen(function* () {
+          const holdings = new Map<string, { amountAtomic: bigint; decimals: number }>();
+          if (!walletAddress) return holdings;
+          yield* Effect.tryPromise(async () => {
+            const [n, s] = await Promise.all([
+              getBalance(NATIVE_MINT, walletAddress),
+              getBalance(STABLECOIN_MINT, walletAddress),
+            ]);
+            holdings.set(NATIVE_MINT, { amountAtomic: n, decimals: 18 });
+            holdings.set(STABLECOIN_MINT, { amountAtomic: s, decimals: 6 });
+            // Also include every distinct token this engine trades (the v4 pool
+            // registry currencies + WETH9): a stray LP leg left in the wallet
+            // (swap overshoot, partial collect, failed entry) is otherwise
+            // invisible to the orphan-settlement sweep and the wallet snapshot.
+            // Concretely: the WETH/LEMON entry left 7,376 LEMON in the wallet
+            // after the stop-loss collect; getWalletHoldings reported only
+            // ETH+USDG, so the sweep never sold it and the snapshot showed
+            // $9.65 against a ~$19.7 real balance (2026-08-14). Batched in
+            // parallel, bounded by the registry; only non-zero balances stored.
+            const mints = new Set<string>([WETH9.toLowerCase()]);
+            for (const key of Object.values(V4_POOL_REGISTRY)) {
+              mints.add(key.currency0.toLowerCase());
+              mints.add(key.currency1.toLowerCase());
             }
-          }
-        });
-        return holdings;
-      }),
-      getNativeBalance: () => Effect.tryPromise(async () => {
-        if (!walletAddress) return 0n;
-        return publicClient.getBalance({ address: walletAddress });
-      }),
+            // Per-read timeout: the registry can hold hundreds of currencies and
+            // a single hanging RPC must never stall the whole cycle (observed
+            // 5min+ hang in the settlement sweep's holdings read). A timed-out
+            // token is skipped for this call; balances re-qualify next cycle.
+            const TIMEOUT_MS = 3_000;
+            const withTimeout = <T>(p: Promise<T>, ms: number): Promise<T | null> =>
+              Promise.race([
+                p,
+                new Promise<null>((resolve) => setTimeout(() => resolve(null), ms)),
+              ]);
+            const reads = await Promise.all(
+              [...mints].map(async (mint) => {
+                try {
+                  const bal = await withTimeout(getBalance(mint, walletAddress), TIMEOUT_MS);
+                  if (bal === null || bal <= 0n) return null;
+                  const decimals =
+                    (await withTimeout(
+                      getDecimals(mint).catch(() => 0),
+                      TIMEOUT_MS,
+                    )) ?? 0;
+                  return { mint, bal, decimals } as const;
+                } catch {
+                  return null;
+                }
+              }),
+            );
+            for (const r of reads) {
+              if (r !== null && r.bal > 0n) {
+                holdings.set(r.mint, { amountAtomic: r.bal, decimals: r.decimals });
+              }
+            }
+          });
+          return holdings;
+        }),
+      getNativeBalance: () =>
+        Effect.tryPromise(async () => {
+          if (!walletAddress) return 0n;
+          return publicClient.getBalance({ address: walletAddress });
+        }),
       getPoolState: (poolAddress) =>
         Effect.tryPromise({
           try: async () => {
@@ -2802,9 +2887,10 @@ export const AdapterLive = Layer.effect(AdapterService,
                 ? (await v4PositionsOf(walletAddress)).find((p) => p.id === positionPubKey)
                 : (await v3PositionsOf(walletAddress)).find((p) => p.id === positionPubKey);
             if (!pos || pos.liquidityShares <= 0n) return null;
-            const state = poolAddress.length === 66
-              ? await v4PoolQuoteState(poolAddress)
-              : await v3PoolQuoteState(getAddress(poolAddress));
+            const state =
+              poolAddress.length === 66
+                ? await v4PoolQuoteState(poolAddress)
+                : await v3PoolQuoteState(getAddress(poolAddress));
             if (!state || !state.sqrtPriceX96) return null;
             // Amounts from liquidity + tick bounds (identical math v3/v4).
             const { amount0, amount1 } = positionAmountsAtSqrtPrice(
@@ -2823,6 +2909,72 @@ export const AdapterLive = Layer.effect(AdapterService,
           },
           catch: () => null,
         }).pipe(Effect.catch(() => Effect.succeed(null))),
+      getAllPositionValuesUsd: (wallet) =>
+        Effect.tryPromise({
+          try: async () => {
+            const owner = getAddress(wallet);
+            // Enumerate the wallet once, then share pool state and token
+            // prices across every position. This is the cycle-level mark path;
+            // the single-position method above remains as a compatibility
+            // fallback for adapters and tests that do not expose this batch.
+            const [v3, v4] = await Promise.all([v3PositionsOf(owner), v4PositionsOf(owner)]);
+            const positions = v3.concat(v4);
+            const stateByPool = new Map<string, PoolQuoteState | null>();
+            await Promise.all(
+              [...new Set(positions.map((p) => p.poolAddress.toLowerCase()))].map(
+                async (poolAddress) => {
+                  try {
+                    const state =
+                      poolAddress.length === 66
+                        ? await v4PoolQuoteState(poolAddress)
+                        : await v3PoolQuoteState(getAddress(poolAddress));
+                    stateByPool.set(poolAddress, state);
+                  } catch {
+                    stateByPool.set(poolAddress, null);
+                  }
+                },
+              ),
+            );
+
+            const tokenMints = new Set<string>();
+            for (const state of stateByPool.values()) {
+              if (state !== null) {
+                tokenMints.add(state.token0.toLowerCase());
+                tokenMints.add(state.token1.toLowerCase());
+              }
+            }
+            const prices = new Map<string, number>();
+            await Promise.all(
+              [...tokenMints].map(async (mint) => {
+                prices.set(mint, await priceUsd(mint).catch(() => 0));
+              }),
+            );
+
+            const values = new Map<string, number | null>();
+            for (const pos of positions) {
+              const state = stateByPool.get(pos.poolAddress.toLowerCase()) ?? null;
+              if (state === null || pos.liquidityShares <= 0n) {
+                values.set(pos.id, null);
+                continue;
+              }
+              const { amount0, amount1 } = positionAmountsAtSqrtPrice(
+                pos.liquidityShares,
+                pos.lowerBinId,
+                pos.upperBinId,
+                state.sqrtPriceX96,
+              );
+              const price0 = prices.get(state.token0.toLowerCase()) ?? 0;
+              const price1 = prices.get(state.token1.toLowerCase()) ?? 0;
+              values.set(
+                pos.id,
+                (Number(amount0) / 10 ** state.token0Decimals) * price0 +
+                  (Number(amount1) / 10 ** state.token1Decimals) * price1,
+              );
+            }
+            return values;
+          },
+          catch: (e) => new Error(`getAllPositionValuesUsd: ${underlyingErrorMessage(e)}`),
+        }),
       simulateRebalance: (_poolAddress, _positionPubKey, _newLowerBinId, _newUpperBinId) =>
         Effect.succeed({
           estimatedFeesUsd: 0,
@@ -2891,8 +3043,7 @@ export const AdapterLive = Layer.effect(AdapterService,
               // trapped-leg loss of a doomed entry (fork NPM quirk, hook
               // revert, token restriction): a reverting mint is now caught
               // here, before any swap/wrap/approve tx is sent.
-              const nativeLike0 =
-                isNative(state.token0) || getAddress(state.token0) === WETH9;
+              const nativeLike0 = isNative(state.token0) || getAddress(state.token0) === WETH9;
               const missingLeg = nativeLike0 ? state.token1 : state.token0;
               const missingLegAmount = nativeLike0 ? amount1 : amount0;
               const sim = await dryRunEntryMintSimulation({
@@ -3014,7 +3165,8 @@ export const AdapterLive = Layer.effect(AdapterService,
                 value: built.value,
               });
               const positionPubKey = tokenIdFromMintReceipt(receipt)?.toString() ?? "";
-              if (!positionPubKey) throw new Error("enterPosition: could not decode minted tokenId");
+              if (!positionPubKey)
+                throw new Error("enterPosition: could not decode minted tokenId");
               return {
                 positionPubKey,
                 txSignature,
@@ -3174,7 +3326,11 @@ export const AdapterLive = Layer.effect(AdapterService,
               }
               try {
                 // Quote legs → ETH at realistic size through the working path.
-                const { outAmountAtomic, route } = await quotePair(leg.mint, NATIVE_MINT, leg.amount);
+                const { outAmountAtomic, route } = await quotePair(
+                  leg.mint,
+                  NATIVE_MINT,
+                  leg.amount,
+                );
                 if (outAmountAtomic <= 0n) {
                   failures.push(`${leg.mint.slice(0, 8)}: zero quote to native`);
                   continue;
@@ -3193,7 +3349,11 @@ export const AdapterLive = Layer.effect(AdapterService,
                     outAmountAtomic,
                     deadline,
                   );
-                  await publicClient.call({ account: requireWallet(), to: route.target, data: calldata });
+                  await publicClient.call({
+                    account: requireWallet(),
+                    to: route.target,
+                    data: calldata,
+                  });
                 }
                 proceedsNative += outAmountAtomic;
               } catch (e) {
@@ -3204,14 +3364,14 @@ export const AdapterLive = Layer.effect(AdapterService,
             return {
               ok: failures.length === 0,
               reason: failures.length > 0 ? failures.join("; ") : null,
-              proceedsUsd:
-                nativePrice > 0 ? usdOf(proceedsNative, 18, nativePrice) : null,
+              proceedsUsd: nativePrice > 0 ? usdOf(proceedsNative, 18, nativePrice) : null,
             };
           },
           catch: (e) => new Error(`verifyExitRoute: ${underlyingErrorMessage(e)}`),
         }),
       placeLimitOrder: (_poolAddress, _request) => NOT_IMPLEMENTED("placeLimitOrder"),
-      cancelLimitOrder: (_poolAddress, _orderPubKey, _binIds) => NOT_IMPLEMENTED("cancelLimitOrder"),
+      cancelLimitOrder: (_poolAddress, _orderPubKey, _binIds) =>
+        NOT_IMPLEMENTED("cancelLimitOrder"),
       rebalancePosition: (poolAddress, positionPubKey, newLowerBinId, newUpperBinId, topUp) =>
         Effect.tryPromise({
           try: async () => {
@@ -3407,9 +3567,7 @@ export const AdapterLive = Layer.effect(AdapterService,
               const maxFeePerGas = baseFee * 2n;
               const nativePrice = await priceUsd(NATIVE_MINT);
               estimatedGasUsd =
-                nativePrice > 0
-                  ? (Number(gas) * Number(maxFeePerGas) * nativePrice) / 1e18
-                  : null;
+                nativePrice > 0 ? (Number(gas) * Number(maxFeePerGas) * nativePrice) / 1e18 : null;
             } catch {
               estimatedGasUsd = null;
             }
@@ -3646,7 +3804,7 @@ export const AdapterLive = Layer.effect(AdapterService,
             return 0n;
           },
         }).pipe(Effect.catch(() => Effect.succeed(0n))),
-            swapUSDCForNative: (minNativeThreshold, swapAmountStable) =>
+      swapUSDCForNative: (minNativeThreshold, swapAmountStable) =>
         Effect.tryPromise({
           try: async () => {
             if (!walletAddress) {
@@ -3656,7 +3814,9 @@ export const AdapterLive = Layer.effect(AdapterService,
             const threshold = BigInt(minNativeThreshold ?? MIN_NATIVE_FOR_GAS_WEI);
             const nativeBalance = await publicClient.getBalance({ address: walletAddress });
             if (nativeBalance >= threshold) return;
-            const desiredUsdg = BigInt(Math.round((swapAmountStable ?? GAS_TOP_UP_STABLECOIN) * 1e6));
+            const desiredUsdg = BigInt(
+              Math.round((swapAmountStable ?? GAS_TOP_UP_STABLECOIN) * 1e6),
+            );
             const usdgBalance = await getBalance(STABLECOIN_MINT, walletAddress);
             // Never drain the stablecoin leg (safety audit): cap the top-up at
             // 20% of the USDG balance so a swap failure cannot strand the
@@ -3701,7 +3861,8 @@ export const AdapterLive = Layer.effect(AdapterService,
               error: underlyingErrorMessage(e),
             });
           },
-        }).pipe(Effect.catch(() => Effect.void)),      getTokenBalance: (mint) =>
+        }).pipe(Effect.catch(() => Effect.void)),
+      getTokenBalance: (mint) =>
         Effect.tryPromise({
           try: async () => (walletAddress ? getBalance(mint, walletAddress) : 0n),
           catch: (e) => new Error(`getTokenBalance: ${underlyingErrorMessage(e)}`),
@@ -3790,9 +3951,7 @@ export const AdapterLive = Layer.effect(AdapterService,
                 amountOutMinimum: quote.minimumOutAmountAtomic,
                 deadline,
               });
-            } else if (
-              isNative(quote.request.outputMint)
-            ) {
+            } else if (isNative(quote.request.outputMint)) {
               // v3 swap outputs WETH; unwrap to native so the settlement
               // actually lands ETH (gas-usable), one multicall — the
               // convertClaimedFees / swapUSDCForNative pattern.
@@ -3804,10 +3963,7 @@ export const AdapterLive = Layer.effect(AdapterService,
                 amountIn: quote.request.amountAtomic,
                 amountOutMinimum: quote.minimumOutAmountAtomic,
               });
-              const unwrapData = buildUnwrapWETH9Calldata(
-                quote.minimumOutAmountAtomic,
-                owner,
-              );
+              const unwrapData = buildUnwrapWETH9Calldata(quote.minimumOutAmountAtomic, owner);
               calldata = buildSwapRouterMulticallCalldata([swapData, unwrapData]);
             } else {
               calldata = buildV3SwapCalldataForChain({
@@ -3833,7 +3989,8 @@ export const AdapterLive = Layer.effect(AdapterService,
           try: async () => {
             const owner = requireWallet();
             const raw = prepared.quote.rawQuote;
-            const calldata = (`0x${Buffer.from(prepared.transactionBase64, "base64").toString("hex")}`) as Hex;
+            const calldata =
+              `0x${Buffer.from(prepared.transactionBase64, "base64").toString("hex")}` as Hex;
             const target = raw.router === "universalrouter" ? UNIVERSAL_ROUTER : V3_SWAP_ROUTER_02;
             await publicClient.call({ account: owner, to: target, data: calldata });
             return { successful: true, logs: [], unitsConsumed: null };
@@ -3843,7 +4000,8 @@ export const AdapterLive = Layer.effect(AdapterService,
       submitSwap: (prepared, onBroadcast) =>
         Effect.gen(function* () {
           const raw = prepared.quote.rawQuote;
-          const calldata = (`0x${Buffer.from(prepared.transactionBase64, "base64").toString("hex")}`) as Hex;
+          const calldata =
+            `0x${Buffer.from(prepared.transactionBase64, "base64").toString("hex")}` as Hex;
           const route: SwapRoute =
             raw.router === "universalrouter"
               ? {

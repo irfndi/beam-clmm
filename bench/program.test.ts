@@ -16,6 +16,7 @@ import {
   recordAppliedProposalRiskDenial,
   shouldHoldForSupervisedApproval,
   shouldPenalizeAppliedProposalDenial,
+  snapshotBucketTimestamp,
 } from "../engine/program.js";
 import type { ProposalBackoff } from "../engine/proposal-backoff.js";
 import type { AgentDecision } from "../engine/types.js";
@@ -43,6 +44,12 @@ async function run<T, E, R>(effect: Effect.Effect<T, E, R>, layer: unknown): Pro
 }
 
 describe("Program integration", () => {
+  it("coalesces snapshots into five-minute buckets", () => {
+    const bucket = snapshotBucketTimestamp(1_700_000_299_999);
+    expect(snapshotBucketTimestamp(bucket + 1)).toBe(bucket);
+    expect(snapshotBucketTimestamp(bucket + 300_000)).toBe(bucket + 300_000);
+  });
+
   it("buildLayer provides all services", async () => {
     const layer = buildLayer();
     const result = await run(

@@ -95,7 +95,7 @@ export function defaultAppConfig(overrides: Partial<AppConfig> = {}): AppConfig 
   return {
     walletPrivateKey: "",
     rpcUrl: "",
-    rpcFallbackUrl: "",
+    rpcFallbackUrls: [],
     paperTrading: true,
     autonomousTokenMode: "off",
     settlementAsset: "ETH",

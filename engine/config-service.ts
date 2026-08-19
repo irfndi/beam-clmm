@@ -44,7 +44,13 @@ export const AUTONOMOUS_TOKEN_CONFIG_DEFAULTS = {
 export interface AppConfig {
   readonly walletPrivateKey: string;
   readonly rpcUrl: string;
-  readonly rpcFallbackUrl: string;
+  /**
+   * Comma-separated list of fallback RPC endpoints. Each is wrapped in a viem
+   * fallback() transport so a rate-limited/throttled primary can fail over to
+   * a keyless public endpoint (e.g. PublicNode) without operator action.
+   * Env `RPC_FALLBACK_URLS` (or legacy single `RPC_FALLBACK_URL`).
+   */
+  readonly rpcFallbackUrls: readonly string[];
   /** RPC transport retries on transient failures (rate limits/5xx/timeouts).
    *  Public RPCs (Base mainnet.base.org, etc.) throttle heavy pool scans with
    *  429s — more retries keeps paper/live scanning healthy on shared endpoints.
@@ -730,9 +736,21 @@ const loadConfig = Effect.gen(function* () {
     if (legacy) return legacy;
     return isTest ? "https://example.com" : DEFAULT_RPC;
   });
-  const rpcFallbackUrl = yield* Config.string("RPC_FALLBACK_URL").pipe(
-    Effect.orElseSucceed(() => ""),
-  );
+  const rpcFallbackUrls = yield* Effect.gen(function* () {
+    const multi = yield* Config.string("RPC_FALLBACK_URLS").pipe(
+      Effect.orElseSucceed(() => ""),
+    );
+    if (multi.trim()) {
+      return multi
+        .split(",")
+        .map((s) => s.trim())
+        .filter((s) => s.length > 0);
+    }
+    const single = yield* Config.string("RPC_FALLBACK_URL").pipe(
+      Effect.orElseSucceed(() => ""),
+    );
+    return single.trim() ? [single.trim()] : [];
+  });
   const rpcRetryCount = yield* validatedNumber("RPC_RETRY_COUNT", 0, 4);
   const paperTrading = yield* Config.boolean("PAPER_TRADING").pipe(
     Effect.orElseSucceed(() => true),
@@ -1673,7 +1691,7 @@ const loadConfig = Effect.gen(function* () {
   const cfg: AppConfig = {
     walletPrivateKey,
     rpcUrl,
-    rpcFallbackUrl,
+    rpcFallbackUrls,
     rpcRetryCount,
     paperTrading,
     autonomousTokenMode,

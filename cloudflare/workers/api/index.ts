@@ -1866,9 +1866,12 @@ app.post("/v1/errors/batch", async (c) => {
     return c.json({ error: "Batch size exceeds maximum of 50" }, 400);
   }
 
-  // Rate limit: 50 batches per IP per hour
+  // Rate limit: 200 batches per IP per hour. Two+ agents share the operator's
+  // public IP and each flushes every 60s (30/hr per agent) — the old 50/hr cap
+  // meant the second agent immediately burned the shared budget and the
+  // reporters fell into a permanent 429 → re-queue loop.
   const withinLimit = await Effect.runPromise(
-    rateLimitHit(DB, `rate_limit:error_batch:${clientIp}`, 50),
+    rateLimitHit(DB, `rate_limit:error_batch:${clientIp}`, 200),
   );
   if (!withinLimit) {
     return c.json({ error: "Rate limit exceeded. Try again later." }, 429);

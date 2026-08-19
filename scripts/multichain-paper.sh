@@ -17,12 +17,16 @@ mkdir -p "$DATA"
 
 # ── Base paper agent ─────────────────────────────────────────────────────────
 pm2 delete beam-base >/dev/null 2>&1 || true
+# Guard against cross-chain env leakage: the operator shell may have sourced
+# .env (Base vars). Unset the other chain's RPC vars so each agent's pm2
+# snapshot is exactly its own chain's endpoints.
+unset BEAM_ROBINHOOD_RPC_URL ROBINHOOD_RPC_URL ROBINHOOD_RPC_FALLBACK_URL 2>/dev/null || true
 BEAM_CHAIN=base \
 AGENT_INSTANCE_ID=beam-base \
 SQLITE_DB_PATH="$DATA/base.db" \
 BEAM_INSTALL_DIR="$ROOT" \
 BEAM_BASE_RPC_URL=https://mainnet.base.org \
-RPC_FALLBACK_URL=https://base-rpc.publicnode.com \
+RPC_FALLBACK_URLS=https://base-rpc.publicnode.com,https://mainnet.base.org \
 RPC_RETRY_COUNT=6 \
 PAPER_TRADING=true \
 pm2 start "$ROOT/logs/beam-pm2.sh" --name beam-base --cwd "$ROOT" \
@@ -31,12 +35,18 @@ pm2 start "$ROOT/logs/beam-pm2.sh" --name beam-base --cwd "$ROOT" \
 
 # ── Robinhood paper agent ────────────────────────────────────────────────────
 pm2 delete beam-robinhood >/dev/null 2>&1 || true
+# Guard against cross-chain env leakage: unset Base RPC vars before this start.
+unset BEAM_BASE_RPC_URL RPC_FALLBACK_URL 2>/dev/null || true
 BEAM_CHAIN=robinhood \
 AGENT_INSTANCE_ID=beam-robinhood \
 SQLITE_DB_PATH="$DATA/robinhood.db" \
 BEAM_INSTALL_DIR="$ROOT" \
 BEAM_ROBINHOOD_RPC_URL=https://rpc.mainnet.chain.robinhood.com \
-RPC_FALLBACK_URL= \
+# Keyless free-tier fallbacks (no API key needed): PublicNode is verified to
+# serve eth_call + eth_getBalance on chain 4663. dRPC's free tier blocks those
+# methods so it is deliberately NOT listed here. Both are fallbacks only — the
+# official Robinhood endpoint stays primary.
+RPC_FALLBACK_URLS=https://robinhood-rpc.publicnode.com \
 RPC_RETRY_COUNT=6 \
 PAPER_TRADING=true \
 pm2 start "$ROOT/logs/beam-pm2.sh" --name beam-robinhood --cwd "$ROOT" \

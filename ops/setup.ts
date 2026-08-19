@@ -29,9 +29,9 @@ async function main() {
 
       rpcFallbackUrl: () =>
         p.text({
-          message: "Fallback RPC URL (optional)",
-          placeholder: "https://...",
-          initialValue: process.env.ROBINHOOD_RPC_FALLBACK_URL ?? "",
+          message: "Fallback RPC URL(s) (optional, comma-separated)",
+          placeholder: "https://robinhood-rpc.publicnode.com",
+          initialValue: process.env.RPC_FALLBACK_URLS ?? process.env.ROBINHOOD_RPC_FALLBACK_URL ?? "",
         }),
 
       paperTrading: () =>
@@ -71,7 +71,7 @@ async function main() {
   const envContent = [
     "# RPC providers",
     `ROBINHOOD_RPC_URL=${rpcUrl}`,
-    `ROBINHOOD_RPC_FALLBACK_URL=${(answers.rpcFallbackUrl as string) || ""}`,
+    `RPC_FALLBACK_URLS=${(answers.rpcFallbackUrl as string) || ""}`,
     "",
     "# Strategy",
     `PAPER_TRADING=${String(answers.paperTrading)}`,

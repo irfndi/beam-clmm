@@ -56,6 +56,12 @@ export interface ErrorReporterConfig {
   readonly agentId?: string;
   readonly flushIntervalMs?: number;
   readonly batchSize?: number;
+  /**
+   * How long to wait (ms) after a non-OK flush response (429/400/5xx) before
+   * re-queuing the batch. Keeps reporters from hammering the shared per-IP
+   * error-ingest rate limit. Defaults to ~2 min; tests pass a tiny value.
+   */
+  readonly retryDelayMs?: number;
 }
 
 export interface BatchPayload {
@@ -69,6 +75,7 @@ export interface BatchPayload {
 const DEFAULT_ERROR_ENDPOINT = "https://beam-api.pryx.dev/v1/errors/batch";
 const DEFAULT_FLUSH_INTERVAL_MS = 60_000;
 const DEFAULT_BATCH_SIZE = 5;
+const DEFAULT_RETRY_DELAY_MS = 120_000;
 const MAX_PENDING_BUFFER = 1000;
 function readBeamApiKey(): Effect.Effect<string | null, never> {
   return Effect.try({
@@ -172,6 +179,7 @@ export class ErrorReporter {
   private readonly enabled: boolean;
   private readonly batchSize: number;
   private readonly flushIntervalMs: number;
+  private readonly retryDelayMs: number;
   private readonly agentId: string;
   private readonly pending: Array<ErrorReport> = [];
   private timerId: ReturnType<typeof setInterval> | null = null;
@@ -194,6 +202,7 @@ export class ErrorReporter {
     this.agentId = config.agentId ?? process.env.BEAM_AGENT_ID ?? "engine";
     this.batchSize = config.batchSize ?? DEFAULT_BATCH_SIZE;
     this.flushIntervalMs = config.flushIntervalMs ?? DEFAULT_FLUSH_INTERVAL_MS;
+    this.retryDelayMs = config.retryDelayMs ?? DEFAULT_RETRY_DELAY_MS;
 
     if (this.enabled && this.endpoint) {
       this.timerId = setInterval(() => {
@@ -290,10 +299,19 @@ export class ErrorReporter {
         catch: (cause) => (cause instanceof Error ? cause : new Error(String(cause))),
       });
       if (!response.ok) {
-        this.requeueBatch(batch);
+        // 429 (server rate limit: 50 batches/IP/hour on beam-api.pryx.dev) and
+        // persistent 400s must NOT re-enter the hot flush loop — instantly
+        // re-queuing burns the shared per-IP budget and spams logs every
+        // flushInterval. Back off (~2 min default, configurable) so the window
+        // resets instead of being hammered.
+        const retryMs = this.retryDelayMs + Math.floor(Math.random() * this.retryDelayMs * 0.5);
         console.error(
-          `[ErrorReporter] Failed to send batch: ${response.status} ${response.statusText} (${batch.length} reports re-queued)`,
+          `[ErrorReporter] Failed to send batch: ${response.status} ${response.statusText} ` +
+            `(${batch.length} reports held, retrying in ${Math.round(retryMs / 1000)}s)`,
         );
+        yield* Effect.sleep(retryMs);
+        this.requeueBatch(batch);
+        return;
       }
     }).pipe(
       Effect.catch((err) =>
