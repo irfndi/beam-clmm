@@ -29,6 +29,12 @@ interface CliArgs {
   pools: ReadonlyArray<string>;
   source: "synthetic" | "replay";
   dbPath: string;
+  minPoolTvlUsd: number;
+  minPoolTvlExplicit: boolean;
+  challengeMode: boolean;
+  challengeMinScore: number;
+  roundTripGasUsd: number;
+  min7dFeeOverGas: number;
 }
 
 export function replayUsesMeasuredVolume(source: PoolState["statsSource"]): boolean {
@@ -41,6 +47,12 @@ function parseArgs(argv: ReadonlyArray<string>): CliArgs {
     pools: ["5rCf1DM8LjKTw4YqhnoLcngyZYeNnQqztScTogYHAS6"],
     source: "synthetic",
     dbPath: "./beam.db",
+    minPoolTvlUsd: 50_000,
+    minPoolTvlExplicit: false,
+    challengeMode: false,
+    challengeMinScore: 4,
+    roundTripGasUsd: 0,
+    min7dFeeOverGas: 1,
   };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
@@ -53,6 +65,42 @@ function parseArgs(argv: ReadonlyArray<string>): CliArgs {
         );
       }
       out.days = parsed;
+      i++;
+    } else if (a === "--min-tvl" && next) {
+      const parsed = Number(next);
+      if (!Number.isFinite(parsed) || parsed < 0) {
+        throw new Error(`Invalid --min-tvl value: ${next}. Must be a non-negative number.`);
+      }
+      out.minPoolTvlUsd = parsed;
+      out.minPoolTvlExplicit = true;
+      i++;
+    } else if (a === "--challenge") {
+      out.challengeMode = true;
+      if (!out.minPoolTvlExplicit) out.minPoolTvlUsd = 1_000;
+    } else if (a === "--challenge-min-score" && next) {
+      const parsed = Number(next);
+      if (!Number.isFinite(parsed) || parsed < 0) {
+        throw new Error(
+          `Invalid --challenge-min-score value: ${next}. Must be a non-negative number.`,
+        );
+      }
+      out.challengeMinScore = parsed;
+      i++;
+    } else if (a === "--gas-usd" && next) {
+      const parsed = Number(next);
+      if (!Number.isFinite(parsed) || parsed < 0) {
+        throw new Error(`Invalid --gas-usd value: ${next}. Must be a non-negative number.`);
+      }
+      out.roundTripGasUsd = parsed;
+      i++;
+    } else if (a === "--min-7d-fee-over-gas" && next) {
+      const parsed = Number(next);
+      if (!Number.isFinite(parsed) || parsed < 0) {
+        throw new Error(
+          `Invalid --min-7d-fee-over-gas value: ${next}. Must be a non-negative number.`,
+        );
+      }
+      out.min7dFeeOverGas = parsed;
       i++;
     } else if (a === "--pools" && next) {
       out.pools = next
@@ -82,6 +130,13 @@ function generateMockHistory(poolAddress: string, days: number, startTvl: number
   const history: HistoryTick[] = [];
   const intervalMs = 10 * 60 * 1000; // 10 min
   const ticks = (days * 24 * 60 * 60 * 1000) / intervalMs;
+  let seed = 0x811c9dc5;
+  for (const char of poolAddress) seed = Math.imul(seed ^ char.charCodeAt(0), 0x01000193);
+  const random = (): number => {
+    seed = Math.imul(seed ^ (seed >>> 16), 0x45d9f3b);
+    seed = Math.imul(seed ^ (seed >>> 16), 0x45d9f3b);
+    return ((seed ^ (seed >>> 16)) >>> 0) / 0x1_0000_0000;
+  };
 
   let tvl = startTvl;
   let price = 100;
@@ -93,20 +148,20 @@ function generateMockHistory(poolAddress: string, days: number, startTvl: number
     const timestamp = Date.now() - (ticks - i) * intervalMs;
 
     if (i % 720 === 0) {
-      volatility = 0.005 + Math.random() * 0.025;
-      trend = (Math.random() - 0.5) * 0.004;
+      volatility = 0.005 + random() * 0.025;
+      trend = (random() - 0.5) * 0.004;
     }
 
-    if (Math.random() < 0.02) {
-      const jump = (Math.random() - 0.5) * 0.08;
+    if (random() < 0.02) {
+      const jump = (random() - 0.5) * 0.08;
       price *= 1 + jump;
       activeBin += Math.floor(jump * 200);
     }
 
-    const shock = (Math.random() - 0.5) * volatility * 2;
-    tvl *= 1 + (Math.random() - 0.49) * 0.02;
+    const shock = (random() - 0.5) * volatility * 2;
+    tvl *= 1 + (random() - 0.49) * 0.02;
     price *= 1 + trend + shock;
-    activeBin += Math.floor(trend * 200 + shock * 100 + (Math.random() - 0.5) * 10);
+    activeBin += Math.floor(trend * 200 + shock * 100 + (random() - 0.5) * 10);
 
     const pool: PoolState = {
       address: poolAddress,
@@ -132,9 +187,9 @@ function generateMockHistory(poolAddress: string, days: number, startTvl: number
     const bins = Array.from({ length: 40 }, (_, j) => ({
       binId: activeBin - 20 + j,
       price: price * (1 + (j - 20) * 0.001),
-      reserveX: BigInt(Math.floor(Math.random() * 1e9)),
-      reserveY: BigInt(Math.floor(Math.random() * 1e9)),
-      liquiditySupply: BigInt(Math.floor(Math.random() * 1e12)),
+      reserveX: BigInt(Math.floor(random() * 1e9)),
+      reserveY: BigInt(Math.floor(random() * 1e9)),
+      liquiditySupply: BigInt(Math.floor(random() * 1e12)),
     }));
 
     const binArray: BinArray = {
@@ -165,7 +220,16 @@ async function loadSnapshots(
     return yield* db.getSnapshots(pool, startMs, endMs);
   });
   try {
-    return await Effect.runPromise(Effect.provide(effect, layer));
+    const snapshots = await Effect.runPromise(Effect.provide(effect, layer));
+    const usable = snapshots.filter((snapshot) => snapshot.binArray.bins.length > 0);
+    if (usable.length !== snapshots.length) {
+      log.warn("Replay skipped snapshots without bin liquidity data", {
+        pool,
+        skipped: snapshots.length - usable.length,
+        usable: usable.length,
+      });
+    }
+    return usable;
   } catch (err) {
     log.error("Failed to load snapshots", { pool, dbPath, err });
     return [];
@@ -181,6 +245,12 @@ interface BacktestConfig {
   minNetBenefitUsd: number;
   maxRebalances: number;
   maxPositionsPerPool: number;
+  minPoolTvlUsd?: number;
+  challengeMode?: boolean;
+  challengeMinScore?: number;
+  challengeMinPoolAgeMs?: number;
+  roundTripGasUsd?: number;
+  min7dFeeOverGas?: number;
 }
 
 export function runBacktestFromTicks(
@@ -189,7 +259,7 @@ export function runBacktestFromTicks(
 ): BacktestResult {
   const strategy = DLMMStrategy;
   const initialValue = 10_000;
-  let portfolioValue = initialValue;
+  let cashUsd = initialValue;
   let rebalances = 0;
   let wins = 0;
   let totalFees = 0;
@@ -199,26 +269,12 @@ export function runBacktestFromTicks(
     throw new Error("Empty history");
   }
 
-  // Detect data frequency from first two ticks for Sharpe annualization.
-  // Guard against non-positive intervals (duplicate or out-of-order
-  // timestamps) by scanning for the first positive adjacent diff;
-  // fall back to a 10-minute default if none is found.
-  let inferredIntervalMs = 10 * 60 * 1000;
-  for (let i = 1; i < ticks.length; i++) {
-    const diff = ticks[i]!.pool.timestamp - ticks[i - 1]!.pool.timestamp;
-    if (diff > 0) {
-      inferredIntervalMs = diff;
-      break;
-    }
-  }
-  const tickIntervalMs = inferredIntervalMs;
-  const ticksPerYear = (365 * 24 * 60 * 60 * 1000) / tickIntervalMs;
-
   let previousTvl = ticks[0]!.pool.tvlUsd;
   let currentLowerBinId = ticks[0]!.pool.activeBinId - cfg.halfWidth;
   let currentUpperBinId = ticks[0]!.pool.activeBinId + cfg.halfWidth;
   let hasPosition = false;
   let positionSizeUsd = 0;
+  let positionValueUsd = 0;
   let positionPeakUsd = 0;
   let lastRebalanceTick = -cfg.minHoldTicks;
   // Live-chain parity state (engine/program.ts evaluatePool): the #153
@@ -228,24 +284,30 @@ export function runBacktestFromTicks(
   let stopLossBreaches = 0;
   let challengePeakEquityUsd = initialValue;
 
-  const strategyReturns: number[] = [0];
-  let prevPortfolioValue = initialValue;
+  const strategyReturns: Array<{ value: number; intervalMs: number }> = [];
+  let previousEquityUsd = initialValue;
 
-  // Helper: compute position's share of pool fees for this tick.
-  // fees24hUsd is a 24h aggregate; divide by tick count to get per-tick,
-  // then scale by position share of pool TVL.
-  function feesForTick(tick: HistoryTick): number {
+  // fees24hUsd is a rolling 24-hour aggregate. Accrue it over the actual
+  // elapsed interval between snapshots; using one inferred interval silently
+  // misprices databases with gaps or duplicate timestamps.
+  function feesForInterval(tick: HistoryTick, intervalMs: number): number {
     const tvl = tick.pool.tvlUsd;
-    if (tvl <= 0) return 0;
-    // Fee share is the deployed position size, not the whole portfolio; fall
-    // back to the portfolio value when no position size is recorded yet.
-    const size = positionSizeUsd > 0 ? positionSizeUsd : portfolioValue;
-    const positionShare = Math.min(size / tvl, 1);
-    return (tick.pool.fees24hUsd / ticksPerYear) * 365 * positionShare;
+    if (!(tvl > 0) || !(positionSizeUsd > 0) || !(intervalMs > 0)) return 0;
+    const positionShare = Math.min(positionSizeUsd / tvl, 1);
+    return Math.max(0, tick.pool.fees24hUsd) * (intervalMs / (24 * 3_600_000)) * positionShare;
+  }
+
+  function estimatedFeesForDuration(tick: HistoryTick, durationMs: number): number {
+    return feesForInterval(tick, durationMs);
+  }
+
+  function equityUsd(): number {
+    return cashUsd + (hasPosition ? positionValueUsd : 0);
   }
 
   for (let i = 0; i < ticks.length; i++) {
     const tick = ticks[i]!;
+    const intervalMs = i > 0 ? Math.max(0, tick.pool.timestamp - ticks[i - 1]!.pool.timestamp) : 0;
     const metrics = strategy.computeMetrics(tick.pool, tick.binArray, previousTvl);
     // Match computeMetrics' wiring so this standalone auth score stays consistent
     // with metrics.volumeAuthenticity: fees are measured only under the Data API.
@@ -253,19 +315,38 @@ export function runBacktestFromTicks(
       tick.pool,
       replayUsesMeasuredVolume(tick.pool.statsSource),
     );
-    if (
-      !strategy.passesPreFilter(tick.pool, auth.score, metrics.binUtilization, 50_000, 0.7, 0.3)
-    ) {
+    const inRange =
+      tick.pool.activeBinId >= currentLowerBinId && tick.pool.activeBinId <= currentUpperBinId;
+    positionValueUsd = hasPosition ? (inRange ? positionSizeUsd : positionSizeUsd * 0.8) : 0;
+    const feesThisTick = hasPosition && inRange ? feesForInterval(tick, intervalMs) : 0;
+    totalFees += feesThisTick;
+    cashUsd += feesThisTick;
+    if (hasPosition) positionPeakUsd = Math.max(positionPeakUsd, positionValueUsd);
+
+    const preFilterPassed = strategy.passesPreFilter(
+      tick.pool,
+      auth.score,
+      metrics.binUtilization,
+      cfg.minPoolTvlUsd ?? 50_000,
+      0.7,
+      0.3,
+    );
+    // A pre-filter may prevent a new entry, but it must not suppress exits for
+    // an existing position. Capital-protection decisions remain evaluable.
+    if (!preFilterPassed && !hasPosition) {
       previousTvl = tick.pool.tvlUsd;
-      strategyReturns.push(0);
+      const equity = equityUsd();
+      if (intervalMs > 0 && previousEquityUsd > 0) {
+        strategyReturns.push({
+          value: (equity - previousEquityUsd) / previousEquityUsd,
+          intervalMs,
+        });
+      }
+      previousEquityUsd = equity;
       continue;
     }
 
-    const inRange =
-      tick.pool.activeBinId >= currentLowerBinId && tick.pool.activeBinId <= currentUpperBinId;
-    const feesThisTick = hasPosition && inRange ? feesForTick(tick) : 0;
-    totalFees += feesThisTick;
-    portfolioValue += feesThisTick;
+    const portfolioValue = equityUsd();
 
     const replayPosition = hasPosition
       ? {
@@ -305,15 +386,21 @@ export function runBacktestFromTicks(
       minFeeIlRatio: 1.2,
       volumeAuthThreshold: 0.7,
       minBinUtilization: 0.3,
-      minPoolTvlUsd: 50_000,
+      minPoolTvlUsd: cfg.minPoolTvlUsd ?? 50_000,
       weightedEntryScoreThreshold: 0.6,
       ilProtectionEnabled: true,
       dustExitUsd: 5,
       tvlDropExitPct: 0.3,
       maxOpenPositions: 3,
+      challengeMode: cfg.challengeMode === true,
+      challengeMinScore: cfg.challengeMinScore ?? 4,
+      challengeMinPoolAgeMs: cfg.challengeMinPoolAgeMs ?? 6 * 3_600_000,
+      poolAgeMs: tick.pool.timestamp - ticks[0]!.pool.timestamp,
+      nowMs: tick.pool.timestamp,
+      enterRoundTripGasUsd: cfg.roundTripGasUsd ?? 0,
+      enterMin7dFeeOverGas: cfg.min7dFeeOverGas ?? 1,
       trailingStopBreaches,
       stopLossBreaches,
-      challengeMode: false,
     });
     // Advance the #153 breach counter BEFORE the risk gate: live counts
     // breaches in evaluatePool, so a risk-rejected HOLD tick must still
@@ -322,28 +409,49 @@ export function runBacktestFromTicks(
     stopLossBreaches = replay.stopLossBreachCount;
     if (!replay.riskApproved) {
       previousTvl = tick.pool.tvlUsd;
-      strategyReturns.push(0);
+      const equity = equityUsd();
+      if (intervalMs > 0 && previousEquityUsd > 0) {
+        strategyReturns.push({
+          value: (equity - previousEquityUsd) / previousEquityUsd,
+          intervalMs,
+        });
+      }
+      previousEquityUsd = equity;
       continue;
     }
     if (replay.decision.action === "ENTER") {
-      hasPosition = true;
-      positionSizeUsd = replay.adjustedSizeUsd;
-      positionPeakUsd = positionSizeUsd;
-      trailingStopBreaches = 0;
-      stopLossBreaches = 0;
+      if (!hasPosition) {
+        const size = Math.min(replay.adjustedSizeUsd, cashUsd);
+        if (size > 0) {
+          hasPosition = true;
+          positionSizeUsd = size;
+          positionValueUsd = size;
+          positionPeakUsd = size;
+          cashUsd -= size;
+          currentLowerBinId = tick.pool.activeBinId - cfg.halfWidth;
+          currentUpperBinId = tick.pool.activeBinId + cfg.halfWidth;
+          lastRebalanceTick = i;
+          trailingStopBreaches = 0;
+          stopLossBreaches = 0;
+        }
+      }
     } else if (replay.decision.action === "EXIT") {
+      if (hasPosition) cashUsd += positionValueUsd;
       hasPosition = false;
       positionSizeUsd = 0;
+      positionValueUsd = 0;
       positionPeakUsd = 0;
       trailingStopBreaches = 0;
       stopLossBreaches = 0;
     } else if (hasPosition) {
-      positionPeakUsd = Math.max(positionPeakUsd, replayPosition?.currentValueUsd ?? 0);
+      positionPeakUsd = Math.max(positionPeakUsd, positionValueUsd);
     }
 
     const positionCenter = (currentLowerBinId + currentUpperBinId) / 2;
     const positionHalfWidth = (currentUpperBinId - currentLowerBinId) / 2 || 1;
-    const binDrift = Math.abs(tick.pool.activeBinId - positionCenter) / positionHalfWidth;
+    const binDrift = hasPosition
+      ? Math.abs(tick.pool.activeBinId - positionCenter) / positionHalfWidth
+      : 0;
 
     const ticksSinceRebalance = i - lastRebalanceTick;
     const canRebalance =
@@ -353,13 +461,15 @@ export function runBacktestFromTicks(
       const ilCost = portfolioValue * 0.001 * binDrift;
       const swapCost = portfolioValue * 0.0005;
       const totalCost = ilCost + swapCost;
-      const expectedFeesAhead = feesThisTick * cfg.minHoldTicks * 0.7;
+      const expectedIntervalMs = intervalMs > 0 ? intervalMs : 10 * 60 * 1000;
+      const expectedFeesAhead =
+        estimatedFeesForDuration(tick, expectedIntervalMs * cfg.minHoldTicks) * 0.7;
       const netBenefit = expectedFeesAhead - totalCost;
 
       if (netBenefit > cfg.minNetBenefitUsd) {
         rebalances++;
         totalIl += totalCost;
-        portfolioValue -= totalCost;
+        cashUsd = Math.max(0, cashUsd - totalCost);
         currentLowerBinId = tick.pool.activeBinId - cfg.halfWidth;
         currentUpperBinId = tick.pool.activeBinId + cfg.halfWidth;
         lastRebalanceTick = i;
@@ -369,35 +479,38 @@ export function runBacktestFromTicks(
           const nextInRange =
             nextTick.pool.activeBinId >= currentLowerBinId &&
             nextTick.pool.activeBinId <= currentUpperBinId;
-          if (nextInRange) feesInNextWindow += feesForTick(nextTick);
+          const priorTick = j > 0 ? ticks[j - 1]! : tick;
+          const nextIntervalMs = nextTick.pool.timestamp - priorTick.pool.timestamp;
+          if (nextInRange) feesInNextWindow += estimatedFeesForDuration(nextTick, nextIntervalMs);
         }
         if (feesInNextWindow > totalCost) wins++;
       }
-    } else if (binDrift > 0.9 && hasPosition) {
-      totalIl += portfolioValue * 0.002;
-      portfolioValue *= 0.998;
-      hasPosition = false;
-    } else if (!hasPosition && binDrift < 0.3) {
-      hasPosition = true;
-      // Same proposed size the replay ENTER path uses, so position value and
-      // fee accrual stay consistent after an automatic re-entry.
-      positionSizeUsd = Math.min(portfolioValue * 0.2, 2_000);
-      positionPeakUsd = positionSizeUsd;
-      currentLowerBinId = tick.pool.activeBinId - cfg.halfWidth;
-      currentUpperBinId = tick.pool.activeBinId + cfg.halfWidth;
-      lastRebalanceTick = i;
     }
 
     previousTvl = tick.pool.tvlUsd;
-    strategyReturns.push(
-      prevPortfolioValue > 0 ? (portfolioValue - prevPortfolioValue) / prevPortfolioValue : 0,
-    );
-    prevPortfolioValue = portfolioValue;
+    const equity = equityUsd();
+    if (intervalMs > 0 && previousEquityUsd > 0) {
+      strategyReturns.push({ value: (equity - previousEquityUsd) / previousEquityUsd, intervalMs });
+    }
+    previousEquityUsd = equity;
   }
 
-  const mean = strategyReturns.reduce((a, b) => a + b, 0) / strategyReturns.length;
+  if (hasPosition) cashUsd += positionValueUsd;
+  const finalValueUsd = cashUsd;
+  const mean =
+    strategyReturns.length > 0
+      ? strategyReturns.reduce((sum, sample) => sum + sample.value, 0) / strategyReturns.length
+      : 0;
   const variance =
-    strategyReturns.reduce((a, b) => a + Math.pow(b - mean, 2), 0) / strategyReturns.length;
+    strategyReturns.length > 0
+      ? strategyReturns.reduce((sum, sample) => sum + Math.pow(sample.value - mean, 2), 0) /
+        strategyReturns.length
+      : 0;
+  const averageIntervalMs =
+    strategyReturns.length > 0
+      ? strategyReturns.reduce((sum, sample) => sum + sample.intervalMs, 0) / strategyReturns.length
+      : 10 * 60 * 1000;
+  const ticksPerYear = (365 * 24 * 60 * 60 * 1000) / Math.max(averageIntervalMs, 1);
   const sharpe = variance > 0 ? (mean / Math.sqrt(variance)) * Math.sqrt(ticksPerYear) : 0;
 
   return {
@@ -405,10 +518,10 @@ export function runBacktestFromTicks(
     startDate: ticks[0]!.pool.timestamp,
     endDate: ticks[ticks.length - 1]!.pool.timestamp,
     initialValueUsd: initialValue,
-    finalValueUsd: portfolioValue,
+    finalValueUsd,
     totalFeesUsd: totalFees,
     totalIlUsd: totalIl,
-    netPnlUsd: portfolioValue - initialValue,
+    netPnlUsd: finalValueUsd - initialValue,
     totalRebalances: rebalances,
     winRate: rebalances > 0 ? wins / rebalances : 0,
     sharpeRatio: sharpe,
@@ -448,26 +561,24 @@ async function runBacktest(argv: ReadonlyArray<string>): Promise<void> {
   log.warn("═══════════════════════════════════════════════════════════════");
   log.warn("  BACKTEST LIMITATIONS — read before interpreting results");
   log.warn("═══════════════════════════════════════════════════════════════");
-  log.warn("  • TVL is CONSTANT per pool (current snapshot, not historical).");
-  log.warn("    Position share, APR, and volume-auth checks use stale TVL.");
+  log.warn("  • Replay uses the TVL/fee values persisted in each historical snapshot.");
+  log.warn("    It does not reconstruct pool-level liquidity changes between snapshots.");
   log.warn("  • Replay mirrors the LIVE decision chain (program.ts evaluatePool):");
   log.warn("    the EXIT chain (challenge drawdown, dust, TVL drop, volume auth,");
   log.warn("    Fee/IL, trailing stop with the #153 confirm debounce) and the ENTER");
   log.warn("    mega-gate (fee/IL floor, candidate conditions, weighted score,");
   log.warn("    allocation cap) with live confidence formulas + the shared risk kernel.");
   log.warn("    Live-only effects remain unavailable: memory retrieval/persistence,");
-  log.warn("    agent proposals, gas/recovery gates, pool cooldowns, token-risk");
+  log.warn("    agent proposals, recovery gates, pool cooldowns, token-risk");
   log.warn("    consults, IL-dominance/W15/fallen-angel exits, and on-chain execution.");
-  log.warn("  • Each pool runs independently with $10K. Total PnL is the");
-  log.warn("    sum of 6 independent portfolios ($60K deployed, not $10K).");
+  log.warn(`  • Each selected pool runs independently with $10K. Total PnL is the`);
+  log.warn(`    sum of ${args.pools.length} independent portfolios, not one shared $10K wallet.`);
   log.warn("  • Synthetic bins (all liquiditySupply=1n) make binUtil=1.0");
   log.warn("    always, so the binUtil pre-filter is a no-op.");
-  log.warn("  • NO TOKEN PRICE DEPRECIATION: the backtest models no");
-  log.warn("    mechanism for the underlying token value to decrease.");
-  log.warn("    Portfolio value only changes through fee accrual (+),");
-  log.warn("    rebalancing IL (-), and force-exit penalties (-). A pool");
-  log.warn("    for a token that dropped 90% would still show positive");
-  log.warn("    returns. The reported PnL is a meaningful overestimate.");
+  log.warn("  • Position valuation is still an approximation: in-range is full value");
+  log.warn("    and out-of-range is marked at 80%; token-leg depreciation, gas,");
+  log.warn("    slippage, failed execution, and shared-wallet concentration are absent.");
+  log.warn("    Treat this as decision-path evidence, not a live-money PnL forecast.");
   log.warn("═══════════════════════════════════════════════════════════════");
 
   const configs: ReadonlyArray<{ name: string; cfg: BacktestConfig }> = [
@@ -539,7 +650,14 @@ async function runBacktest(argv: ReadonlyArray<string>): Promise<void> {
 
     const results = configs.map(({ name, cfg }) => ({
       name,
-      result: runBacktestFromTicks(ticks, cfg),
+      result: runBacktestFromTicks(ticks, {
+        ...cfg,
+        minPoolTvlUsd: args.minPoolTvlUsd,
+        challengeMode: args.challengeMode,
+        challengeMinScore: args.challengeMinScore,
+        roundTripGasUsd: args.roundTripGasUsd,
+        min7dFeeOverGas: args.min7dFeeOverGas,
+      }),
     }));
 
     const table = results.map(({ name, result: r }) => ({

@@ -10,6 +10,11 @@ export const backtestCommand = new Command("backtest")
   .option("-p, --pools <addresses>", "Comma-separated pool addresses")
   .option("-s, --source <type>", 'Data source: "synthetic" or "replay"', "synthetic")
   .option("--db <path>", "SQLite database path for replay source", "./beam.db")
+  .option("--min-tvl <usd>", "Replay pre-filter TVL floor in USD", "50000")
+  .option("--challenge", "Replay challenge-mode score and pool-age gates")
+  .option("--challenge-min-score <score>", "Challenge replay score floor", "4")
+  .option("--gas-usd <usd>", "Round-trip gas cost assumption for replay entries", "0")
+  .option("--min-7d-fee-over-gas <multiple>", "Minimum expected 7d fees / gas multiple", "1")
   .action(async () => {
     logger.info("Starting backtest...");
     // Filter out the subcommand name so the underlying backtest parser sees only

@@ -10,6 +10,20 @@ export default defineConfig({
   dts: true,
   deps: {
     neverBundle: ["bun:sqlite"],
+    onlyBundle: false,
+    alwaysBundle: [
+      "sqlite-vec",
+      "effect",
+      "commander",
+      "chalk",
+      "dotenv",
+      "@clack/prompts",
+      "semver",
+      "viem",
+      "@uniswap/sdk-core",
+      "@uniswap/v3-sdk",
+      "@uniswap/v4-sdk",
+    ],
   },
   // dist/ is consumed by scripts/build-bundle.ts (staged into the release
   // tarball) and by tsdown.cli.config.ts for the CLI bundle — it is not a
@@ -19,17 +33,4 @@ export default defineConfig({
   // external (optional ONNX backend, import failure falls back to hash
   // vectors). viem and the @uniswap SDKs are the core EVM runtime and must
   // be bundled for the same reason.
-  noExternal: [
-    "sqlite-vec",
-    "effect",
-    "commander",
-    "chalk",
-    "dotenv",
-    "@clack/prompts",
-    "semver",
-    "viem",
-    "@uniswap/sdk-core",
-    "@uniswap/v3-sdk",
-    "@uniswap/v4-sdk",
-  ],
 });

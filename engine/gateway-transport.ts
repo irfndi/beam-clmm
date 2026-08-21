@@ -4,6 +4,7 @@ import { createLogger } from "./logger.js";
 import { stringifySafe } from "./bigint-json.js";
 import { getCurrentVersion } from "./version.js";
 import { underlyingErrorMessage } from "./errors.js";
+import { openWebSocket } from "./websocket.js";
 
 /** v4 wraps tryPromise rejections in a generic UnknownError whose message hides
  * the real failure (e.g. "Gateway 1008: ...") — unwrap the cause chain so
@@ -159,14 +160,8 @@ export class GatewayTransport implements AgentRuntimeTransport {
       }, 3_000);
 
       try {
-        // Bun's WebSocket takes an options object as the 2nd arg; pass the token on
-        // the upgrade so gateways that reject unauthenticated upgrades answer. The WS
-        // upgrade succeeds before any app-level handshake, so settle on "open".
-        ws = this.options.token
-          ? new WebSocket(this.options.url, {
-              headers: { Authorization: `Bearer ${this.options.token}` },
-            })
-          : new WebSocket(this.options.url);
+        // The WS upgrade succeeds before any app-level handshake, so settle on "open".
+        ws = openWebSocket(this.options.url, this.options.token);
 
         ws.addEventListener("open", () => {
           clearTimeout(timer);
@@ -277,11 +272,7 @@ export class GatewayTransport implements AgentRuntimeTransport {
 
       let ws: WebSocket;
       try {
-        ws = this.options.token
-          ? new WebSocket(this.options.url, {
-              headers: { Authorization: `Bearer ${this.options.token}` },
-            })
-          : new WebSocket(this.options.url);
+        ws = openWebSocket(this.options.url, this.options.token);
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         this.emit({ type: "error", transport: this.name, error: message });

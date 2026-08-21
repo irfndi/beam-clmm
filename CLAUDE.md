@@ -42,7 +42,7 @@ There are also optional peripheral subprojects:
 
 ## Technology stack
 
-- **Runtime:** Bun `>=1.4.0-canary.1` for development, tests and engine builds. Node 22+ is used only by the Docker image and the `mcp-server` subproject.
+- **Runtime:** Bun `>=1.4.0` for development, tests and engine builds. The repo uses Bun's isolated linker with the global virtual store enabled. Node 22+ is used only by the `mcp-server` subproject.
 - **Language:** TypeScript with strict settings: `strict`, `noUncheckedIndexedAccess`, `noImplicitOverride`, `exactOptionalPropertyTypes`, `noFallthroughCasesInSwitch`.
 - **Framework / DI:** [Effect-TS](https://effect.website) (`Context.Tag` + `Layer`). All side effects go through services.
 - **On-chain:** `@meteora-ag/dlmm` SDK + Helius RPC (`SOLANA_RPC_URL`).
@@ -66,7 +66,7 @@ There are also optional peripheral subprojects:
 | `.oxlintrc.json`                                      | `oxlint` rules: `correctness: error`, `no-unused-vars` and `require-yield` off.                                                               |
 | `.oxfmtrc.json`                                       | `oxfmt` config (empty `ignorePatterns`).                                                                                                      |
 | `.env.example`                                        | Example env file. **Incomplete** — canonical defaults and full env set live in `engine/config-service.ts`.                                    |
-| `Dockerfile`                                          | Multi-stage Bun-based image; runtime uses `oven/bun:canary-slim`, installs `libsqlite3-0` + `ca-certificates`, runs as non-root `agent` user. |
+| `Dockerfile`                                          | Multi-stage Bun-based image; runtime uses `oven/bun:1.4.0-slim`, installs `libsqlite3-0` + `ca-certificates`, runs as non-root `agent` user. |
 | `scripts/beam.sh`                                    | The `beam` binary wrapper; resolves install root, sets `BEAM_INSTALL_DIR`, then runs `cli/index.ts`.                                        |
 | `cloudflare/package.json`                             | Separate subproject for API + Telegram workers.                                                                                               |
 | `cloudflare/wrangler.toml` / `wrangler.telegram.toml` | Cloudflare Worker configs.                                                                                                                    |
@@ -386,7 +386,7 @@ Required secrets: `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`.
 
 ### Docker
 
-The `Dockerfile` builds the engine bundle with `oven/bun:canary-slim`, then copies `dist/`, `node_modules/` and `package.json` into a runtime stage that installs `libsqlite3-0` and `ca-certificates`. The container runs as the `agent` user and executes `bun dist/index.mjs`.
+The `Dockerfile` builds the engine bundle with `oven/bun:1.4.0-slim`, then copies `dist/`, `node_modules/` and `package.json` into a runtime stage that installs `libsqlite3-0` and `ca-certificates`. The container runs as the `agent` user and executes `bun dist/index.mjs`.
 
 ## Security and privacy
 

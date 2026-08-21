@@ -1024,6 +1024,32 @@ const MIGRATIONS: ReadonlyArray<Migration> = [
       }
     },
   },
+  {
+    version: 26,
+    name: "pool_snapshots_usd_price_metadata",
+    up(db) {
+      // Raw Uniswap ratios are not USD prices. Persist the token identity,
+      // decimals, and per-leg USD marks needed for trustworthy replayed IL/PnL.
+      if (hasTable(db, "pool_snapshots") && !hasColumn(db, "pool_snapshots", "token_x_address")) {
+        db.exec("ALTER TABLE pool_snapshots ADD COLUMN token_x_address TEXT");
+      }
+      if (hasTable(db, "pool_snapshots") && !hasColumn(db, "pool_snapshots", "token_y_address")) {
+        db.exec("ALTER TABLE pool_snapshots ADD COLUMN token_y_address TEXT");
+      }
+      if (hasTable(db, "pool_snapshots") && !hasColumn(db, "pool_snapshots", "token_x_decimals")) {
+        db.exec("ALTER TABLE pool_snapshots ADD COLUMN token_x_decimals INTEGER");
+      }
+      if (hasTable(db, "pool_snapshots") && !hasColumn(db, "pool_snapshots", "token_y_decimals")) {
+        db.exec("ALTER TABLE pool_snapshots ADD COLUMN token_y_decimals INTEGER");
+      }
+      if (hasTable(db, "pool_snapshots") && !hasColumn(db, "pool_snapshots", "token_x_price_usd")) {
+        db.exec("ALTER TABLE pool_snapshots ADD COLUMN token_x_price_usd REAL");
+      }
+      if (hasTable(db, "pool_snapshots") && !hasColumn(db, "pool_snapshots", "token_y_price_usd")) {
+        db.exec("ALTER TABLE pool_snapshots ADD COLUMN token_y_price_usd REAL");
+      }
+    },
+  },
 ];
 
 function runMigrations(db: Database) {

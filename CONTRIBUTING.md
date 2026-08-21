@@ -2,7 +2,7 @@
 
 ## Prerequisites
 
-- [Bun](https://bun.sh) >= 1.2
+- [Bun](https://bun.sh) 1.4.0+
 - Node 22+ (runtime)
 
 ## Setup

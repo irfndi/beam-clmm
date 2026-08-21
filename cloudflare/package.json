@@ -2,6 +2,10 @@
   "name": "@beam-clmm/cloudflare",
   "version": "1.0.0",
   "description": "Cloudflare Workers for Beam CLMM platform",
+  "packageManager": "bun@1.4.0",
+  "engines": {
+    "bun": ">=1.4.0"
+  },
   "workspaces": [
     "infra"
   ],

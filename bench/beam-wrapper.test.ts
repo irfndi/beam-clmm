@@ -4,7 +4,7 @@
 // - fnd_sig-feat-library-334b6b45bc-c771: the prerelease version comparator
 //   must order semver numerically (canary.10 > canary.2), not lexicographically.
 // - Version gate: the wrapper must fail with an actionable message when bun is
-//   missing or older than engines.bun (>= 1.4.0-canary.1).
+//   missing or older than engines.bun (>= 1.4.0).
 // - Symlink resolution: the wrapper must resolve the package root through
 //   `bin`-style symlinks so BEAM_INSTALL_DIR / cli/index.ts are correct even
 //   when invoked via a global bin link.
@@ -30,7 +30,7 @@ import { fileURLToPath } from "node:url";
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const BEAM_SH = path.join(REPO_ROOT, "scripts", "beam.sh");
-const MIN_BUN_VERSION = "1.4.0-canary.1";
+const MIN_BUN_VERSION = "1.4.0";
 
 let sandbox: string;
 let stubDir: string;
@@ -137,8 +137,8 @@ describe("scripts/beam.sh wrapper", () => {
   });
 
   it.each([
-    ["1.4.0-canary.1", "minimum prerelease"],
     ["1.4.0", "stable release"],
+    ["1.4.1-canary.1", "newer prerelease"],
     ["2.0.0", "newer major"],
   ])("passes the version gate for %s (%s) and execs the CLI", (version) => {
     const res = runBeam(["--help"], { version });
@@ -148,7 +148,7 @@ describe("scripts/beam.sh wrapper", () => {
   });
 
   it("passes the version gate for canary.10 (numeric prerelease ordering)", () => {
-    const res = runBeam(["--help"], { version: "1.4.0-canary.10" });
+    const res = runBeam(["--help"], { version: "1.4.1-canary.10" });
     expect(res.status).toBe(0);
   });
 
@@ -225,10 +225,10 @@ describe("scripts/beam.sh wrapper", () => {
       }
     };
 
-    expect(compare("1.4.0-canary.10", "1.4.0-canary.2")).toBe(0); // 10 > 2 numerically
-    expect(compare("1.4.0-canary.2", "1.4.0-canary.1")).toBe(0);
+    expect(compare("1.4.1-canary.10", "1.4.1-canary.2")).toBe(0); // 10 > 2 numerically
+    expect(compare("1.4.1-canary.2", "1.4.1-canary.1")).toBe(0);
     expect(compare("1.4.0-canary.1", "1.4.0")).toBe(1); // prerelease < release
-    expect(compare("1.3.9", "1.4.0-canary.1")).toBe(1);
+    expect(compare("1.3.9", "1.4.0")).toBe(1);
     expect(compare("1.4.0", "1.4.0")).toBe(0);
   });
 });

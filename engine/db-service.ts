@@ -697,8 +697,10 @@ export const DbLive = (dbPath?: string) =>
               `INSERT OR REPLACE INTO pool_snapshots (
               pool_address, timestamp, active_bin_id, tvl_usd, volume_24h_usd,
               fees_24h_usd, apr, current_price, bin_step,
-              token_x_symbol, token_y_symbol, bin_array_json, stats_source, drawdown24h
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+              token_x_symbol, token_y_symbol, bin_array_json, stats_source, drawdown24h,
+              token_x_address, token_y_address, token_x_decimals, token_y_decimals,
+              token_x_price_usd, token_y_price_usd
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
               snapshot.poolAddress,
               snapshot.timestamp,
               snapshot.activeBinId,
@@ -713,6 +715,12 @@ export const DbLive = (dbPath?: string) =>
               serializeBinArray(snapshot.binArray),
               snapshot.statsSource ?? "heuristic",
               snapshot.drawdown24h ?? null,
+              snapshot.tokenXAddress ?? null,
+              snapshot.tokenYAddress ?? null,
+              snapshot.tokenXDecimals ?? null,
+              snapshot.tokenYDecimals ?? null,
+              snapshot.tokenXPriceUsd ?? null,
+              snapshot.tokenYPriceUsd ?? null,
             );
           }),
 
@@ -1667,8 +1675,15 @@ function rowToPositionEvent(row: SqlRawRow): PositionEventRecord {
 // known members (legacy NULL, an unexpected literal) is treated as the
 // conservative, fail-closed "heuristic" — never silently upgraded to "datapi",
 // so an unknown provenance keeps the measured-fee-rate gate disabled on replay.
-function parseStatsSource(value: SqlRawCell): "datapi" | "geckoterminal" | "heuristic" {
-  if (value === "datapi" || value === "geckoterminal" || value === "heuristic") return value;
+function parseStatsSource(value: SqlRawCell): "datapi" | "krystal" | "geckoterminal" | "heuristic" {
+  if (
+    value === "datapi" ||
+    value === "krystal" ||
+    value === "geckoterminal" ||
+    value === "heuristic"
+  ) {
+    return value;
+  }
   return "heuristic";
 }
 
@@ -1682,6 +1697,12 @@ function rowToSnapshot(row: SqlRawRow): PoolSnapshot {
     fees24hUsd: Number(row.fees_24h_usd),
     apr: Number(row.apr),
     currentPrice: Number(row.current_price),
+    tokenXAddress: row.token_x_address == null ? undefined : readSqlText(row.token_x_address),
+    tokenYAddress: row.token_y_address == null ? undefined : readSqlText(row.token_y_address),
+    tokenXDecimals: row.token_x_decimals == null ? undefined : Number(row.token_x_decimals),
+    tokenYDecimals: row.token_y_decimals == null ? undefined : Number(row.token_y_decimals),
+    tokenXPriceUsd: row.token_x_price_usd == null ? undefined : Number(row.token_x_price_usd),
+    tokenYPriceUsd: row.token_y_price_usd == null ? undefined : Number(row.token_y_price_usd),
     binStep: Number(row.bin_step),
     tokenXSymbol: readSqlText(row.token_x_symbol),
     tokenYSymbol: readSqlText(row.token_y_symbol),

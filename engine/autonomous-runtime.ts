@@ -298,7 +298,7 @@ export function isTransientSettlementError(error: unknown): boolean {
  * for flaky infrastructure, not for logic that will never succeed).
  */
 const UNRECOVERABLE_SETTLEMENT =
-  /Invariant failed:|no direct v3 or registered v4 pool for|no .* pool for|invalid.*route|cannot.*swap|unable to quote/i;
+  /Invariant failed\b|no direct v3 or registered v4 pool for|no .* pool for|invalid.*route|cannot.*swap|unable to quote/i;
 
 export function isUnrecoverableSettlementError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);

@@ -37,6 +37,12 @@ function makeSnapshot(overrides: Partial<PoolSnapshot> = {}): PoolSnapshot {
     binStep: overrides.binStep ?? 10,
     tokenXSymbol: overrides.tokenXSymbol ?? "SOL",
     tokenYSymbol: overrides.tokenYSymbol ?? "USDC",
+    tokenXAddress: overrides.tokenXAddress ?? "0x4200000000000000000000000000000000000006",
+    tokenYAddress: overrides.tokenYAddress ?? "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+    tokenXDecimals: overrides.tokenXDecimals ?? 18,
+    tokenYDecimals: overrides.tokenYDecimals ?? 6,
+    tokenXPriceUsd: overrides.tokenXPriceUsd ?? 2_000,
+    tokenYPriceUsd: overrides.tokenYPriceUsd ?? 1,
     binArray: overrides.binArray ?? binArray,
     statsSource: overrides.statsSource,
   };
@@ -61,6 +67,12 @@ describe("DbService — snapshots", () => {
         expect(got.poolAddress).toBe(snap.poolAddress);
         expect(got.activeBinId).toBe(snap.activeBinId);
         expect(got.tvlUsd).toBeCloseTo(snap.tvlUsd);
+        expect(got.tokenXAddress).toBe(snap.tokenXAddress);
+        expect(got.tokenYAddress).toBe(snap.tokenYAddress);
+        expect(got.tokenXDecimals).toBe(snap.tokenXDecimals);
+        expect(got.tokenYDecimals).toBe(snap.tokenYDecimals);
+        expect(got.tokenXPriceUsd).toBe(snap.tokenXPriceUsd);
+        expect(got.tokenYPriceUsd).toBe(snap.tokenYPriceUsd);
         expect(got.binArray.bins).toHaveLength(8);
         // bigints must survive the JSON round-trip
         expect(got.binArray.bins[0]!.reserveX).toBe(BigInt(1_000_000));

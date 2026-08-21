@@ -1178,6 +1178,31 @@ const loadConfig = Effect.gen(function* () {
     Effect.orElseSucceed(() => false),
   );
 
+  // Live mode must fail closed when paper-only safety overrides are left in
+  // the environment. In particular, Robinhood's v4 position manager is
+  // known not to accept live v4 mints, so an explicit true must never turn
+  // into a real-money attempt there.
+  if (!paperTrading) {
+    const liveSafetyIssues: string[] = [];
+    if (entryV4Enabled && !LIVE_ENTRY_V4_ENABLED_CHAIN) {
+      liveSafetyIssues.push("LIVE_ENTRY_V4_ENABLED=true is unsupported on the active chain");
+    }
+    if (!exitRouteProofRequired) {
+      liveSafetyIssues.push("EXIT_ROUTE_PROOF_REQUIRED must be true");
+    }
+    if (!paperValidationEnforce) {
+      liveSafetyIssues.push("PAPER_VALIDATION_ENFORCE must be true");
+    }
+    if (liveSafetyIssues.length > 0) {
+      return yield* Effect.die(
+        new ConfigError({
+          message: `Unsafe live configuration: ${liveSafetyIssues.join("; ")}`,
+          issues: liveSafetyIssues.map((message) => ({ path: "live-safety", message })),
+        }),
+      );
+    }
+  }
+
   // ─── F7: Pool cooldown after failed exits ───────────────────────────────────
   const oorCooldownMs = yield* validatedNumber("OOR_COOLDOWN_MS", 0, 4 * 60 * 60 * 1000);
   const repeatOorCooldownMs = yield* validatedNumber(
