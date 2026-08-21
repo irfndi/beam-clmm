@@ -1,0 +1,7 @@
+[install]
+# Bun 1.4's isolated linker keeps dependency resolution reproducible and
+# prevents undeclared/phantom dependencies. The global virtual store shares
+# materialized packages across Beam checkouts while node_modules contains only
+# the project links.
+linker = "isolated"
+globalStore = true

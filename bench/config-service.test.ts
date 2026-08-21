@@ -80,6 +80,31 @@ describe("ConfigService ENTRY_STRATEGY_TYPE", () => {
   });
 });
 
+describe("ConfigService live safety guard", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("rejects live mode when route proof or paper validation enforcement is disabled", async () => {
+    vi.stubEnv("PAPER_TRADING", "false");
+    vi.stubEnv("EXIT_ROUTE_PROOF_REQUIRED", "false");
+    vi.stubEnv("PAPER_VALIDATION_ENFORCE", "false");
+    await expect(loadConfig()).rejects.toThrow("Unsafe live configuration");
+  });
+
+  it("accepts a live configuration only with explicit safety gates", async () => {
+    vi.stubEnv("PAPER_TRADING", "false");
+    vi.stubEnv("EXIT_ROUTE_PROOF_REQUIRED", "true");
+    vi.stubEnv("PAPER_VALIDATION_ENFORCE", "true");
+    const { LIVE_ENTRY_V4_ENABLED_CHAIN } = await import("../engine/chain-registry.js");
+    vi.stubEnv("LIVE_ENTRY_V4_ENABLED", LIVE_ENTRY_V4_ENABLED_CHAIN ? "true" : "false");
+    const cfg = await loadConfig();
+    expect(cfg.paperTrading).toBe(false);
+    expect(cfg.exitRouteProofRequired).toBe(true);
+    expect(cfg.paperValidationEnforce).toBe(true);
+  });
+});
+
 describe("ConfigService STABLECOIN_MINTS", () => {
   afterEach(() => {
     vi.unstubAllEnvs();

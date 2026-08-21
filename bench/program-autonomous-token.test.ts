@@ -1043,6 +1043,7 @@ describe("issue #166 settlement recovery", () => {
     expect(isUnrecoverableSettlementError(new Error("quoteSwap: Invariant failed: TICK..."))).toBe(
       true,
     );
+    expect(isUnrecoverableSettlementError(new Error("quoteSwap: Invariant failed"))).toBe(true);
     expect(
       isUnrecoverableSettlementError(
         new Error("quoteSwap: no direct v3 or registered v4 pool for 0xabcd -> 0x0"),

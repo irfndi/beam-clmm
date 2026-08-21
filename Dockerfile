@@ -1,7 +1,12 @@
 # ── Stage 1: Build ─────────────────────────────────────────────────────────
-FROM oven/bun:canary-slim AS builder
+FROM oven/bun:1.4.0-slim AS builder
 
 WORKDIR /app
+
+# Keep Bun's global virtual store inside the image build context so isolated
+# node_modules symlinks remain valid when copied into the runtime stage.
+ENV BUN_INSTALL_CACHE_DIR=/bun-cache \
+    BUN_INSTALL_GLOBAL_STORE=true
 
 COPY package.json bun.lock* ./
 RUN bun install --frozen-lockfile --ignore-scripts
@@ -15,9 +20,12 @@ COPY types ./types
 RUN bun run build
 
 # ── Stage 2: Runtime ───────────────────────────────────────────────────────
-FROM oven/bun:canary-slim AS runtime
+FROM oven/bun:1.4.0-slim AS runtime
 
 WORKDIR /app
+
+ENV BUN_INSTALL_CACHE_DIR=/bun-cache \
+    BUN_INSTALL_GLOBAL_STORE=true
 
 # sqlite-vec ships glibc-only binaries; Debian slim provides a libsqlite3
 # compiled with SQLITE_ENABLE_LOAD_EXTENSION so the vec0 module can load.
@@ -32,6 +40,7 @@ RUN groupadd --system --gid 1001 agent \
 COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/package.json ./
+COPY --from=builder /bun-cache/links /bun-cache/links
 
 # Data directory writable by agent user (db, logs, credentials). The engine's
 # paths resolve from BEAM_DATA_DIR / BEAM_CONFIG_DIR / SQLITE_DB_PATH; the

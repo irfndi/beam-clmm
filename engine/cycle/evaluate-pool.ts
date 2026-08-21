@@ -29,13 +29,8 @@
  *     live session state absent in replay; replay treats every pool as
  *     approved and paper (all gates pass).
  *   - Jupiter token-risk ENTER consult: network overlay, fail-open in replay.
- *   - Challenge pool-score/age candidate conjuncts: NOT replayed — they are
- *     absent, not defaulted. The replay input carries no fee/volume/token-
- *     symbol fields for challengePoolScore, and the live 6h launch-rug age
- *     gate is in-memory session state. The only caller (ops/backtest.ts)
- *     hardcodes challengeMode: false, so the gap is inert; enabling
- *     challenge mode in the backtest requires adding the score conjunct
- *     first (evaluateReplayPool warns loudly if challengeMode is ever set).
+ *   - Challenge pool-score/age candidate conjuncts: replayed from the
+ *     snapshot's reconstructed PoolState and explicit pool-age input.
  *   - Threshold/weight evolution: replay uses the config defaults, not
  *     DB-evolved values.
  *   - TVL-velocity/volume/fee gates act on the snapshot's metrics exactly as
@@ -44,7 +39,7 @@
  */
 import { evaluateRisk, evaluatePerPoolAllocation, type RiskConfig } from "../risk-service.js";
 import { weightedEntryScore } from "../strategy-service.js";
-import { challengeRotationSignal } from "../challenge-strategy.js";
+import { challengePoolScore, challengeRotationSignal } from "../challenge-strategy.js";
 import type { AgentDecision, PoolMetrics, Position, SignalWeights } from "../types.js";
 import type { RiskContext } from "../services.js";
 
@@ -120,6 +115,14 @@ export interface ReplayEvaluationInput {
   readonly challengeHardFloorPct?: number;
   /** Per-pool loss-cooldown deadline (ms epoch) — bars re-entry while active. */
   readonly lossCooldownUntilMs?: number;
+  /** Evaluation clock for deterministic replay; live callers may omit it. */
+  readonly nowMs?: number;
+  /** Live CHALLENGE_MIN_SCORE; defaults to the live config default (4). */
+  readonly challengeMinScore?: number;
+  /** Live CHALLENGE_MIN_POOL_AGE_MS; defaults to six hours. */
+  readonly challengeMinPoolAgeMs?: number;
+  /** Reconstructed pool age at this snapshot, in milliseconds. */
+  readonly poolAgeMs?: number;
   /** Live CHALLENGE_POOL_SHARE_CAP_PCT — caps per-pool exposure at % of TVL. */
   readonly challengePoolShareCapPct?: number;
 }
@@ -161,19 +164,9 @@ const DEFAULT_SIGNAL_WEIGHTS: SignalWeights = {
 
 export function evaluateReplayPool(input: ReplayEvaluationInput): ReplayEvaluation {
   const { position, poolAddress, metrics } = input;
-  // The challenge score/age candidate conjuncts are NOT replayed (see the
-  // header delta note). Only ops/backtest.ts calls this and hardcodes
-  // challengeMode: false — if that ever changes, fail loudly instead of
-  // silently admitting young or sub-floor-score pools.
-  if (input.challengeMode === true) {
-    console.warn(
-      "[cycle/evaluate-pool] challengeMode=true in the replay is NOT fully supported: " +
-        "the challengePoolScore and 6h age candidate conjuncts are absent (header delta note). " +
-        "Add them before trusting challenge-mode backtest ENTERs.",
-    );
-  }
   const feeIlRatio = metrics.feeIlRatio;
   const volumeAuth = metrics.volumeAuthenticity;
+  const challengeScore = input.challengeMode === true ? challengePoolScore(metrics.pool).score : 0;
   let decision: AgentDecision | null = null;
   // #153 debounce: the count only advances inside the trailing-stop block
   // (live tracks per-position breach state in evaluatePool, pre-risk-tail).
@@ -342,6 +335,20 @@ export function evaluateReplayPool(input: ReplayEvaluationInput): ReplayEvaluati
       enterRejected = "[candidate-gate] pool failed the ×1.5 candidate conditions";
     } else if (
       input.challengeMode === true &&
+      (!Number.isFinite(challengeScore) ||
+        !Number.isFinite(input.challengeMinScore ?? 4) ||
+        challengeScore < (input.challengeMinScore ?? 4))
+    ) {
+      enterRejected = `[challenge-score-gate] score ${Number.isFinite(challengeScore) ? challengeScore.toFixed(3) : "unavailable"} < minimum ${input.challengeMinScore ?? 4}`;
+    } else if (
+      input.challengeMode === true &&
+      (input.poolAgeMs === undefined ||
+        !Number.isFinite(input.poolAgeMs) ||
+        input.poolAgeMs < (input.challengeMinPoolAgeMs ?? 6 * 3_600_000))
+    ) {
+      enterRejected = `[challenge-age-gate] reconstructed pool age ${input.poolAgeMs === undefined ? "unavailable" : `${input.poolAgeMs}ms`} < minimum ${input.challengeMinPoolAgeMs ?? 6 * 3_600_000}ms`;
+    } else if (
+      input.challengeMode === true &&
       (input.challengePeakEquityUsd ?? 0) > 0 &&
       input.portfolioValueUsd <
         (input.challengePeakEquityUsd ?? 0) * ((input.challengeHardFloorPct ?? 50) / 100)
@@ -354,7 +361,7 @@ export function evaluateReplayPool(input: ReplayEvaluationInput): ReplayEvaluati
     } else if (
       input.challengeMode === true &&
       (input.lossCooldownUntilMs ?? 0) > 0 &&
-      Date.now() < (input.lossCooldownUntilMs ?? 0)
+      (input.nowMs ?? Date.now()) < (input.lossCooldownUntilMs ?? 0)
     ) {
       // Per-pool loss cooldown (safety audit): a pool that realized a loss is
       // barred from re-entry until its stale drawdown has refreshed.

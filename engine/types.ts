@@ -134,6 +134,11 @@ export interface PoolState {
   activeBinId: number;
   binStep: number;
   currentPrice: number;
+  /** Raw token0/token1 precision and USD marks captured with the pool state. */
+  tokenXDecimals?: number | undefined;
+  tokenYDecimals?: number | undefined;
+  tokenXPriceUsd?: number | undefined;
+  tokenYPriceUsd?: number | undefined;
   timestamp: number;
   /**
    * On-chain pool liquidity (wei units; raw uint128 from the pool contract /
@@ -180,14 +185,16 @@ export interface PoolState {
 }
 
 /**
- * Whether a pool's tvl/volume/fees came from a MEASURED source. Only datapi and
- * geckoterminal carry real volume/fees; "heuristic" is fabricated and undefined
+ * Whether a pool's tvl/volume/fees came from a MEASURED source. Datapi and
+ * Krystal carry measured fee/TVL data, while GeckoTerminal carries measured
+ * volume/TVL with modeled fees; "heuristic" is fabricated and undefined
  * (a fixture/legacy pool that was never enriched) is treated the same — unverified.
  * Fail-closed: the volume/fee gates and the paper-accrual gate act ONLY on a
  * measured source, so fabricated values can never silently pass a gate. In
  * production the adapter always tags raw pools "heuristic", so this is exactly
- * equivalent to `statsSource !== "heuristic"` over {datapi, geckoterminal,
- * heuristic} — the positive form additionally fails closed on undefined.
+ * equivalent to `statsSource !== "heuristic"` over {datapi, krystal,
+ * geckoterminal, heuristic} — the positive form additionally fails closed on
+ * undefined.
  */
 export function isMeasuredStatsSource(
   source: PoolState["statsSource"],
@@ -204,6 +211,13 @@ export interface PoolSnapshot {
   fees24hUsd: number;
   apr: number;
   currentPrice: number;
+  /** Token metadata required to convert raw pool ratios into USD replay marks. */
+  tokenXAddress?: string | undefined;
+  tokenYAddress?: string | undefined;
+  tokenXDecimals?: number | undefined;
+  tokenYDecimals?: number | undefined;
+  tokenXPriceUsd?: number | undefined;
+  tokenYPriceUsd?: number | undefined;
   binStep: number;
   tokenXSymbol: string;
   tokenYSymbol: string;

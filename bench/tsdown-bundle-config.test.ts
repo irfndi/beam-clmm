@@ -1,7 +1,7 @@
 // Bundle-config contract tests for the release build (tsdown).
 //
 // Coverage map (clawpatch findings):
-// - fnd_sig-feat-library-334b6b45bc-87fc: noExternal must bundle the core EVM
+// - fnd_sig-feat-library-334b6b45bc-87fc: alwaysBundle must bundle the core EVM
 //   runtime deps (viem + @uniswap SDKs) or the v0.1.9 broken-bundle incident
 //   (#179: runtime deps resolved from bun's global cache) repeats.
 // - fnd_sig-feat-library-334b6b45bc-8059: the `bigint-buffer` alias targeted
@@ -33,10 +33,10 @@ const configs = [
 describe("tsdown release-bundle config", () => {
   const evmRuntimeDeps = ["viem", "@uniswap/sdk-core", "@uniswap/v3-sdk", "@uniswap/v4-sdk"];
 
-  it.each(configs)("$name bundles every EVM runtime dependency via noExternal", ({ src }) => {
-    const noExternalBlock = src.slice(src.indexOf("noExternal:"));
+  it.each(configs)("$name bundles every EVM runtime dependency via alwaysBundle", ({ src }) => {
+    const alwaysBundleBlock = src.slice(src.indexOf("alwaysBundle:"));
     for (const dep of evmRuntimeDeps) {
-      expect(noExternalBlock).toContain(`"${dep}"`);
+      expect(alwaysBundleBlock).toContain(`"${dep}"`);
     }
   });
 
@@ -66,11 +66,11 @@ describe("tsdown release-bundle config", () => {
 
   it("keeps @xenova/transformers external (optional ONNX backend, #179 exception)", () => {
     // The v0.1.9 fix (#179) bundles every runtime dep EXCEPT the optional
-    // ONNX backend; adding it back to noExternal silently reverts that
+    // ONNX backend; adding it back to alwaysBundle silently reverts that
     // decision (its import failure is the fallback path to hash vectors).
     for (const { src } of configs) {
-      const noExternal = src.slice(src.indexOf("noExternal:"));
-      expect(noExternal).not.toContain('"@xenova/transformers"');
+      const alwaysBundle = src.slice(src.indexOf("alwaysBundle:"));
+      expect(alwaysBundle).not.toContain('"@xenova/transformers"');
       expect(src).toContain("@xenova/transformers"); // documented as external
     }
   });

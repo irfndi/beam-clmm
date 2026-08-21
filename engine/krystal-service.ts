@@ -118,8 +118,26 @@ function normalizeNativeAddress(address: string): string {
  * carries drawdown24h/priceVolatility for the strategy.
  */
 export function enrichPoolFromKrystal(pool: PoolState, stats: KrystalPoolStats): PoolState {
+  const tokenXAddress = pool.tokenX.toLowerCase();
+  const tokenYAddress = pool.tokenY.toLowerCase();
+  const token0Address = stats.token0Address.toLowerCase();
+  const token1Address = stats.token1Address.toLowerCase();
+  const tokenXSymbol =
+    token0Address !== "" && token0Address === tokenXAddress
+      ? stats.token0Symbol || pool.tokenXSymbol
+      : token1Address !== "" && token1Address === tokenXAddress
+        ? stats.token1Symbol || pool.tokenXSymbol
+        : pool.tokenXSymbol;
+  const tokenYSymbol =
+    token0Address !== "" && token0Address === tokenYAddress
+      ? stats.token0Symbol || pool.tokenYSymbol
+      : token1Address !== "" && token1Address === tokenYAddress
+        ? stats.token1Symbol || pool.tokenYSymbol
+        : pool.tokenYSymbol;
   return {
     ...pool,
+    tokenXSymbol,
+    tokenYSymbol,
     tvlUsd: stats.tvlUsd > 0 ? stats.tvlUsd : pool.tvlUsd,
     volume24hUsd: stats.volume24hUsd,
     fees24hUsd: stats.feeUsd24h,

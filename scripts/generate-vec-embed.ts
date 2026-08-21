@@ -2,6 +2,7 @@
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
+import { resolveSqliteVecPath, sqliteVecPlatformPackageName } from "./sqlite-vec-path.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -13,18 +14,13 @@ function extensionSuffix(platform: string): string {
   return "so";
 }
 
-function platformPackageName(platform: string, arch: string): string {
-  const os = platform === "win32" ? "windows" : platform;
-  return `sqlite-vec-${os}-${arch}`;
-}
-
 function generate(platform: string, arch: string): void {
-  const packageName = platformPackageName(platform, arch);
+  const packageName = sqliteVecPlatformPackageName(platform, arch);
   const ext = extensionSuffix(platform);
-  const vec0Path = path.join(repoRoot, "node_modules", packageName, `vec0.${ext}`);
+  const vec0Path = resolveSqliteVecPath(repoRoot, platform, arch);
 
-  if (!fs.existsSync(vec0Path)) {
-    console.error(`sqlite-vec extension not found: ${vec0Path}`);
+  if (vec0Path === null) {
+    console.error(`sqlite-vec extension not found for ${platform}-${arch}`);
     console.error(`Install the platform package first: bun install ${packageName}`);
     process.exit(1);
   }

@@ -389,6 +389,16 @@ function sqrtPriceX96ToPrice(sqrtPriceX96: bigint): number {
   return ratio * ratio;
 }
 
+function settledFiniteNumber(result: PromiseSettledResult<number>): number | undefined {
+  return result.status === "fulfilled" && Number.isFinite(result.value) ? result.value : undefined;
+}
+
+function settledPositiveNumber(result: PromiseSettledResult<number>): number | undefined {
+  return result.status === "fulfilled" && Number.isFinite(result.value) && result.value > 0
+    ? result.value
+    : undefined;
+}
+
 const decimalsCache = new Map<string, number>();
 
 /** v4 poolId = keccak256(abi.encode(poolKey)) — canonical v4 pool identity. */
@@ -2473,8 +2483,18 @@ export const AdapterLive = Layer.effect(
         data: requiredCallResult(results, 4),
       });
       const tick = Number(slot0[1]);
-      const price0 = await priceUsd(token0).catch(() => 0);
-      const tvlUsd = (Number(liquidity) / 1e18) * (price0 || 0) * 4; // rough reserve proxy
+      const [decimals0Result, decimals1Result, price0Result, price1Result] =
+        await Promise.allSettled([
+          tokenDecimalsOf(token0),
+          tokenDecimalsOf(token1),
+          priceUsd(token0),
+          priceUsd(token1),
+        ]);
+      const token0Decimals = settledFiniteNumber(decimals0Result);
+      const token1Decimals = settledFiniteNumber(decimals1Result);
+      const price0 = settledPositiveNumber(price0Result);
+      const price1 = settledPositiveNumber(price1Result);
+      const tvlUsd = (Number(liquidity) / 1e18) * (price0 ?? 0) * 4; // rough reserve proxy
       return {
         address: poolAddress.toLowerCase(),
         tokenX: token0.toLowerCase(),
@@ -2496,6 +2516,10 @@ export const AdapterLive = Layer.effect(
         activeBinId: tick,
         binStep: Number(tickSpacing),
         currentPrice: tickToPrice(tick),
+        tokenXDecimals: token0Decimals,
+        tokenYDecimals: token1Decimals,
+        tokenXPriceUsd: price0,
+        tokenYPriceUsd: price1,
         liquidity,
         timestamp: Date.now(),
         statsSource: "heuristic" as const,
@@ -2942,6 +2966,13 @@ export const AdapterLive = Layer.effect(
                 stateView.read.getLiquidity([poolIdHexValue]),
               ]);
               const tick = Number(slot0[1]);
+              const [decimals0Result, decimals1Result, price0Result, price1Result] =
+                await Promise.allSettled([
+                  tokenDecimalsOf(key.currency0),
+                  tokenDecimalsOf(key.currency1),
+                  priceUsd(key.currency0),
+                  priceUsd(key.currency1),
+                ]);
               return {
                 address: poolAddress.toLowerCase(),
                 tokenX: key.currency0.toLowerCase(),
@@ -2955,6 +2986,10 @@ export const AdapterLive = Layer.effect(
                 activeBinId: tick,
                 binStep: key.tickSpacing,
                 currentPrice: tickToPrice(tick),
+                tokenXDecimals: settledFiniteNumber(decimals0Result),
+                tokenYDecimals: settledFiniteNumber(decimals1Result),
+                tokenXPriceUsd: settledPositiveNumber(price0Result),
+                tokenYPriceUsd: settledPositiveNumber(price1Result),
                 liquidity,
                 timestamp: Date.now(),
                 statsSource: "heuristic" as const,

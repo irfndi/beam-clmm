@@ -1,0 +1,6 @@
+[install]
+# Keep the Worker workspace on the same Bun 1.4 isolated/global-store layout as
+# the engine workspace. This is intentionally local to cloudflare/ so the
+# workspace remains reproducible when installed independently in CI.
+linker = "isolated"
+globalStore = true

@@ -123,7 +123,7 @@ describe("scripts/beam.sh edge cases", () => {
     writeFileSync(path.join(scriptsDir, "beam.sh"), readFileSync(BEAM_SH, "utf8"));
     writeFileSync(
       path.join(broken, "package.json"),
-      JSON.stringify({ engines: { bun: ">=1.4.0-canary.1" } }, null, 2),
+      JSON.stringify({ engines: { bun: ">=1.4.0" } }, null, 2),
     );
     const res = runBeam(["--help"], { script: path.join(scriptsDir, "beam.sh") });
     expect(res.status).toBe(1);

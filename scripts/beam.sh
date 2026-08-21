@@ -66,7 +66,7 @@ MIN_BUN_VERSION="${MIN_BUN_VERSION#>=}"
 MIN_BUN_VERSION="${MIN_BUN_VERSION#^}"
 MIN_BUN_VERSION="${MIN_BUN_VERSION#~}"
 if [ -z "$MIN_BUN_VERSION" ]; then
-  echo "ERROR: could not read engines.bun from package.json (expected e.g. \">=1.4.0-canary.1\")" >&2
+  echo "ERROR: could not read engines.bun from package.json (expected e.g. \">=1.4.0\")" >&2
   exit 1
 fi
 

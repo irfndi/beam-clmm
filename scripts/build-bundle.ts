@@ -4,6 +4,7 @@ import path from "path";
 import { createHash } from "crypto";
 import { execSync, execFileSync } from "child_process";
 import { fileURLToPath } from "url";
+import { resolveSqliteVecPath } from "./sqlite-vec-path.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -13,13 +14,7 @@ const platform = process.platform;
 const arch = process.arch;
 
 const extensionSuffix = platform === "win32" ? "dll" : platform === "darwin" ? "dylib" : "so";
-const platformPackageName = `sqlite-vec-${platform === "win32" ? "windows" : platform}-${arch}`;
-const vec0Path = path.join(
-  repoRoot,
-  "node_modules",
-  platformPackageName,
-  `vec0.${extensionSuffix}`,
-);
+const vec0Path = resolveSqliteVecPath(repoRoot, platform, arch);
 const platformKey = `${platform === "win32" ? "windows" : platform}-${arch}`;
 
 function run(cmd: string): void {
@@ -50,7 +45,7 @@ if (!/^[0-9A-Za-z][0-9A-Za-z._+-]*$/.test(version)) {
 }
 
 // Generate embedded sqlite-vec fallback for the current platform.
-if (fs.existsSync(vec0Path)) {
+if (vec0Path !== null) {
   run(`bun run scripts/generate-vec-embed.ts ${platform} ${arch}`);
 } else {
   console.warn(`⚠ sqlite-vec extension not found for ${platformKey}; skipping embed fallback`);
@@ -72,7 +67,7 @@ fs.cpSync(path.join(repoRoot, "dist"), path.join(stageDir, "dist"), { recursive:
 const libDir = path.join(stageDir, "lib");
 fs.mkdirSync(libDir, { recursive: true });
 
-if (fs.existsSync(vec0Path)) {
+if (vec0Path !== null) {
   fs.copyFileSync(vec0Path, path.join(libDir, `vec0.${extensionSuffix}`));
 }
 

@@ -1506,6 +1506,39 @@ function operationRecord(input: {
 }
 
 /**
+ * A planned operation is an intent, not proof that a transaction is in flight.
+ * If the process dies after persisting that intent, the next process must close
+ * it before status/health reports it as pending forever. The engine lock makes
+ * this startup boundary safe: rows created before this process started cannot
+ * belong to the current executor.
+ */
+export function recoverStaleExecutionOperations(
+  db: Pick<DbApi, "listExecutionOperations" | "saveExecutionOperation">,
+  context: Pick<AutonomousExecutionContext, "walletAddress" | "agentInstanceId">,
+  processStartedAt: number,
+): Effect.Effect<number, never> {
+  return Effect.gen(function* () {
+    const operations = yield* db
+      .listExecutionOperations(context.walletAddress, context.agentInstanceId)
+      .pipe(Effect.catch(() => Effect.succeed([] as ReadonlyArray<ExecutionOperationRecord>)));
+    let recovered = 0;
+    for (const operation of operations) {
+      if (operation.status !== "planned" || operation.createdAt >= processStartedAt) continue;
+      yield* db
+        .saveExecutionOperation({
+          ...operation,
+          status: "failed",
+          error: "abandoned planned operation from a previous process",
+          updatedAt: processStartedAt,
+        })
+        .pipe(Effect.catch(() => Effect.void));
+      recovered += 1;
+    }
+    return recovered;
+  });
+}
+
+/**
  * Execute a live decision. Entry token preparation is part of the live-tx
  * milestone (the EVM adapter rejects live ENTERs today); callers
  * must still provide it because the function signature does not conditionally
@@ -1563,6 +1596,18 @@ export function executeLive(
       entryRangeHalfWidth,
     } = deps;
     const autonomous = deps.autonomous;
+
+    const updateOperation = (
+      operation: ExecutionOperationRecord,
+      update: Pick<ExecutionOperationRecord, "status" | "error" | "txSignature">,
+    ) =>
+      db
+        .saveExecutionOperation({
+          ...operation,
+          ...update,
+          updatedAt: Date.now(),
+        })
+        .pipe(Effect.catch(() => Effect.void));
 
     if (!adapter.hasWallet()) {
       console.error("Live trading enabled but no wallet configured");
@@ -1717,9 +1762,17 @@ export function executeLive(
       // clamps to a degenerate range (lower >= upper) — entering it is
       // impossible; fail cleanly instead of letting the SDK invariant crash.
       if (recommended.lowerBinId >= recommended.upperBinId) {
+        const error = `ENTER skipped: pool at tick-domain edge — range ${recommended.lowerBinId}-${recommended.upperBinId} is degenerate`;
+        if (entryOperation) {
+          yield* updateOperation(entryOperation, {
+            status: "failed",
+            error,
+            txSignature: null,
+          });
+        }
         return {
           executed: false,
-          error: `ENTER skipped: pool at tick-domain edge — range ${recommended.lowerBinId}-${recommended.upperBinId} is degenerate`,
+          error,
         };
       }
       // Fee-Truth range floor: the minted range must span at least
@@ -1838,9 +1891,24 @@ export function executeLive(
         }
         return { executed: true, error: undefined };
       }
+      if (entryOperation) {
+        yield* updateOperation(entryOperation, {
+          status: "failed",
+          error: enterResult.error ?? "ENTER execution failed",
+          txSignature: null,
+        });
+      }
       return { executed: false, error: enterResult.error };
     } else if (decision.action === "ENTER") {
-      return { executed: false, error: "ENTER decision missing position size" };
+      const error = "ENTER decision missing position size";
+      if (entryOperation) {
+        yield* updateOperation(entryOperation, {
+          status: "failed",
+          error,
+          txSignature: null,
+        });
+      }
+      return { executed: false, error };
     } else if (decision.action === "EXIT") {
       const pos = resolveTargetPosition(trackedPositions, decision);
       let exitOperation: ExecutionOperationRecord | null = null;
@@ -1887,10 +1955,11 @@ export function executeLive(
             nativeWei: nativeBeforeExit.toString(),
             floorWei: exitGasFloorWei.toString(),
           });
-          return {
-            executed: false,
-            error: `Insufficient native for EXIT gas (need >= ${exitGasFloorWei} wei; have ${nativeBeforeExit.toString()})`,
-          };
+          const error = `Insufficient native for EXIT gas (need >= ${exitGasFloorWei} wei; have ${nativeBeforeExit.toString()})`;
+          if (exitOperation) {
+            yield* updateOperation(exitOperation, { status: "failed", error, txSignature: null });
+          }
+          return { executed: false, error };
         }
         const exitResult = yield* adapter
           .exitPosition(decision.poolAddress, pos.positionPubKey)
@@ -1968,6 +2037,21 @@ export function executeLive(
         }
       } else {
         exited = true;
+      }
+      if (exitOperation?.status === "planned") {
+        if (exited) {
+          yield* updateOperation(exitOperation, {
+            status: "confirmed",
+            error: null,
+            txSignature: exitResultData?.txSignature ?? "",
+          });
+        } else {
+          yield* updateOperation(exitOperation, {
+            status: "failed",
+            error: exitError ?? "EXIT execution failed",
+            txSignature: null,
+          });
+        }
       }
       if (exited) {
         if (
@@ -2588,6 +2672,20 @@ export const program = Effect.gen(function* () {
 
   // Agent check-in state
   const programStartTime = Date.now();
+  if (autonomousExecution !== null) {
+    const recoveredOperations = yield* recoverStaleExecutionOperations(
+      db,
+      autonomousExecution,
+      programStartTime,
+    );
+    if (recoveredOperations > 0) {
+      logger.warn("Recovered stale planned execution operations", {
+        count: recoveredOperations,
+        wallet: autonomousExecution.walletAddress,
+        agentInstanceId: autonomousExecution.agentInstanceId,
+      });
+    }
+  }
   let scanCount = 0;
   let lastAgentCheckinAt = 0;
   let lastWalletBalanceUsd = config.paperPortfolioUsd;
@@ -5291,6 +5389,12 @@ export const program = Effect.gen(function* () {
           apr: pool.apr,
           currentPrice: pool.currentPrice,
           binStep: pool.binStep,
+          tokenXAddress: pool.tokenX,
+          tokenYAddress: pool.tokenY,
+          tokenXDecimals: pool.tokenXDecimals,
+          tokenYDecimals: pool.tokenYDecimals,
+          tokenXPriceUsd: pool.tokenXPriceUsd,
+          tokenYPriceUsd: pool.tokenYPriceUsd,
           statsSource: pool.statsSource,
           drawdown24h: pool.drawdown24h ?? null,
           tokenXSymbol: pool.tokenXSymbol,

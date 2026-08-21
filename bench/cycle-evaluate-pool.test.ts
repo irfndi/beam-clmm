@@ -6,7 +6,7 @@ import type { ReplayEvaluationInput } from "../engine/cycle/evaluate-pool.js";
 
 const metrics: PoolMetrics = {
   // SAFETY: this fixture supplies only the PoolState fields read by replay evaluation.
-  pool: { tvlUsd: 150_000 } as PoolState,
+  pool: { tvlUsd: 150_000, fees24hUsd: 0, volume24hUsd: 0 } as PoolState,
   // SAFETY: replay tests do not inspect bin contents.
   binArray: {} as PoolMetrics["binArray"],
   tvlVelocity: 0,
@@ -50,6 +50,9 @@ const base = {
   maxOpenPositions: 3,
   trailingStopBreaches: 0,
   stopLossBreaches: 0,
+  challengeMinScore: 0,
+  challengeMinPoolAgeMs: 6 * 3_600_000,
+  poolAgeMs: 6 * 3_600_000,
 } as const;
 
 const heldPosition = {
@@ -484,11 +487,53 @@ describe("evaluateReplayPool", () => {
     expect(result.decision.reasoning).toContain("hard-floor");
   });
 
+  it("blocks challenge ENTER when the pool score is below the configured floor", () => {
+    const result = evaluateReplayPool({
+      ...base,
+      challengeMode: true,
+      challengeMinScore: 1,
+      position: undefined,
+      openPositions: [],
+    });
+
+    expect(result.decision.action).toBe("HOLD");
+    expect(result.decision.reasoning).toContain("[challenge-score-gate]");
+  });
+
+  it("blocks challenge ENTER when reconstructed pool age is below the configured minimum", () => {
+    const result = evaluateReplayPool({
+      ...base,
+      challengeMode: true,
+      challengeMinPoolAgeMs: 6 * 3_600_000,
+      poolAgeMs: 5 * 3_600_000,
+      position: undefined,
+      openPositions: [],
+    });
+
+    expect(result.decision.action).toBe("HOLD");
+    expect(result.decision.reasoning).toContain("[challenge-age-gate]");
+  });
+
   it("blocks ENTER during the challenge per-pool loss cooldown", () => {
     const result = evaluateReplayPool({
       ...base,
       challengeMode: true,
       lossCooldownUntilMs: Date.now() + 3_600_000,
+      poolTvlUsd: 150_000,
+      position: undefined,
+      openPositions: [],
+    });
+
+    expect(result.decision.action).toBe("HOLD");
+    expect(result.decision.reasoning).toContain("loss-cooldown");
+  });
+
+  it("uses the supplied replay clock for historical loss cooldowns", () => {
+    const result = evaluateReplayPool({
+      ...base,
+      challengeMode: true,
+      lossCooldownUntilMs: 2_000,
+      nowMs: 1_000,
       poolTvlUsd: 150_000,
       position: undefined,
       openPositions: [],

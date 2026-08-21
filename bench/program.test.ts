@@ -8,6 +8,7 @@ import {
   estimatePositionValue,
   executeLive,
   executePaper,
+  recoverStaleExecutionOperations,
   finalizeAppliedProposal,
   hasSyncProposalTransport,
   isProposalStale,
@@ -49,6 +50,66 @@ async function run<T, E, R>(
 }
 
 describe("Program integration", () => {
+  it("recovers only planned operations created before the current process", async () => {
+    const saved: Array<{ status: string; error: string | null; id: string }> = [];
+    const recovered = await Effect.runPromise(
+      recoverStaleExecutionOperations(
+        {
+          listExecutionOperations: () =>
+            Effect.succeed([
+              {
+                id: "old",
+                walletAddress: "wallet",
+                agentInstanceId: "primary",
+                candidateId: null,
+                positionId: null,
+                poolAddress: "pool",
+                tokenMint: "token",
+                operationType: "entry" as const,
+                status: "planned" as const,
+                amountAtomic: null,
+                txSignature: null,
+                error: null,
+                createdAt: 99,
+                updatedAt: 99,
+              },
+              {
+                id: "current",
+                walletAddress: "wallet",
+                agentInstanceId: "primary",
+                candidateId: null,
+                positionId: null,
+                poolAddress: "pool",
+                tokenMint: "token",
+                operationType: "entry" as const,
+                status: "planned" as const,
+                amountAtomic: null,
+                txSignature: null,
+                error: null,
+                createdAt: 100,
+                updatedAt: 100,
+              },
+            ]),
+          saveExecutionOperation: (operation) =>
+            Effect.sync(() => {
+              saved.push({ status: operation.status, error: operation.error, id: operation.id });
+            }),
+        },
+        { walletAddress: "wallet", agentInstanceId: "primary" },
+        100,
+      ),
+    );
+
+    expect(recovered).toBe(1);
+    expect(saved).toEqual([
+      {
+        id: "old",
+        status: "failed",
+        error: "abandoned planned operation from a previous process",
+      },
+    ]);
+  });
+
   it("coalesces snapshots into five-minute buckets", () => {
     const bucket = snapshotBucketTimestamp(1_700_000_299_999);
     expect(snapshotBucketTimestamp(bucket + 1)).toBe(bucket);
