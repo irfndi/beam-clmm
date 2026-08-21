@@ -176,6 +176,7 @@ function makeTestLayer(opts: {
       stopLossPct: 0.15,
       maxPerPoolAllocationPct: 0.4,
       maxPositionsPerPool: 2,
+      maxObservedPriceRangePct: 30,
     }),
     Layer.succeed(BlacklistService, {
       isDeployerBlacklisted: () => false,

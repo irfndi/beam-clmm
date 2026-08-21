@@ -1153,6 +1153,7 @@ export function buildLayer(cfg?: AppConfig): Layer.Layer<AllServices, never, nev
     stopLossPct: cfg?.stopLossPct ?? 0.15,
     maxPerPoolAllocationPct: cfg?.maxPerPoolAllocationPct ?? 0.4,
     maxPositionsPerPool: cfg?.maxPositionsPerPool ?? 2,
+    maxObservedPriceRangePct: cfg?.maxObservedPriceRangePct ?? 30,
   });
   const blacklist = BlacklistLive({
     deployerBlacklistPath: cfg?.deployerBlacklistPath ?? "./engine/data/deployer-blacklist.json",
@@ -4054,12 +4055,21 @@ export const program = Effect.gen(function* () {
           });
         }
 
+        // Measured 24h price range from our own snapshots (gate 4a); skipped
+        // when the window has <4 samples.
+        const observedRange = yield* db
+          .getObservedPriceRange(candidate.poolAddress, Date.now() - 86_400_000, Date.now())
+          .pipe(Effect.catch(() => Effect.succeed(null)));
         const riskCtx = {
           openPositions,
           portfolioValueUsd,
           recentPnlUsd,
           poolAddress: candidate.poolAddress,
           activeBinId: candidate.pool.activeBinId,
+          ...(observedRange !== null &&
+            observedRange.samples >= 4 && {
+              observedPriceRangePct: observedRange.rangePct,
+            }),
         };
         // Issue #148: the wallet safety pause is informational in shadow mode
         // (no-send by design) — it must never block a decision there.
@@ -8130,6 +8140,11 @@ export const program = Effect.gen(function* () {
         // it — every rejection used to write a 60-day warning memory, and those
         // warnings then suppressed the good-HOLD branch (hasRecentWarning),
         // feeding a self-sustaining spam loop that flooded vector memory.
+        // Measured 24h price range from our own snapshots (gate 4a). Skipped
+        // when the window has <4 samples — a fresh pool has no history yet.
+        const observedRange = yield* db
+          .getObservedPriceRange(poolAddress, Date.now() - 86_400_000, Date.now())
+          .pipe(Effect.catch(() => Effect.succeed(null)));
         const riskCtx = {
           openPositions,
           portfolioValueUsd,
@@ -8138,6 +8153,10 @@ export const program = Effect.gen(function* () {
           activeBinId: pool.activeBinId,
           positionId: decision.positionId,
           minEntrySizeUsd: config.entrySizeFloorUsd,
+          ...(observedRange !== null &&
+            observedRange.samples >= 4 && {
+              observedPriceRangePct: observedRange.rangePct,
+            }),
         };
         // Issue #148: the wallet safety pause is informational in shadow mode
         // (no-send by design) — it must never block a decision there.

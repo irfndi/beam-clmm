@@ -34,6 +34,7 @@ const base = {
     stopLossPct: 0.15,
     maxPerPoolAllocationPct: 0.4,
     maxPositionsPerPool: 2,
+    maxObservedPriceRangePct: 30,
   },
   proposedSizeUsd: 9_000,
   // Live-chain parity knobs (engine/config-service.ts defaults).

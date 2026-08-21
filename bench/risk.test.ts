@@ -20,6 +20,7 @@ function makeContext(
     recentPnlUsd: number;
     poolAddress: string;
     activeBinId: number;
+    observedPriceRangePct: number;
   }> = {},
 ) {
   // SAFETY: the base risk fixture intentionally supplies the minimal position list shape.
@@ -54,6 +55,7 @@ describe("RiskEngine", () => {
     stopLossPct: 0.15,
     maxPerPoolAllocationPct: 0.3,
     maxPositionsPerPool: 2,
+    maxObservedPriceRangePct: 30,
   };
 
   describe("confidence gate", () => {
@@ -235,6 +237,40 @@ describe("RiskEngine", () => {
         rebalanceParams: { newLowerBinId: 9_990, newUpperBinId: 10_010, slippageBps: 50 },
       });
       const result = evaluateRisk(riskConfig, decision, makeContext({ activeBinId: 10_000 }));
+      expect(result.approved).toBe(true);
+    });
+  });
+
+  describe("observed-volatility gate (4a)", () => {
+    const enter = makeDecision({ action: "ENTER", confidence: 0.8, positionSizeUsd: 500 });
+
+    it("rejects an ENTER whose measured 24h range exceeds the cap", () => {
+      const result = evaluateRisk(riskConfig, enter, makeContext({ observedPriceRangePct: 48 }));
+      expect(result.approved).toBe(false);
+      expect(result.reason).toContain("48.0% exceeds 30% cap");
+    });
+
+    it("approves an ENTER within the cap", () => {
+      const result = evaluateRisk(riskConfig, enter, makeContext({ observedPriceRangePct: 12.5 }));
+      expect(result.approved).toBe(true);
+    });
+
+    it("skips the gate when no trusted range is available (undefined)", () => {
+      const result = evaluateRisk(riskConfig, enter, makeContext());
+      expect(result.approved).toBe(true);
+    });
+
+    it("does not gate REBALANCE on pool volatility", () => {
+      const decision = makeDecision({
+        action: "REBALANCE",
+        confidence: 0.8,
+        rebalanceParams: { newLowerBinId: 9_990, newUpperBinId: 10_010, slippageBps: 50 },
+      });
+      const result = evaluateRisk(
+        riskConfig,
+        decision,
+        makeContext({ activeBinId: 10_000, observedPriceRangePct: 90 }),
+      );
       expect(result.approved).toBe(true);
     });
   });

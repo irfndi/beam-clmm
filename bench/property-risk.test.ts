@@ -13,6 +13,7 @@ const baseConfig: RiskConfig = {
   stopLossPct: 0.15,
   maxPerPoolAllocationPct: 0.3,
   maxPositionsPerPool: 2,
+  maxObservedPriceRangePct: 30,
 };
 
 function makePosition(overrides: Partial<Position> = {}): Position {

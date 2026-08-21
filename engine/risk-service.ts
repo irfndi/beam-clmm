@@ -17,6 +17,11 @@ export interface RiskConfig {
   readonly stopLossPct: number;
   readonly maxPerPoolAllocationPct: number;
   readonly maxPositionsPerPool: number;
+  /** Max observed trailing-24h price range (%) for an ENTER pool, measured
+   *  from our own snapshots. The STACK/USDG paper loss (−$67.63 in 39 min)
+   *  came from a ~48% intraday range the stats source reported as 0.
+   *  MAX_OBSERVED_PRICE_RANGE_PCT; default 30. */
+  readonly maxObservedPriceRangePct: number;
 }
 
 export function evaluateRisk(
@@ -84,6 +89,21 @@ export function evaluateRisk(
           reason: `Portfolio drawdown ${(drawdownPct * 100).toFixed(1)}% exceeds 10% — pausing new entries`,
         };
       }
+    }
+  }
+
+  // 4a. Observed-volatility gate — measured from OUR pool_snapshots, not the
+  // stats source (drawdown24h was 0 for the STACK/USDG pool that lost $67.63
+  // in 39 minutes on a ~48% intraday range). Undefined = not enough trusted
+  // samples → skip (program.ts only populates it with ≥4 samples).
+  if (decision.action === "ENTER" && ctx.observedPriceRangePct !== undefined) {
+    if (ctx.observedPriceRangePct > riskConfig.maxObservedPriceRangePct) {
+      return {
+        approved: false,
+        reason:
+          `Observed 24h price range ${ctx.observedPriceRangePct.toFixed(1)}% exceeds ` +
+            `${riskConfig.maxObservedPriceRangePct}% cap — too volatile to enter`,
+      };
     }
   }
 

@@ -273,6 +273,7 @@ describe("executeLive", () => {
   function makeDb(): DbApi {
     return {
       db: {},
+      getObservedPriceRange: () => Effect.succeed(null),
       savePosition: () => Effect.void,
       getPosition: () => Effect.succeed(null),
       getAllPositions: () => Effect.succeed([]),

@@ -177,6 +177,9 @@ export interface AppConfig {
   readonly watchlistPools: ReadonlyArray<string>;
   // New features
   readonly stopLossPct: number;
+  /** Max observed trailing-24h price range (%) an ENTER pool may show in our
+   *  own snapshots (MAX_OBSERVED_PRICE_RANGE_PCT). */
+  readonly maxObservedPriceRangePct: number;
   readonly trailingStopPct: number;
   /** Consecutive cycles the trailing-stop drawdown must persist before EXIT (anti-phantom). */
   readonly trailingStopConfirmCycles: number;
@@ -1572,6 +1575,15 @@ const loadConfig = Effect.gen(function* () {
 
   // New feature configs
   const stopLossPct = yield* validatedNumber("STOP_LOSS_PCT", 0, 0.15);
+  // Observed-volatility cap for ENTERs, measured from our own pool_snapshots
+  // (percent full-range over the trailing 24h). Default 30% — the STACK/USDG
+  // paper loss came from a ~48% range; stable pairs sit near 0–2%.
+  const maxObservedPriceRangePct = yield* validatedNumber(
+    "MAX_OBSERVED_PRICE_RANGE_PCT",
+    0,
+    30,
+    10_000,
+  );
   const trailingStopPct = yield* validatedNumber("TRAILING_STOP_PCT", 0, 0.1);
   const trailingStopConfirmCycles = yield* validatedNumber(
     "TRAILING_STOP_CONFIRM_CYCLES",
@@ -1746,6 +1758,7 @@ const loadConfig = Effect.gen(function* () {
     maxRebalanceRangeBins,
     watchlistPools,
     stopLossPct,
+    maxObservedPriceRangePct,
     trailingStopPct,
     trailingStopConfirmCycles,
     oorGracePeriodCycles,

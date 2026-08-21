@@ -283,6 +283,15 @@ function formatHistoryList(positions: ReadonlyArray<PositionRecord>): string {
     const pnlText = `${formatCurrency(pnlUsd)} (${formatPct(pnlPct)})`;
     const coloredPnl = colorize(pnlText, pnlUsd >= 0 ? "\x1b[32m" : "\x1b[31m");
     const exitedAt = pos.closedAt ?? pos.paperExitedAt;
+    // Loss attribution: everything that is not claimed fees/rewards is the
+    // market component (IL + price move + rebalance churn). This is the line
+    // that answers "did the pool's fees pay for its volatility".
+    const marketComponentUsd =
+      pnlUsd - pos.cumulativeFeesClaimedUsd - pos.cumulativeRewardsClaimedUsd;
+    const holdHours =
+      pos.timestamp != null && exitedAt != null
+        ? Math.round(((exitedAt - pos.timestamp) / 3_600_000) * 10) / 10
+        : null;
 
     lines.push(`  ${sanitizeSymbol(pos.tokenXSymbol)}/${sanitizeSymbol(pos.tokenYSymbol)}`);
     lines.push(`    Pool:       ${pos.poolAddress}`);
@@ -294,6 +303,12 @@ function formatHistoryList(positions: ReadonlyArray<PositionRecord>): string {
       lines.push(`    Rewards:    ${formatCurrency(pos.cumulativeRewardsClaimedUsd)}`);
     }
     lines.push(`    Realized P&L: ${coloredPnl}`);
+    lines.push(
+      `    Market/IL:  ${formatCurrency(marketComponentUsd)} (P&L net of fees — the volatility bill)`,
+    );
+    if (holdHours !== null) {
+      lines.push(`    Held:       ${holdHours}h`);
+    }
     lines.push(`    Exited:     ${exitedAt != null ? new Date(exitedAt).toISOString() : "N/A"}`);
     lines.push("");
   }
@@ -399,6 +414,9 @@ export interface HistoryJsonOutput {
     rewardsClaimedUsd: number;
     realizedPnlUsd: number;
     realizedPnlPct: number;
+    /** P&L net of claimed fees/rewards (IL + price move + rebalance churn). */
+    marketComponentUsd: number;
+    holdHours: number | null;
     closedAt: number | null;
     paperExitedAt: number | null;
   }>;
@@ -409,6 +427,7 @@ export function toHistoryJsonOutput(positions: ReadonlyArray<PositionRecord>): H
   return {
     positions: positions.map((pos) => {
       const { pnlUsd, pnlPct } = realizedPnlFor(pos);
+      const exitedAt = pos.closedAt ?? pos.paperExitedAt;
       return {
         poolAddress: pos.poolAddress,
         poolName: `${pos.tokenXSymbol}/${pos.tokenYSymbol}`,
@@ -419,6 +438,12 @@ export function toHistoryJsonOutput(positions: ReadonlyArray<PositionRecord>): H
         rewardsClaimedUsd: pos.cumulativeRewardsClaimedUsd,
         realizedPnlUsd: pnlUsd,
         realizedPnlPct: pnlPct,
+        // P&L net of claimed fees/rewards — the market component (IL + price
+        // move + rebalance churn). Negative = fees did not pay for volatility.
+        marketComponentUsd:
+          pnlUsd - pos.cumulativeFeesClaimedUsd - pos.cumulativeRewardsClaimedUsd,
+        holdHours:
+          exitedAt != null ? Math.round(((exitedAt - pos.timestamp) / 3_600_000) * 10) / 10 : null,
         closedAt: pos.closedAt,
         paperExitedAt: pos.paperExitedAt,
       };

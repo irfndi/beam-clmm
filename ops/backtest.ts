@@ -395,6 +395,7 @@ export function runBacktestFromTicks(
         stopLossPct: 0.15,
         maxPerPoolAllocationPct: 0.4,
         maxPositionsPerPool: cfg.maxPositionsPerPool,
+        maxObservedPriceRangePct: 30,
       },
       proposedSizeUsd: Math.min(portfolioValue * 0.2, 2_000),
       // Live config values (engine/config-service.ts defaults) so the replay

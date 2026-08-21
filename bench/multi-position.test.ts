@@ -416,6 +416,7 @@ const riskConfig: RiskConfig = {
   stopLossPct: 0.15,
   maxPerPoolAllocationPct: 0.4,
   maxPositionsPerPool: 2,
+  maxObservedPriceRangePct: 30,
 };
 
 function riskCtx(
@@ -1419,6 +1420,7 @@ function makeProgramLayer(opts: {
       stopLossPct: config.stopLossPct,
       maxPerPoolAllocationPct: config.maxPerPoolAllocationPct,
       maxPositionsPerPool: config.maxPositionsPerPool,
+      maxObservedPriceRangePct: config.maxObservedPriceRangePct,
     }),
     Layer.succeed(BlacklistService, {
       isDeployerBlacklisted: () => false,

@@ -25,6 +25,7 @@ function baseConfig(overrides: Partial<AppConfig> = {}): AppConfig {
     maxRebalanceRangeBins: 50,
     watchlistPools: [],
     stopLossPct: 0.15,
+    maxObservedPriceRangePct: 30,
     trailingStopPct: 0.1,
     trailingStopConfirmCycles: 2,
     oorGracePeriodCycles: 3,

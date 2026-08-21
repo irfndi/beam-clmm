@@ -284,6 +284,26 @@ describe("toHistoryJsonOutput", () => {
       expect(json.positions[0].closedAt).toBe(1700000000000);
     }
   });
+
+  it("loss attribution: marketComponentUsd = P&L net of fees, holdHours from open→exit", () => {
+    const positions = [
+      makePosition({
+        poolAddress: "pool1",
+        depositedUsd: 1000,
+        currentValueUsd: 900,
+        cumulativeFeesClaimedUsd: 25,
+        timestamp: 1699999200000,
+        paperExitedAt: 1700000000000,
+        realizedPnlUsd: -75,
+      }),
+    ];
+    const json = toHistoryJsonOutput(positions);
+    expect(json.positions[0]).toBeDefined();
+    if (json.positions[0]) {
+      expect(json.positions[0].marketComponentUsd).toBe(-100);
+      expect(json.positions[0].holdHours).toBeCloseTo(0.2, 5);
+    }
+  });
 });
 
 describe("Wave 4 — PnL accounting fields", () => {

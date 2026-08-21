@@ -308,3 +308,77 @@ describe("DbService — setMetadataBatch (Gemini review)", () => {
     );
   });
 });
+
+// ─── getObservedPriceRange (measured-volatility gate input) ───────────────────
+
+function makeSnapshot(poolAddress: string, timestamp: number, currentPrice: number) {
+  return {
+    poolAddress,
+    timestamp,
+    activeBinId: 5000,
+    tvlUsd: 100_000,
+    volume24hUsd: 50_000,
+    fees24hUsd: 100,
+    apr: 42,
+    currentPrice,
+    binStep: 10,
+    tokenXSymbol: "TOKEN",
+    tokenYSymbol: "USDG",
+    binArray: { lowerBinId: 5000, upperBinId: 5000, bins: [], activeBinId: 5000 },
+  };
+}
+
+describe("DbService — getObservedPriceRange", () => {
+  it("computes the full-range % and sample count over the window", () => {
+    const layer = DbLive(":memory:");
+    const now = 1_000_000_000;
+    const result = run(
+      Effect.gen(function* () {
+        const db = yield* DbService;
+        for (const [ts, price] of [
+          [now - 3_600_000, 1.0],
+          [now - 1_800_000, 1.48],
+          [now - 900_000, 1.2],
+        ] as const) {
+          yield* db.saveSnapshot(makeSnapshot("PoolA", ts, price));
+        }
+        return yield* db.getObservedPriceRange("PoolA", now - 86_400_000, now);
+      }),
+      layer,
+    );
+    expect(result).not.toBeNull();
+    expect(result?.samples).toBe(3);
+    expect(result?.rangePct).toBeCloseTo(48, 6);
+  });
+
+  it("returns null when the window has no snapshots", () => {
+    const layer = DbLive(":memory:");
+    const now = 1_000_000_000;
+    const result = run(
+      Effect.gen(function* () {
+        const db = yield* DbService;
+        yield* db.saveSnapshot(makeSnapshot("PoolA", now - 90_000_000, 1.0));
+        return yield* db.getObservedPriceRange("PoolA", now - 86_400_000, now);
+      }),
+      layer,
+    );
+    expect(result).toBeNull();
+  });
+
+  it("ignores non-positive prices and other pools", () => {
+    const layer = DbLive(":memory:");
+    const now = 1_000_000_000;
+    const result = run(
+      Effect.gen(function* () {
+        const db = yield* DbService;
+        yield* db.saveSnapshot(makeSnapshot("PoolA", now - 3_600_000, 0));
+        yield* db.saveSnapshot(makeSnapshot("PoolB", now - 1_800_000, 2.0));
+        yield* db.saveSnapshot(makeSnapshot("PoolA", now - 900_000, 1.0));
+        return yield* db.getObservedPriceRange("PoolA", now - 86_400_000, now);
+      }),
+      layer,
+    );
+    expect(result?.samples).toBe(1);
+    expect(result?.rangePct).toBe(0);
+  });
+});

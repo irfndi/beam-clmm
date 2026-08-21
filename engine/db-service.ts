@@ -738,6 +738,30 @@ export const DbLive = (dbPath?: string) =>
             return rows.map(rowToSnapshot);
           }),
 
+        getObservedPriceRange: (poolAddress, startMs, endMs) =>
+          Effect.sync(() => {
+            const row = queryOne<{ min_price: number; max_price: number; samples: number }>(
+              db,
+              `SELECT MIN(current_price) AS min_price, MAX(current_price) AS max_price,
+                      COUNT(*) AS samples
+               FROM pool_snapshots
+               WHERE pool_address = ? AND timestamp >= ? AND timestamp <= ?
+                 AND current_price > 0`,
+              poolAddress,
+              startMs,
+              endMs,
+            );
+            if (!row || row.samples === 0) return null;
+            const minPrice = Number(row.min_price);
+            const maxPrice = Number(row.max_price);
+            if (!Number.isFinite(minPrice) || !Number.isFinite(maxPrice) || minPrice <= 0) {
+              return null;
+            }
+            // Full-range % relative to the window low — unit-invariant (the
+            // snapshot price is token_x denominated in token_y).
+            return { rangePct: ((maxPrice - minPrice) / minPrice) * 100, samples: Number(row.samples) };
+          }),
+
         getSnapshotPools: () =>
           Effect.sync(() => {
             const rows = queryAll<{ pool_address: string }>(

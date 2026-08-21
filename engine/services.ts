@@ -718,6 +718,10 @@ export interface RiskContext {
    *  ENTRY_SIZE_FLOOR_USD. Threaded from the runtime config so a small
    *  canary wallet can set a lower admissible floor. */
   readonly minEntrySizeUsd?: number | undefined;
+  /** Measured trailing-24h price range (%) for the pool, from our own
+   *  snapshots. Undefined (no trusted data) → the volatility gate skips.
+   *  Populated by program.ts only when enough samples exist. */
+  readonly observedPriceRangePct?: number | undefined;
 }
 
 export interface RiskResult {
@@ -1094,6 +1098,14 @@ export interface DbApi {
     endMs: number,
   ) => Effect.Effect<ReadonlyArray<PoolSnapshot>, Error>;
   readonly getSnapshotPools: () => Effect.Effect<ReadonlyArray<string>, Error>;
+  /** Observed min/max price range over a window, from our own pool_snapshots
+   *  (stats-source drawdown fields are often 0/missing — this is measured).
+   *  null when the window has no positive-price samples. */
+  readonly getObservedPriceRange: (
+    poolAddress: string,
+    startMs: number,
+    endMs: number,
+  ) => Effect.Effect<{ rangePct: number; samples: number } | null, Error>;
   readonly getSnapshotCount: (poolAddress: string) => Effect.Effect<number, Error>;
   readonly pruneSnapshots: (olderThanMs: number) => Effect.Effect<number, Error>;
   readonly getRotationObservations: () => Effect.Effect<
