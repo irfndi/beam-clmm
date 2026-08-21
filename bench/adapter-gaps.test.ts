@@ -23,6 +23,7 @@ import {
   V3_SWAP_ROUTER_02,
   DEFAULT_STABLECOIN_MINT,
   V3_SWAP_ROUTER_ENCODING,
+  MULTICALL3,
 } from "../engine/chain-registry.js";
 import { defaultAppConfig } from "./helpers.js";
 
@@ -50,6 +51,7 @@ const exactInputSingleV2Selector = toFunctionSelector(
   "exactInputSingle((address,address,uint24,address,uint256,uint256,uint160))",
 ).slice(2);
 const multicallSelector = toFunctionSelector("multicall(bytes[])").slice(2);
+const aggregate3Selector = toFunctionSelector("aggregate3((address,bool,bytes)[])").slice(2);
 const exactInputSingleAbi = parseAbi([
   "function exactInputSingle((address,address,uint24,address,uint256,uint256,uint160)) payable returns (uint256)",
 ]);
@@ -69,6 +71,7 @@ interface MockOpts {
   revertSwap?: boolean; // swap calldata eth_call reverts
   revertExit?: string | null; // v3 exit multicall eth_call revert reason
   mintTokenId?: bigint; // mint receipt Transfer log id
+  v3PositionCount?: number; // NPM balanceOf → enumerable position count
 }
 
 interface SentTx {
@@ -84,12 +87,15 @@ interface RpcEntry {
 
 interface RpcMock {
   fetch: (
-    // oxlint-disable-next-line anti-slop/no-unknown-parameters -- SAFETY: this test uses a controlled protocol fixture and establishes the expected shape at this boundary.
+    // oxlint-disable-next-line anti-slop/no-unknown-parameters -- SAFETY: this test uses a controlled protocol fixture and establishes the expected shape or invariant consumed by this assertion.
     input: unknown,
     init?: { body?: string },
   ) => Promise<Response> /* oxlint-disable-line anti-slop/no-unknown-parameters */;
   sentTxs: SentTx[];
   rpcLog: RpcEntry[];
+  /** Top-level JSON-RPC HTTP requests — the true rate-limit cost. Multicall
+   *  subcalls are dispatched through the same handler but NOT counted. */
+  roundTrips: () => number;
 }
 
 const sel = {
@@ -104,6 +110,7 @@ const sel = {
   slot0: toFunctionSelector("slot0()"),
   liquidity: toFunctionSelector("liquidity()"),
   positions: toFunctionSelector("positions(uint256)"),
+  tokenOfOwnerByIndex: toFunctionSelector("tokenOfOwnerByIndex(address,uint256)"),
   exactInputSingleV2: toFunctionSelector(
     "exactInputSingle((address,address,uint24,address,uint256,uint256,uint160))",
   ),
@@ -113,6 +120,7 @@ const sel = {
     "exactInputSingle((address,address,uint24,address,uint256,uint256,uint256,uint160))",
   ),
   multicall: toFunctionSelector("multicall(bytes[])"),
+  aggregate3: toFunctionSelector("aggregate3((address,bool,bytes)[])"),
   withdraw: toFunctionSelector("withdraw(uint256)"),
   deposit: toFunctionSelector("deposit()"),
 };
@@ -136,6 +144,7 @@ function createRpcMock(opts: MockOpts = {}): RpcMock {
   const balances = opts.tokenBalances ?? {};
   const sentTxs: SentTx[] = [];
   const rpcLog: RpcEntry[] = [];
+  let roundTripCount = 0;
 
   // oxlint-disable-next-line anti-slop/no-unknown-parameters -- SAFETY: this test uses a controlled protocol fixture and establishes the expected shape at this boundary.
   function ok(result: unknown, id: number) {
@@ -253,6 +262,49 @@ function createRpcMock(opts: MockOpts = {}): RpcMock {
       const data = (req.data ?? "0x") as Hex;
       const selector = data.slice(0, 10).toLowerCase();
       rpcLog.push({ method: "eth_call", to, data });
+      // Multicall3 aggregate3 — the adapter batches pool/factory reads through
+      // it; dispatch each subcall through this same handler and re-encode.
+      if (to === addr(MULTICALL3) && selector === `0x${aggregate3Selector}`) {
+        const decoded = decodeAbiParameters(
+          [
+            {
+              type: "tuple[]",
+              components: [
+                { name: "target", type: "address" },
+                { name: "allowFailure", type: "bool" },
+                { name: "callData", type: "bytes" },
+              ],
+            },
+          ],
+          data.slice(8) as `0x${string}`,
+        );
+        const subcalls = (decoded[0] ?? []) as ReadonlyArray<{
+          target: string;
+          allowFailure: boolean;
+          callData: Hex;
+        }>;
+        const results: Array<[boolean, Hex]> = [];
+        for (const sub of subcalls) {
+          const response = await handle({
+            id,
+            method: "eth_call",
+            params: [{ to: sub.target, data: sub.callData }],
+          });
+          const json = (await response.json()) as { result?: string; error?: unknown };
+          const success = json.error === undefined && json.result !== undefined;
+          if (!success && !sub.allowFailure) {
+            return err(revertBody("multicall subcall reverted"), id);
+          }
+          results.push([success, (json.result ?? "0x") as Hex]);
+        }
+        return ok(
+          encodeAbiParameters(
+            [{ type: "tuple[]", components: [{ type: "bool" }, { type: "bytes" }] }],
+            [results],
+          ),
+          id,
+        );
+      }
       // v3 NPM exit multicall (decreaseLiquidity+collect+burn)
       if (to === addr(V3_NPM) && selector === `0x${multicallSelector}` && opts.revertExit) {
         console.error(`[mock:revertExit] firing to=${to.slice(0, 10)} sel=${selector}`);
@@ -270,10 +322,11 @@ function createRpcMock(opts: MockOpts = {}): RpcMock {
       if (selector === sel.balanceOf) {
         // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
         const [holder] = decodeAbiParameters([{ type: "address" }], data.slice(8) as `0x${string}`);
-        return ok(
-          encodeAbiParameters([{ type: "uint256" }], [balances[`${to}:${addr(holder)}`] ?? 0n]),
-          id,
-        );
+        const base = balances[`${to}:${addr(holder)}`] ?? 0n;
+        // The v3 NPM reports the mock position count so enumeration tests can
+        // scale N without new fixtures.
+        const npmBalance = to === addr(V3_NPM) ? BigInt(opts.v3PositionCount ?? 0) : base;
+        return ok(encodeAbiParameters([{ type: "uint256" }], [npmBalance]), id);
       }
       if (selector === sel.decimals) {
         return ok(encodeAbiParameters([{ type: "uint8" }], [to === addr(WETH) ? 18 : 6]), id);
@@ -343,6 +396,17 @@ function createRpcMock(opts: MockOpts = {}): RpcMock {
           id,
         );
       }
+      if (selector === sel.tokenOfOwnerByIndex) {
+        // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
+        const [, index] = decodeAbiParameters(
+          [{ type: "address" }, { type: "uint256" }],
+          data.slice(8) as `0x${string}`,
+        );
+        return ok(
+          encodeAbiParameters([{ type: "uint256" }], [1000n + index]),
+          id,
+        );
+      }
       return ok("0x", id);
     }
     return ok("0x", id);
@@ -351,6 +415,7 @@ function createRpcMock(opts: MockOpts = {}): RpcMock {
   // oxlint-disable-next-line anti-slop/no-unknown-parameters -- SAFETY: this test uses a controlled protocol fixture and establishes the expected shape at this boundary.
   const fetchImpl = async (_input: unknown, init?: { body?: string }) => {
     /* oxlint-disable-line anti-slop/no-unknown-parameters */
+    roundTripCount++; // one HTTP request per top-level JSON-RPC call
     // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
     const body = JSON.parse(init?.body ?? "{}") as {
       id: number;
@@ -364,7 +429,7 @@ function createRpcMock(opts: MockOpts = {}): RpcMock {
     }
     return handle(body);
   };
-  return { fetch: fetchImpl, sentTxs, rpcLog };
+  return { fetch: fetchImpl, sentTxs, rpcLog, roundTrips: () => roundTripCount };
 }
 
 // ─── Program plumbing ────────────────────────────────────────────────────────
@@ -700,5 +765,61 @@ describe("claimFees estimatedGasUsd", () => {
     expect(res.txSignature).toBe("");
     expect(res.estimatedGasUsd).toBeNull();
     expect(m.sentTxs).toHaveLength(0);
+  });
+});
+
+// ─── RPC round-trip budgets (rate-limit protection) ──────────────────────────
+// The public Robinhood RPC rate-limits (429s). These lock in the batching
+// wins: enumeration cost must NOT scale with position count, repeat
+// enumerations within a cycle must be free, and broadcasts must invalidate.
+
+describe("RPC round-trip budgets", () => {
+  it("v3 enumeration cost is flat in position count (batched, not per-NFT)", async () => {
+    const few = installMock({ v3PositionCount: 1 });
+    const svcFew = await adapterFor();
+    await Effect.runPromise(svcFew.getAllWalletPositions(WALLET));
+    const cost1 = few.roundTrips();
+
+    const many = installMock({ v3PositionCount: 8 });
+    const svcMany = await adapterFor();
+    await Effect.runPromise(svcMany.getAllWalletPositions(WALLET));
+    const cost8 = many.roundTrips();
+
+    expect(cost8).toBeLessThanOrEqual(cost1 + 2); // flat ±2 for chain bootstrap
+    expect(cost8).toBeLessThan(15); // was ~1+3N sequential before batching
+  });
+
+  it("repeat enumeration within a cycle is free (shared cache), and a broadcast drops it", async () => {
+    const m = installMock({
+      v3PositionCount: 2,
+      // Fund the ENTER so its broadcast actually lands (wrap + mint).
+      nativeBalance: 10n ** 18n,
+      mintTokenId: 12n,
+    });
+    const svc = await adapterFor();
+    await Effect.runPromise(svc.getAllWalletPositions(WALLET));
+    const afterFirst = m.roundTrips();
+    // Second enumeration-only call inside the TTL window: zero round trips.
+    await Effect.runPromise(svc.getAllWalletPositions(WALLET));
+    expect(m.roundTrips()).toBe(afterFirst);
+
+    // A successful broadcast (the ENTER's wrap/mint) invalidates the cache.
+    await Effect.runPromise(
+      svc.enterPosition(POOL, 0, 0, 1000).pipe(Effect.ignore),
+    );
+    const afterBroadcast = m.roundTrips();
+    expect(m.sentTxs.length).toBeGreaterThan(0); // broadcast really landed
+    await Effect.runPromise(svc.getAllWalletPositions(WALLET));
+    expect(m.roundTrips()).toBeGreaterThan(afterBroadcast); // re-enumerated
+  });
+
+  it("priceUsd repeats hit the TTL cache (one pricing round trip per token)", async () => {
+    const m = installMock({});
+    const svc = await adapterFor();
+    const first = await Effect.runPromise(svc.getTokenPrices([WETH]));
+    const afterFirst = m.roundTrips();
+    const second = await Effect.runPromise(svc.getTokenPrices([WETH]));
+    expect(second[WETH]).toBe(first[WETH]);
+    expect(m.roundTrips()).toBe(afterFirst); // served from cache
   });
 });

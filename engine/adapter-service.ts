@@ -401,6 +401,22 @@ function settledPositiveNumber(result: PromiseSettledResult<number>): number | u
 
 const decimalsCache = new Map<string, number>();
 
+/** USD price TTL cache — see priceUsd. 5 minutes: fresh enough for risk
+ *  gates and marks, and it collapses the per-cycle re-pricing of the same
+ *  pool legs that was driving the public RPC into HTTP 429s. */
+const PRICE_CACHE_TTL_MS = 5 * 60_000;
+const priceCache = new Map<string, { price: number; at: number }>();
+/** Upper bound on cached USD marks: meme-token churn would otherwise grow the
+ *  map forever (entries are overwritten on re-read but never deleted). */
+const PRICE_CACHE_MAX_ENTRIES = 1024;
+
+/** Cycle-scoped wallet position enumeration — see positionsEnumeration.
+ *  Reconcile, the equity mark, and per-pool getPositions all enumerate the
+ *  SAME wallet within one scan cycle; unshared, that is 2–3 full NFT
+ *  enumerations per cycle against a rate-limited public RPC. Lives in the
+ *  service layer (not module scope) so its lifetime is the adapter's. */
+const ENUMERATION_CACHE_TTL_MS = 30_000;
+
 /** v4 poolId = keccak256(abi.encode(poolKey)) — canonical v4 pool identity. */
 async function computeV4PoolId(key: V4PoolKey): Promise<string> {
   const encoded = encodeAbiParameters(
@@ -1298,12 +1314,16 @@ export const AdapterLive = Layer.effect(
       });
 
     async function aggregate3Read(
-      calls: ReadonlyArray<{ readonly target: Address; readonly callData: Hex }>,
+      calls: ReadonlyArray<{
+        readonly target: Address;
+        readonly callData: Hex;
+        readonly allowFailure?: boolean;
+      }>,
     ): Promise<ReadonlyArray<{ readonly success: boolean; readonly returnData: Hex }>> {
       const result = await multicall3().read.aggregate3([
         calls.map((call) => ({
           target: call.target,
-          allowFailure: false,
+          allowFailure: call.allowFailure ?? false,
           callData: call.callData,
         })),
       ]);
@@ -1517,6 +1537,9 @@ export const AdapterLive = Layer.effect(
       if (receipt.status === "reverted") {
         throw new Error(`transaction reverted on-chain: ${txHash}`);
       }
+      // A mined tx may have minted/burned/moved an NFT — cached ownership is
+      // stale the moment our own ENTER/EXIT lands.
+      dropEnumerationCache();
       return { txSignature: txHash, receipt };
     }
 
@@ -1701,17 +1724,35 @@ export const AdapterLive = Layer.effect(
       };
     }
 
-    /** Find a direct v3 pool between two mints (native maps to WETH9). */
+    /** Find a direct v3 pool between two mints (native maps to WETH9). All
+     *  fee tiers in ONE aggregate3 (was up to 4 sequential factory reads). */
     async function findV3PoolForPair(
       tokenA: string,
       tokenB: string,
     ): Promise<{ pool: Address; fee: number } | null> {
-      const factory = v3Factory();
       const a = isNative(tokenA) ? WETH9 : getAddress(tokenA);
       const b = isNative(tokenB) ? WETH9 : getAddress(tokenB);
-      for (const fee of [3000, 500, 10_000, 100]) {
+      const fees = [3000, 500, 10_000, 100] as const;
+      const results = await aggregate3Read(
+        fees.map((fee) => ({
+          target: V3_FACTORY,
+          allowFailure: true,
+          callData: encodeFunctionData({
+            abi: v3FactoryAbi,
+            functionName: "getPool",
+            args: [a, b, fee],
+          }),
+        })),
+      );
+      for (const [i, fee] of fees.entries()) {
+        const result = results[i];
+        if (result === undefined || !result.success) continue;
         try {
-          const pool = await factory.read.getPool([a, b, fee]);
+          const pool = decodeFunctionResult({
+            abi: v3FactoryAbi,
+            functionName: "getPool",
+            data: result.returnData,
+          });
           if (pool && pool.toLowerCase() !== "0x0000000000000000000000000000000000000000") {
             return { pool, fee };
           }
@@ -1720,6 +1761,37 @@ export const AdapterLive = Layer.effect(
         }
       }
       return null;
+    }
+
+    /**
+     * Cycle-scoped enumeration shared by every caller in one scan cycle
+     * (reconcile → getAllWalletPositions, equity mark → getAllPositionValuesUsd,
+     * per-pool checks → getPositions/getPositionValueUsd). Unshared, the same
+     * wallet was fully enumerated 2–3× per cycle — the largest remaining RPC
+     * offender after price batching. TTL 30s ≈ one cycle's reuse window; an
+     * external mint/burn is picked up next cycle, and our own successful
+     * broadcasts drop the cache immediately (see sendTx).
+     */
+    const enumerationCache = new Map<
+      string,
+      { v3: ReadonlyArray<Position>; v4: ReadonlyArray<Position>; at: number }
+    >();
+
+    async function positionsEnumeration(
+      owner: Address,
+    ): Promise<{ v3: ReadonlyArray<Position>; v4: ReadonlyArray<Position> }> {
+      const ownerKey = owner.toLowerCase();
+      const cached = enumerationCache.get(ownerKey);
+      if (cached !== undefined && Date.now() - cached.at < ENUMERATION_CACHE_TTL_MS) {
+        return { v3: cached.v3, v4: cached.v4 };
+      }
+      const [v3, v4] = await Promise.all([v3PositionsOf(owner), v4PositionsOf(owner)]);
+      enumerationCache.set(ownerKey, { v3, v4, at: Date.now() });
+      return { v3, v4 };
+    }
+
+    function dropEnumerationCache(): void {
+      enumerationCache.clear();
     }
 
     /** Find a registered v4 pool for a token pair (either order). */
@@ -2385,9 +2457,40 @@ export const AdapterLive = Layer.effect(
 
     async function priceUsd(mint: string): Promise<number> {
       if (mint.toLowerCase() === STABLECOIN_MINT.toLowerCase()) return 1;
+      const mintKey = mint.toLowerCase();
+      // TTL cache: pricing one unknown token costs up to ~3 multicall round
+      // trips, and every scan cycle re-prices the same pool legs. The public
+      // RPC already rate-limits us (670+ HTTP 429s logged) — a 5-minute TTL
+      // keeps USD marks fresh enough for gates/marks while cutting repeat
+      // lookups to zero.
+      const cached = priceCache.get(mintKey);
+      if (cached !== undefined && Date.now() - cached.at < PRICE_CACHE_TTL_MS) {
+        return cached.price;
+      }
       // Native ETH is WETH-paired in v3 pools.
-      if (isNative(mint)) return priceUsdViaV3Pool(WETH9);
-      return priceUsdViaV3Pool(mint);
+      const price = await priceUsdViaV3Pool(isNative(mint) ? WETH9 : getAddress(mint));
+      if (priceCache.size >= PRICE_CACHE_MAX_ENTRIES) {
+        // Bounded memory under meme churn: drop expired entries; when nothing
+        // has expired, drop the oldest quarter.
+        const now = Date.now();
+        const entries = [...priceCache.entries()].sort((a, b) => a[1].at - b[1].at);
+        let removed = 0;
+        for (const [key, entry] of entries) {
+          if (removed >= PRICE_CACHE_MAX_ENTRIES / 4) break;
+          if (now - entry.at >= PRICE_CACHE_TTL_MS) {
+            priceCache.delete(key);
+            removed++;
+          }
+        }
+        while (priceCache.size >= PRICE_CACHE_MAX_ENTRIES) {
+          const oldest = entries[removed];
+          if (oldest === undefined) break;
+          priceCache.delete(oldest[0]);
+          removed++;
+        }
+      }
+      priceCache.set(mintKey, { price, at: Date.now() });
+      return price;
     }
 
     /** Price of `mint` in USDG via the most liquid v3 pool, liquidity-aware.
@@ -2402,18 +2505,39 @@ export const AdapterLive = Layer.effect(
      *  the RAW token1/token0 ratio (wei units); scale by
      *  10^(decimals(mint) - decimals(base)) to get base per mint. */
     async function priceUsdViaV3Pool(mint: string): Promise<number> {
-      const factory = v3Factory();
       const mintAddr = getAddress(mint).toLowerCase();
       // WETH route first: v3 pools on Robinhood Chain are WETH-paired and
       // liquid; USDG pairs for meme tokens are often dead/abandoned.
-      const wethUsd = mint !== WETH9 ? await priceUsdViaV3Pool(WETH9) : 0;
+      const wethUsd = mint !== WETH9 ? await priceUsd(WETH9) : 0;
+      // Discover candidate pools in ONE multicall (was 6 sequential getPool
+      // reads — the single worst RPC offender on the public endpoint).
+      const feeTiers = [3000, 500, 10_000] as const;
+      const bases = [WETH9, STABLECOIN_MINT] as const;
+      const factoryResults = await aggregate3Read(
+        feeTiers.flatMap((fee) =>
+          bases.map((base) => ({
+            target: V3_FACTORY,
+            callData: encodeFunctionData({
+              abi: v3FactoryAbi,
+              functionName: "getPool",
+              args: [getAddress(mint), getAddress(base), fee],
+            }),
+          })),
+        ),
+      );
       const candidates: Array<{ pool: Address; base: string }> = [];
-      for (const fee of [3000, 500, 10_000]) {
-        for (const base of [WETH9, STABLECOIN_MINT]) {
+      for (const [index] of feeTiers.entries()) {
+        for (const [baseIndex, base] of bases.entries()) {
+          const result = factoryResults[index * bases.length + baseIndex];
+          if (!result) continue;
           try {
-            const pool = await factory.read.getPool([getAddress(mint), getAddress(base), fee]);
+            const pool = decodeFunctionResult({
+              abi: v3FactoryAbi,
+              functionName: "getPool",
+              data: result.returnData,
+            });
             if (pool !== "0x0000000000000000000000000000000000000000") {
-              candidates.push({ pool, base });
+              candidates.push({ pool: getAddress(pool), base });
             }
           } catch {
             // fall through
@@ -2421,27 +2545,63 @@ export const AdapterLive = Layer.effect(
         }
       }
       let best: { priceUsd: number; liquidity: bigint } | null = null;
-      for (const cand of candidates) {
-        try {
-          const poolContract = v3Pool(cand.pool);
-          const [token0, slot0, liquidity] = await Promise.all([
-            poolContract.read.token0(),
-            poolContract.read.slot0(),
-            poolContract.read.liquidity(),
-          ]);
-          if (liquidity <= MIN_POOL_LIQUIDITY_FOR_PRICE) continue;
-          const rawPrice = sqrtPriceX96ToPrice(slot0[0]); // token1/token0 wei ratio
-          const decimals = await getDecimals(mint);
-          const baseDecimals = cand.base === WETH9 ? 18 : 6;
-          const scale = 10 ** (decimals - baseDecimals);
-          const priceInBase =
-            token0.toLowerCase() === mintAddr ? rawPrice * scale : 1 / (rawPrice * scale);
-          const priceUsd = cand.base === WETH9 ? priceInBase * wethUsd : priceInBase;
-          if (priceUsd > 0 && (best === null || liquidity > best.liquidity)) {
-            best = { priceUsd, liquidity };
+      // All candidates' (token0, slot0, liquidity) in ONE aggregate3 (was one
+      // multicall PER candidate). allowFailure keeps per-candidate skips
+      // local: a dead pool no longer poisons its siblings.
+      if (candidates.length > 0) {
+        const stateResults = await aggregate3Read(
+          candidates.flatMap((cand) =>
+            (["token0", "slot0", "liquidity"] as const).map((functionName) => ({
+              target: cand.pool,
+              allowFailure: true,
+              callData: encodeFunctionData({ abi: v3PoolAbi, functionName }),
+            })),
+          ),
+        );
+        const decimals = await getDecimals(mint);
+        for (const [index, cand] of candidates.entries()) {
+          try {
+            const token0Result = stateResults[index * 3];
+            const slot0Result = stateResults[index * 3 + 1];
+            const liquidityResult = stateResults[index * 3 + 2];
+            if (
+              token0Result === undefined ||
+              slot0Result === undefined ||
+              liquidityResult === undefined ||
+              !token0Result.success ||
+              !slot0Result.success ||
+              !liquidityResult.success
+            ) {
+              continue;
+            }
+            const token0 = decodeFunctionResult({
+              abi: v3PoolAbi,
+              functionName: "token0",
+              data: token0Result.returnData,
+            });
+            const slot0 = decodeFunctionResult({
+              abi: v3PoolAbi,
+              functionName: "slot0",
+              data: slot0Result.returnData,
+            });
+            const liquidity = decodeFunctionResult({
+              abi: v3PoolAbi,
+              functionName: "liquidity",
+              data: liquidityResult.returnData,
+            });
+            if (liquidity <= MIN_POOL_LIQUIDITY_FOR_PRICE) continue;
+            const rawPrice = sqrtPriceX96ToPrice(slot0[0]); // token1/token0 wei ratio
+            const baseDecimals = cand.base === WETH9 ? 18 : 6;
+            const scale = 10 ** (decimals - baseDecimals);
+            const priceInBase =
+              token0.toLowerCase() === mintAddr ? rawPrice * scale : 1 / (rawPrice * scale);
+            const priceUsd = cand.base === WETH9 ? priceInBase * wethUsd : priceInBase;
+            if (priceUsd > 0 && (best === null || liquidity > best.liquidity)) {
+              best = { priceUsd, liquidity };
+            }
+          } catch {
+            continue;
           }
-        } catch {
-          continue;
         }
       }
       return best?.priceUsd ?? 0;
@@ -2606,51 +2766,108 @@ export const AdapterLive = Layer.effect(
       };
     }
 
-    /** v3 positions of an owner (NPM is an ERC721 enumerable). */
+    /** v3 positions of an owner (NPM is an ERC721 enumerable). Fully batched:
+     *  balanceOf → one aggregate3 for all tokenIds → one for all positions()
+     *  → one for all pool resolutions — 4 round trips regardless of count
+     *  (was 2–4 strictly sequential reads PER position). */
     async function v3PositionsOf(
       owner: Address,
       poolFilter?: string,
     ): Promise<ReadonlyArray<Position>> {
-      const npm = v3Npm();
-      const balance = Number(await npm.read.balanceOf([owner]));
-      const positions: Position[] = [];
-      for (let i = 0; i < balance; i++) {
-        try {
-          const tokenId = await npm.read.tokenOfOwnerByIndex([owner, BigInt(i)]);
-          const p = await npm.read.positions([tokenId]);
-          const token0 = p[2];
-          const token1 = p[3];
-          const pool = await v3PoolOf(token0, token1, p[4]);
-          if (poolFilter && pool.toLowerCase() !== poolFilter.toLowerCase()) continue;
-          positions.push({
-            id: tokenId.toString(),
-            poolAddress: pool.toLowerCase(),
-            poolName: `${token0.slice(0, 6)}/${token1.slice(0, 6)}`,
-            tokenX: token0.toLowerCase(),
-            tokenY: token1.toLowerCase(),
-            lowerBinId: Number(p[5]),
-            upperBinId: Number(p[6]),
-            liquidityShares: p[7],
-            // Owed fees: a liquidity-0 shell can still hold claimable fees —
-            // carried so reconcile never silently abandons them on drop.
-            tokensOwedX: p[10],
-            tokensOwedY: p[11],
-            depositedUsd: 0,
-            currentValueUsd: 0,
-            unrealizedPnlUsd: 0,
-            feesEarnedUsd: 0,
-            openedAt: Date.now(),
-          });
-        } catch (err) {
+      const balance = Number(await v3Npm().read.balanceOf([owner]));
+      if (balance === 0) return [];
+      const indices = Array.from({ length: balance }, (_, i) => i);
+      const idResults = await aggregate3Read(
+        indices.map((i) => ({
+          target: V3_NPM,
+          callData: encodeFunctionData({
+            abi: v3NpmAbi,
+            functionName: "tokenOfOwnerByIndex",
+            args: [owner, BigInt(i)],
+          }),
+        })),
+      );
+      const tokenIds = indices.map((i) => {
+        const result = idResults[i];
+        if (result === undefined || !result.success) {
+          throw new Error(`v3PositionsOf: failed to read tokenId ${i}/${balance} for ${owner}`);
+        }
+        return decodeFunctionResult({
+          abi: v3NpmAbi,
+          functionName: "tokenOfOwnerByIndex",
+          data: result.returnData,
+        });
+      });
+      const posResults = await aggregate3Read(
+        tokenIds.map((tokenId) => ({
+          target: V3_NPM,
+          callData: encodeFunctionData({
+            abi: v3NpmAbi,
+            functionName: "positions",
+            args: [tokenId],
+          }),
+        })),
+      );
+      const parsed = tokenIds.map((tokenId, i) => {
+        const result = posResults[i];
+        if (result === undefined || !result.success) {
           // Fail the WHOLE enumeration instead of silently skipping: a
           // transient read failure here would look like "position gone" to
           // reconcile, which would drop a live position from tracking and
           // leave it unmanaged. The reconcile caller catches this and skips
           // the cycle (fail-open — nothing is dropped or adopted).
-          throw new Error(
-            `v3PositionsOf: failed to read position ${i}/${balance} for ${owner}: ${underlyingErrorMessage(err)}`,
-          );
+          throw new Error(`v3PositionsOf: failed to read position ${tokenId} for ${owner}`);
         }
+        return {
+          tokenId,
+          p: decodeFunctionResult({
+            abi: v3NpmAbi,
+            functionName: "positions",
+            data: result.returnData,
+          }),
+        };
+      });
+      const poolResults = await aggregate3Read(
+        parsed.map(({ p }) => ({
+          target: V3_FACTORY,
+          callData: encodeFunctionData({
+            abi: v3FactoryAbi,
+            functionName: "getPool",
+            args: [p[2], p[3], p[4]],
+          }),
+        })),
+      );
+      const positions: Position[] = [];
+      for (const [i, { tokenId, p }] of parsed.entries()) {
+        const poolResult = poolResults[i];
+        if (poolResult === undefined || !poolResult.success) {
+          throw new Error(`v3PositionsOf: failed to resolve pool of position ${tokenId}`);
+        }
+        const pool = decodeFunctionResult({
+          abi: v3FactoryAbi,
+          functionName: "getPool",
+          data: poolResult.returnData,
+        });
+        if (poolFilter && pool.toLowerCase() !== poolFilter.toLowerCase()) continue;
+        positions.push({
+          id: tokenId.toString(),
+          poolAddress: pool.toLowerCase(),
+          poolName: `${p[2].slice(0, 6)}/${p[3].slice(0, 6)}`,
+          tokenX: p[2].toLowerCase(),
+          tokenY: p[3].toLowerCase(),
+          lowerBinId: Number(p[5]),
+          upperBinId: Number(p[6]),
+          liquidityShares: p[7],
+          // Owed fees: a liquidity-0 shell can still hold claimable fees —
+          // carried so reconcile never silently abandons them on drop.
+          tokensOwedX: p[10],
+          tokensOwedY: p[11],
+          depositedUsd: 0,
+          currentValueUsd: 0,
+          unrealizedPnlUsd: 0,
+          feesEarnedUsd: 0,
+          openedAt: Date.now(),
+        });
       }
       return positions;
     }
@@ -2736,18 +2953,53 @@ export const AdapterLive = Layer.effect(
       owner: Address,
       poolFilter?: string,
     ): Promise<ReadonlyArray<Position>> {
-      const pm = v4PositionManager();
       const ownedIds = await v4OwnedTokenIds(owner);
+      if (ownedIds.length === 0) return [];
+      // All per-token reads in ONE aggregate3 (was 2 sequential reads per
+      // tokenId): getPoolAndPositionInfo + getPositionLiquidity per id.
+      const results = await aggregate3Read(
+        ownedIds.flatMap((tokenId) => [
+          {
+            target: V4_POSITION_MANAGER,
+            callData: encodeFunctionData({
+              abi: v4PositionManagerAbi,
+              functionName: "getPoolAndPositionInfo",
+              args: [tokenId],
+            }),
+          },
+          {
+            target: V4_POSITION_MANAGER,
+            callData: encodeFunctionData({
+              abi: v4PositionManagerAbi,
+              functionName: "getPositionLiquidity",
+              args: [tokenId],
+            }),
+          },
+        ]),
+      );
       const positions: Position[] = [];
-      for (const tokenId of ownedIds) {
+      for (const [i, tokenId] of ownedIds.entries()) {
         try {
+          const infoResult = results[i * 2];
+          const liqResult = results[i * 2 + 1];
+          if (infoResult === undefined || liqResult === undefined) {
+            throw new Error(`multicall results missing for token ${tokenId}`);
+          }
           // New PM interface: poolKey + packed info, liquidity via lens call.
           // Decode the REAL tick range from the packed positionInfo (200-bit
           // poolId | 24-bit tickUpper | 24-bit tickLower | 8-bit subscriber) —
           // a hardcoded 0/0 range made every v4 position permanently
           // "out of range", firing the vol-gate EXIT on any volatility spike.
-          const [poolKey, positionInfo] = await pm.read.getPoolAndPositionInfo([tokenId]);
-          const liquidity = await pm.read.getPositionLiquidity([tokenId]);
+          const [poolKey, positionInfo] = decodeFunctionResult({
+            abi: v4PositionManagerAbi,
+            functionName: "getPoolAndPositionInfo",
+            data: infoResult.returnData,
+          });
+          const liquidity = decodeFunctionResult({
+            abi: v4PositionManagerAbi,
+            functionName: "getPositionLiquidity",
+            data: liqResult.returnData,
+          });
           const key: V4PoolKey = {
             currency0: poolKey[0],
             currency1: poolKey[1],
@@ -3050,17 +3302,25 @@ export const AdapterLive = Layer.effect(
         }),
       getPositions: (poolAddress, wallet) =>
         Effect.tryPromise({
-          try: async () =>
-            poolAddress.length === 66
-              ? v4PositionsOf(getAddress(wallet), poolAddress)
-              : v3PositionsOf(getAddress(wallet), poolAddress),
+          try: async () => {
+            const owner = getAddress(wallet);
+            // Shared cycle-scoped enumeration — see positionsEnumeration.
+            if (poolAddress.length === 66) {
+              return (await positionsEnumeration(owner)).v4.filter(
+                (p) => p.poolAddress === poolAddress.toLowerCase(),
+              );
+            }
+            return (await positionsEnumeration(owner)).v3.filter(
+              (p) => p.poolAddress === poolAddress.toLowerCase(),
+            );
+          },
           catch: (e) => new Error(`getPositions: ${underlyingErrorMessage(e)}`),
         }),
       getAllWalletPositions: (wallet) =>
         Effect.tryPromise({
           try: async () => {
             const owner = getAddress(wallet);
-            const [v3, v4] = await Promise.all([v3PositionsOf(owner), v4PositionsOf(owner)]);
+            const { v3, v4 } = await positionsEnumeration(owner);
             return v3.concat(v4).map((p) => ({
               poolAddress: p.poolAddress,
               positionPubKey: p.id,
@@ -3089,10 +3349,12 @@ export const AdapterLive = Layer.effect(
             // unreadable input returns null and the caller falls back to the
             // price-anchored mark.
             if (!walletAddress) return null;
+            // Shared cycle-scoped enumeration — see positionsEnumeration.
+            const { v3, v4 } = await positionsEnumeration(walletAddress);
             const pos =
               poolAddress.length === 66
-                ? (await v4PositionsOf(walletAddress)).find((p) => p.id === positionPubKey)
-                : (await v3PositionsOf(walletAddress)).find((p) => p.id === positionPubKey);
+                ? v4.find((p) => p.id === positionPubKey)
+                : v3.find((p) => p.id === positionPubKey);
             if (!pos || pos.liquidityShares <= 0n) return null;
             const state =
               poolAddress.length === 66
@@ -3120,11 +3382,8 @@ export const AdapterLive = Layer.effect(
         Effect.tryPromise({
           try: async () => {
             const owner = getAddress(wallet);
-            // Enumerate the wallet once, then share pool state and token
-            // prices across every position. This is the cycle-level mark path;
-            // the single-position method above remains as a compatibility
-            // fallback for adapters and tests that do not expose this batch.
-            const [v3, v4] = await Promise.all([v3PositionsOf(owner), v4PositionsOf(owner)]);
+            // Shared cycle-scoped enumeration — see positionsEnumeration.
+            const { v3, v4 } = await positionsEnumeration(owner);
             const positions = v3.concat(v4);
             const stateByPool = new Map<string, PoolQuoteState | null>();
             await Promise.all(
