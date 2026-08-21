@@ -6,6 +6,10 @@ import { AdapterLive, usdToAtomic, WETH9 } from "./adapter-service.js";
 import { StrategyLive } from "./strategy-service.js";
 import { MemoryLive } from "./memory-service.js";
 import {
+  assessMarketStress,
+  assessStressZScore,
+} from "./market-stress.js";
+import {
   RiskLive,
   evaluateAgentProposal,
   evaluateAgentRebalanceCapitalGates,
@@ -2966,6 +2970,66 @@ export const program = Effect.gen(function* () {
     return tokenRiskProber;
   };
   const tokenRiskCache = new Map<string, TokenRiskVerdict>();
+
+  // ─── Market-stress monitor (logging-only) ─────────────────────────────────
+  // ORCA-inspired correlation-spectrum stress signal: mean pairwise hourly-
+  // return correlation across the most-snapshotted pools, z-scored against a
+  // trailing baseline persisted in metadata. Pure local math over
+  // pool_snapshots (zero RPC). LOGGING-ONLY until its value is validated at
+  // past blowup timestamps — it must never gate anything yet.
+  const STRESS_META_KEY = "market_stress_baseline";
+  const STRESS_WINDOW_HOURS = 48;
+  const STRESS_UNIVERSE = 15;
+  let lastStressAssessAt = 0;
+  const assessMarketStressLoggingOnly = (): Effect.Effect<void, never, never> =>
+    Effect.gen(function* () {
+      const now = Date.now();
+      if (now - lastStressAssessAt < 3_600_000) return; // hourly at most
+      lastStressAssessAt = now;
+      const sinceMs = now - 4 * 24 * 3_600_000;
+      const pools = yield* db.getTopSnapshotPools(STRESS_UNIVERSE, sinceMs).pipe(
+        Effect.catch(() => Effect.succeed([] as ReadonlyArray<string>)),
+      );
+      if (pools.length < 3) return;
+      const endMs = now;
+      const startMs = now - (STRESS_WINDOW_HOURS + 2) * 3_600_000;
+      const seriesByPool = new Map<string, ReadonlyArray<{ timestamp: number; price: number }>>();
+      for (const pool of pools) {
+        const snaps = yield* db.getSnapshots(pool, startMs, endMs).pipe(
+          Effect.catch(() => Effect.succeed([] as ReadonlyArray<PoolSnapshot>)),
+        );
+        seriesByPool.set(
+          pool,
+          snaps.map((s) => ({ timestamp: s.timestamp, price: s.currentPrice })),
+        );
+      }
+      const assessment = assessMarketStress(seriesByPool, now, STRESS_WINDOW_HOURS);
+      if (assessment.meanCorrelation === null) {
+        logger.debug("Market stress: insufficient overlapping data", {
+          poolCount: assessment.poolCount,
+        });
+        return;
+      }
+      // Trailing baseline of prior assessments (oldest first), capped at 168.
+      const baselineRaw = yield* db.getMetadata(STRESS_META_KEY).pipe(
+        Effect.catch(() => Effect.succeed(null)),
+      );
+      const baseline: number[] = baselineRaw ? JSON.parse(baselineRaw) : [];
+      const zScore = assessStressZScore(assessment.meanCorrelation, baseline);
+      logger.info("Market stress assessed", {
+        meanCorrelation: Number(assessment.meanCorrelation.toFixed(4)),
+        zScore: zScore === null ? null : Number(zScore.toFixed(2)),
+        pools: assessment.poolCount,
+        hours: assessment.sampleCount,
+        mode: "log-only",
+      });
+      baseline.push(assessment.meanCorrelation);
+      while (baseline.length > 168) baseline.shift();
+      yield* db.setMetadata(STRESS_META_KEY, JSON.stringify(baseline)).pipe(
+        Effect.catch(() => Effect.void),
+      );
+    }).pipe(Effect.catch(() => Effect.void));
+
   const refreshHarvestBook = (): Effect.Effect<void, never, never> =>
     Effect.gen(function* () {
       if (config.challengeMode !== true) return;
@@ -9204,6 +9268,7 @@ export const program = Effect.gen(function* () {
       rotationConfirmationsDirty = false;
     }
     yield* runScanCycle();
+    yield* assessMarketStressLoggingOnly();
   }).pipe(
     Effect.catch((err) =>
       Effect.sync(() => {

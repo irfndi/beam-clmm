@@ -1123,6 +1123,12 @@ export interface DbApi {
     endMs: number,
   ) => Effect.Effect<ReadonlyArray<PoolSnapshot>, Error>;
   readonly getSnapshotPools: () => Effect.Effect<ReadonlyArray<string>, Error>;
+  /** Pools with the most snapshots since `sinceMs`, best first (one local SQL
+   *  GROUP BY — no RPC). Feeds the market-stress monitor's universe pick. */
+  readonly getTopSnapshotPools: (
+    topK: number,
+    sinceMs: number,
+  ) => Effect.Effect<ReadonlyArray<string>, Error>;
   /** Observed min/max price range over a window, from our own pool_snapshots
    *  (stats-source drawdown fields are often 0/missing — this is measured).
    *  null when the window has no positive-price samples. */

@@ -274,6 +274,7 @@ describe("executeLive", () => {
     return {
       db: {},
       getObservedPriceRange: () => Effect.succeed(null),
+      getTopSnapshotPools: () => Effect.succeed([]),
       savePosition: () => Effect.void,
       getPosition: () => Effect.succeed(null),
       getAllPositions: () => Effect.succeed([]),

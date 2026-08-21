@@ -771,6 +771,21 @@ export const DbLive = (dbPath?: string) =>
             return rows.map((r) => r.pool_address);
           }),
 
+        getTopSnapshotPools: (topK, sinceMs) =>
+          Effect.sync(() => {
+            const rows = queryAll<{ pool_address: string }>(
+              db,
+              `SELECT pool_address FROM pool_snapshots
+               WHERE timestamp >= ?
+               GROUP BY pool_address
+               ORDER BY COUNT(*) DESC, pool_address ASC
+               LIMIT ?`,
+              sinceMs,
+              topK,
+            );
+            return rows.map((r) => r.pool_address);
+          }),
+
         getSnapshotCount: (poolAddress) =>
           Effect.sync(() => {
             const row = queryOne<{ n: number }>(
