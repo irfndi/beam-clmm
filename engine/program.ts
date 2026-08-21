@@ -10,6 +10,10 @@ import {
   assessStressZScore,
 } from "./market-stress.js";
 import {
+  annualizedVarianceFromSnapshots,
+  estimateLvrEdge,
+} from "./lvr-estimator.js";
+import {
   RiskLive,
   evaluateAgentProposal,
   evaluateAgentRebalanceCapitalGates,
@@ -3026,6 +3030,83 @@ export const program = Effect.gen(function* () {
       baseline.push(assessment.meanCorrelation);
       while (baseline.length > 168) baseline.shift();
       yield* db.setMetadata(STRESS_META_KEY, JSON.stringify(baseline)).pipe(
+        Effect.catch(() => Effect.void),
+      );
+    }).pipe(Effect.catch(() => Effect.void));
+
+  // ─── LVR edge estimator (logging-only) ────────────────────────────────────
+  // Di Nosse & Lillo (arXiv 2606.23070) Eq.17 normalized: a v3 position's
+  // LVR drag ≈ σ²/8 annualized vs its fee yield — enter-quality = feeYield
+  // − σ²/8. All inputs local (pool_snapshots + the snapshots' own Krystal-
+  // measured fees24h/tvl fields). LOGGING-ONLY: it must separate our past
+  // winning entries from losing ones on recorded data before any gate use.
+  const LVR_META_KEY = "lvr_edge_history";
+  const LVR_WINDOW_HOURS = 72;
+  const LVR_UNIVERSE = 15;
+  let lastLvrAssessAt = 0;
+  const assessLvrEdgeLoggingOnly = (): Effect.Effect<void, never, never> =>
+    Effect.gen(function* () {
+      const now = Date.now();
+      if (now - lastLvrAssessAt < 6 * 3_600_000) return; // 6-hourly at most
+      lastLvrAssessAt = now;
+      const pools = yield* db.getTopSnapshotPools(LVR_UNIVERSE, now - 7 * 24 * 3_600_000).pipe(
+        Effect.catch(() => Effect.succeed([] as ReadonlyArray<string>)),
+      );
+      if (pools.length === 0) return;
+      const results: Array<{ pool: string; edge: number; feeYield: number; vol: number }> = [];
+      for (const pool of pools) {
+        const snaps = yield* db
+          .getSnapshots(pool, now - (LVR_WINDOW_HOURS + 2) * 3_600_000, now)
+          .pipe(Effect.catch(() => Effect.succeed([] as ReadonlyArray<PoolSnapshot>)));
+        if (snaps.length === 0) continue;
+        const { variance } = annualizedVarianceFromSnapshots(
+          snaps.map((s) => ({ timestamp: s.timestamp, price: s.currentPrice })),
+          now,
+          LVR_WINDOW_HOURS,
+        );
+        if (variance === null) continue;
+        const latest = snaps[snaps.length - 1]!;
+        // Fee yield from the snapshot's own stats-source fields (Krystal when
+        // present): trailing-24h fees over TVL, annualized.
+        if (!(latest.tvlUsd > 0) || !(latest.fees24hUsd > 0)) continue;
+        const annualizedFeeYield = (latest.fees24hUsd / latest.tvlUsd) * 365;
+        const edge = estimateLvrEdge({ annualizedFeeYield, annualizedVariance: variance });
+        results.push({ pool, edge, feeYield: annualizedFeeYield, vol: variance });
+      }
+      if (results.length === 0) return;
+      results.sort((a, b) => b.edge - a.edge);
+      logger.info("LVR edge assessed", {
+        mode: "log-only",
+        positive: results.filter((r) => r.edge > 0).length,
+        total: results.length,
+        best: {
+          pool: results[0]?.pool.slice(0, 10),
+          edge: Number((results[0]?.edge ?? 0).toFixed(4)),
+          feeYield: Number((results[0]?.feeYield ?? 0).toFixed(4)),
+          annVar: Number((results[0]?.vol ?? 0).toFixed(4)),
+        },
+        worst: {
+          pool: results[results.length - 1]?.pool.slice(0, 10),
+          edge: Number((results[results.length - 1]?.edge ?? 0).toFixed(4)),
+          feeYield: Number((results[results.length - 1]?.feeYield ?? 0).toFixed(4)),
+          annVar: Number((results[results.length - 1]?.vol ?? 0).toFixed(4)),
+        },
+      });
+      // Persist per-pool history for later validation against closed trades.
+      const historyRaw = yield* db.getMetadata(LVR_META_KEY).pipe(
+        Effect.catch(() => Effect.succeed(null)),
+      );
+      type LvrHistoryEntry = { at: number; edge: number; feeYield: number; vol: number };
+      const history: Record<string, LvrHistoryEntry[]> = historyRaw
+        ? JSON.parse(historyRaw)
+        : {};
+      for (const r of results) {
+        const list = history[r.pool] ?? [];
+        list.push({ at: now, edge: r.edge, feeYield: r.feeYield, vol: r.vol });
+        while (list.length > 120) list.shift();
+        history[r.pool] = list;
+      }
+      yield* db.setMetadata(LVR_META_KEY, JSON.stringify(history)).pipe(
         Effect.catch(() => Effect.void),
       );
     }).pipe(Effect.catch(() => Effect.void));
@@ -9269,6 +9350,7 @@ export const program = Effect.gen(function* () {
     }
     yield* runScanCycle();
     yield* assessMarketStressLoggingOnly();
+    yield* assessLvrEdgeLoggingOnly();
   }).pipe(
     Effect.catch((err) =>
       Effect.sync(() => {
