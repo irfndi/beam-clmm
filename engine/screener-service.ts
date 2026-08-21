@@ -1,6 +1,7 @@
 /* oxlint-disable */
 import { Effect, Layer } from "effect";
 import { ScreenerService, type ScreenerApi, type ScreenedPool } from "./services.js";
+import type { BinArray } from "./types.js";
 import { AdapterService, type DiscoveredPool } from "./services.js";
 import { StrategyService } from "./services.js";
 import { createLogger } from "./logger.js";
@@ -114,17 +115,30 @@ export const ScreenerLive = (screenerConfig: ScreenerConfig) =>
 
             // minBinUtilization filter: only applied where on-chain bin data
             // exists (see MAX_BIN_UTILIZATION_CHECKS). Fail-open otherwise.
+            // Bin data for all candidates is fetched in ONE batched pass
+            // (getBinArrays) when the adapter exposes it — sequential
+            // per-pool getBinArray calls were up to 20 round trips per
+            // refresh against a rate-limited public RPC.
+            const toCheck = sorted.slice(0, MAX_BIN_UTILIZATION_CHECKS);
+            let binsByPool: ReadonlyMap<string, BinArray | null> | null = null;
+            if (adapter.getBinArrays !== undefined) {
+              binsByPool = yield* adapter
+                .getBinArrays(toCheck.map((c) => c.address))
+                .pipe(Effect.catch(() => Effect.succeed(null)));
+            }
             const enriched: ScreenedPool[] = [];
-            for (const candidate of sorted.slice(0, MAX_BIN_UTILIZATION_CHECKS)) {
-              const binArray = yield* adapter.getBinArray(candidate.address).pipe(
-                Effect.catch((err) => {
-                  logger.warn("Bin data unavailable for candidate — skipping utilization gate", {
-                    pool: candidate.address,
-                    error: String(err),
-                  });
-                  return Effect.succeed(null);
-                }),
-              );
+            for (const candidate of toCheck) {
+              const binArray = binsByPool
+                ? (binsByPool.get(candidate.address.toLowerCase()) ?? null)
+                : yield* adapter.getBinArray(candidate.address).pipe(
+                    Effect.catch((err) => {
+                      logger.warn("Bin data unavailable for candidate — skipping utilization gate", {
+                        pool: candidate.address,
+                        error: String(err),
+                      });
+                      return Effect.succeed(null);
+                    }),
+                  );
               if (binArray === null || binArray.reservesKnown === false) {
                 enriched.push(candidate);
                 continue;

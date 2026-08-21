@@ -822,4 +822,50 @@ describe("RPC round-trip budgets", () => {
     expect(second[WETH]).toBe(first[WETH]);
     expect(m.roundTrips()).toBe(afterFirst); // served from cache
   });
+
+  it("batched scan (getPoolStatesWithBins) is ~flat in pool count", async () => {
+    const pools = [
+      POOL,
+      "0xa9188730fe85be88ad499d7d52b099e800fb0335",
+      "0xa9188730fe85be88ad499d7d52b099e800fb0336",
+    ];
+    const few = installMock({});
+    const svcFew = await adapterFor();
+    const fewResult = await Effect.runPromise(svcFew.getPoolStatesWithBins!(pools));
+    const cost3 = few.roundTrips();
+    // Correctness: every pool got state + bins from ONE core read + ONE lens
+    // read (the mock serves token0/token1/slot0/liquidity for any target).
+    expect(fewResult.size).toBe(3);
+    for (const [, entry] of fewResult) {
+      expect(entry.state.tokenX).toBe(addr(WETH));
+      expect(entry.bins).not.toBeNull();
+      expect(entry.bins?.reservesKnown).toBe(true);
+    }
+
+    const more = [...pools, "...1", "...2", "...3"].map((p, i) =>
+      i < 3 ? p : `0xa9188730fe85be88ad499d7d52b099e800fb03${(6 + i).toString(16).padStart(2, "0")}`,
+    );
+    const many = installMock({});
+    const svcMany = await adapterFor();
+    await Effect.runPromise(svcMany.getPoolStatesWithBins!(more));
+    const cost6 = many.roundTrips();
+
+    expect(cost6).toBeLessThanOrEqual(cost3 + 2); // ~flat: 2 multicalls per chunk
+    expect(cost6).toBeLessThan(12); // was 3 RTs PER pool before batching
+  });
+
+  it("getBinArrays batch serves every requested pool", async () => {
+    installMock({});
+    const svc = await adapterFor();
+    const pools = [
+      POOL,
+      "0xa9188730fe85be88ad499d7d52b099e800fb0335",
+      "0xa9188730fe85be88ad499d7d52b099e800fb0336",
+    ];
+    const bins = await Effect.runPromise(svc.getBinArrays!(pools));
+    expect(bins.size).toBe(3);
+    for (const p of pools) {
+      expect(bins.get(p.toLowerCase())).not.toBeNull();
+    }
+  });
 });

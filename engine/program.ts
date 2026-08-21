@@ -135,6 +135,7 @@ import type {
   AgentProposal,
   AgentProposalMode,
   AgentCycle,
+  BinArray,
   EntryStrategyMode,
   PoolMetrics,
   PoolSnapshot,
@@ -4943,6 +4944,18 @@ export const program = Effect.gen(function* () {
       // from here (recordExecutionOutcome increments it during the pool loop).
       executionFailuresThisCycle = 0;
 
+      // One batched state+bins read for the whole scan (when the adapter
+      // exposes it): per-pool getPoolState+getBinArray cost 3-6 round trips
+      // each with duplicate slot0/tickSpacing reads; the batched path is ~2
+      // per pool total. Pools missing from the map fall back to the
+      // sequential per-pool read inside evaluatePool.
+      const prefetched =
+        adapter.getPoolStatesWithBins !== undefined
+          ? yield* adapter
+              .getPoolStatesWithBins([...poolsToScan])
+              .pipe(Effect.catch(() => Effect.succeed(null)))
+          : null;
+
       for (const poolAddress of poolsToScan) {
         // A pool yields one decision per held position plus at most one ENTER.
         const decisions = yield* evaluatePool(
@@ -4950,6 +4963,7 @@ export const program = Effect.gen(function* () {
           cycle,
           idleRedeployCandidates,
           executedExitPools,
+          prefetched?.get(poolAddress.toLowerCase()),
         ).pipe(
           Effect.catch((err) => {
             cycle.poolsFailed++;
@@ -5299,6 +5313,7 @@ export const program = Effect.gen(function* () {
     cycle: AgentCycle,
     idleRedeployCandidates: IdleRedeployCandidate[],
     executedExitPools: Set<string>,
+    prefetched?: { state: PoolState; bins: BinArray | null },
   ): Effect.Effect<ReadonlyArray<AgentDecision>, Error, never> =>
     Effect.gen(function* () {
       const cycleId = cycle.cycleId;
@@ -5317,8 +5332,14 @@ export const program = Effect.gen(function* () {
           )
           .pipe(Effect.catch(() => Effect.void));
       }
-      const rawPool = yield* adapter.getPoolState(poolAddress);
-      const binArray = yield* adapter.getBinArray(poolAddress);
+      const rawPool =
+        prefetched !== undefined
+          ? prefetched.state
+          : yield* adapter.getPoolState(poolAddress);
+      const binArray =
+        prefetched !== undefined && prefetched.bins !== null
+          ? prefetched.bins
+          : yield* adapter.getBinArray(poolAddress);
       pushBinHistory(poolAddress, rawPool.activeBinId);
 
       // Real pool stats, resolved datapi (primary) > geckoterminal (secondary)

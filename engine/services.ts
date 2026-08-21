@@ -153,6 +153,31 @@ export interface AdapterApi {
   readonly getPoolState: (poolAddress: string) => Effect.Effect<PoolState, Error>;
   readonly getBinArray: (poolAddress: string) => Effect.Effect<BinArray, Error>;
   /**
+   * Pool state + bin array for MANY pools in one pass. The per-pool scan loop
+   * calls getPoolState then getBinArray for every pool; unbatched, each pool
+   * costs 3 round trips (v3) / 4-6 (v4) with slot0+tickSpacing read twice.
+   * The batched path reads each pool's core state once, shares it between the
+   * two results, and packs all lens lookups into per-pool multicalls —
+   * ~2 round trips per pool total. Optional so test mocks compile unchanged;
+   * callers fall back to sequential getPoolState/getBinArray when absent.
+   */
+  readonly getPoolStatesWithBins?: (
+    poolAddresses: ReadonlyArray<string>,
+  ) => Effect.Effect<
+    ReadonlyMap<string, { state: PoolState; bins: BinArray | null }>,
+    never
+  >;
+  /**
+   * Bin arrays for MANY pools in one pass (screener enrichment). Shares the
+   * same batched core-state + lens multicalls as getPoolStatesWithBins;
+   * pools whose reads fail are absent/null (callers keep their existing
+   * fail-open utilization handling). Optional so test mocks compile
+   * unchanged; callers fall back to sequential getBinArray when absent.
+   */
+  readonly getBinArrays?: (
+    poolAddresses: ReadonlyArray<string>,
+  ) => Effect.Effect<ReadonlyMap<string, BinArray | null>, never>;
+  /**
    * Fetch the top-N pages (1000 pools each) of the TVL-ranked Meteora
    * universe in ONE call — the market-scan universe refresh. Unlike the
    * rotating single-page `discoverPools`, this returns every pool from

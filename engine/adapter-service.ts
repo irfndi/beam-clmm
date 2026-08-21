@@ -1333,15 +1333,6 @@ export const AdapterLive = Layer.effect(
       }));
     }
 
-    function requiredCallResult(
-      results: ReadonlyArray<{ readonly success: boolean; readonly returnData: Hex }>,
-      index: number,
-    ): Hex {
-      const result = results[index];
-      if (result === undefined) throw new Error(`multicall result ${index} is missing`);
-      return result.returnData;
-    }
-
     async function getDecimals(mint: string): Promise<number> {
       if (isNative(mint)) return 18;
       const mintKey = mint.toLowerCase();
@@ -1695,6 +1686,156 @@ export const AdapterLive = Layer.effect(
         if (existing) return existing;
         throw new Error(`v4 pool ${id} key unresolved on-chain (${underlyingErrorMessage(e)})`);
       }
+    }
+
+    /** Engine PoolState for a resolved v4 pool from already-read StateView
+     *  data (shared by getPoolState's v4 branch and the batched path). */
+    async function buildV4PoolState(
+      poolId: string,
+      key: V4PoolKey,
+      slot0: readonly [bigint, number, number, number],
+      liquidity: bigint,
+    ): Promise<PoolState> {
+      const tick = Number(slot0[1]);
+      const [decimals0Result, decimals1Result, price0Result, price1Result] =
+        await Promise.allSettled([
+          tokenDecimalsOf(key.currency0),
+          tokenDecimalsOf(key.currency1),
+          priceUsd(key.currency0),
+          priceUsd(key.currency1),
+        ]);
+      return {
+        address: poolId.toLowerCase(),
+        tokenX: key.currency0.toLowerCase(),
+        tokenY: key.currency1.toLowerCase(),
+        tokenXSymbol: isNative(key.currency0) ? "ETH" : "TOKEN",
+        tokenYSymbol: isNative(key.currency1) ? "ETH" : "TOKEN",
+        tvlUsd: 0,
+        volume24hUsd: 0,
+        fees24hUsd: 0,
+        apr: 0,
+        activeBinId: tick,
+        binStep: key.tickSpacing,
+        currentPrice: tickToPrice(tick),
+        tokenXDecimals: settledFiniteNumber(decimals0Result),
+        tokenYDecimals: settledFiniteNumber(decimals1Result),
+        tokenXPriceUsd: settledPositiveNumber(price0Result),
+        tokenYPriceUsd: settledPositiveNumber(price1Result),
+        liquidity,
+        timestamp: Date.now(),
+        statsSource: "heuristic" as const,
+      };
+    }
+
+    /** Batched pool state + bins for MANY pools (v3 + v4 mixed). Plain-async
+     *  core shared by the getPoolStatesWithBins / getBinArrays service
+     *  methods; per-pool cost is ~2 round trips regardless of pool count
+     *  within a chunk. Pools whose reads fail are absent — callers treat
+     *  that as a skip, never as "pool gone". */
+    async function getPoolStatesWithBinsImpl(
+      poolAddresses: ReadonlyArray<string>,
+    ): Promise<ReadonlyMap<string, { state: PoolState; bins: BinArray | null }>> {
+      const out = new Map<string, { state: PoolState; bins: BinArray | null }>();
+      // Split by pool kind: 42-char addresses are v3 pools, 66-char 0x-hex
+      // strings are v4 poolIds.
+      const v3: Address[] = [];
+      const v4: string[] = [];
+      for (const p of poolAddresses) {
+        if (p.length === 66) v4.push(p);
+        else v3.push(getAddress(p));
+      }
+      // v4 keys resolve through the registry/poolKeys (self-caching), so key
+      // resolution is warm after the first cycle per pool.
+      const v4Keys = await Promise.all(
+        v4.map((p) =>
+          resolveV4PoolKey(p)
+            .then((key) => ({ poolId: p.toLowerCase(), key }))
+            .catch(() => null),
+        ),
+      );
+      const resolvedV4 = v4Keys.filter((k): k is NonNullable<typeof k> => k !== null);
+      // All v4 StateView reads in ONE aggregate3 (getSlot0 + getLiquidity per
+      // pool).
+      const v4Results =
+        resolvedV4.length > 0
+          ? await aggregate3Read(
+              resolvedV4.flatMap(({ poolId }) => [
+                {
+                  target: V4_STATE_VIEW,
+                  allowFailure: true,
+                  callData: encodeFunctionData({
+                    abi: v4StateViewAbi,
+                    functionName: "getSlot0",
+                    args: [poolIdHex(poolId)],
+                  }),
+                },
+                {
+                  target: V4_STATE_VIEW,
+                  allowFailure: true,
+                  callData: encodeFunctionData({
+                    abi: v4StateViewAbi,
+                    functionName: "getLiquidity",
+                    args: [poolIdHex(poolId)],
+                  }),
+                },
+              ]),
+            ).catch(() => null)
+          : null;
+      const v3States = await v3PoolStates(v3).catch(() => new Map<string, PoolState>());
+      const v3Bins = await v3BinArrays(v3).catch(
+        () => new Map<string, BinArray | null>(),
+      );
+      for (const [i, entry] of resolvedV4.entries()) {
+        const slot0Result = v4Results?.[i * 2];
+        const liquidityResult = v4Results?.[i * 2 + 1];
+        if (
+          slot0Result === undefined ||
+          liquidityResult === undefined ||
+          !slot0Result.success ||
+          !liquidityResult.success
+        ) {
+          continue;
+        }
+        try {
+          const slot0 = decodeFunctionResult({
+            abi: v4StateViewAbi,
+            functionName: "getSlot0",
+            data: slot0Result.returnData,
+          });
+          const liquidity = decodeFunctionResult({
+            abi: v4StateViewAbi,
+            functionName: "getLiquidity",
+            data: liquidityResult.returnData,
+          });
+          const tick = Number(slot0[1]);
+          const state = await buildV4PoolState(entry.poolId, entry.key, slot0, liquidity);
+          out.set(entry.poolId, {
+            state,
+            bins: {
+              lowerBinId: tick,
+              upperBinId: tick,
+              bins: [
+                {
+                  binId: tick,
+                  reserveX: slot0[0],
+                  reserveY: slot0[0],
+                  liquiditySupply: 0n,
+                  price: tickToPrice(tick),
+                },
+              ],
+              activeBinId: tick,
+              binStep: entry.key.tickSpacing,
+              reservesKnown: true,
+            },
+          });
+        } catch {
+          continue;
+        }
+      }
+      for (const [key, state] of v3States) {
+        out.set(key, { state, bins: v3Bins.get(key) ?? null });
+      }
+      return out;
     }
 
     /** Pool state for a v4 pool (poolId) via the StateView — feeds the pure
@@ -2607,163 +2748,267 @@ export const AdapterLive = Layer.effect(
       return best?.priceUsd ?? 0;
     }
 
-    /** One v3 pool read → engine PoolState (statsSource heuristic until a
-     *  GeckoTerminal integration for Robinhood Chain lands). */
-    async function v3PoolState(poolAddress: Address): Promise<PoolState> {
+    /** Core v3 pool state for MANY pools: all pools' (token0, token1,
+     *  tickSpacing, slot0, liquidity) in ONE aggregate3 round trip (was one
+     *  multicall per pool), decoded once and shared between the PoolState
+     *  and BinArray builders. Pools whose reads fail are absent from the
+     *  result — callers treat that as a skip, never as "pool gone". */
+    async function v3PoolCoreStates(
+      poolAddresses: ReadonlyArray<Address>,
+    ): Promise<
+      ReadonlyMap<
+        string,
+        {
+          token0: Address;
+          token1: Address;
+          tickSpacing: number;
+          slot0: readonly [bigint, number, number, number, number, number, boolean];
+          liquidity: bigint;
+        }
+      >
+    > {
+      if (poolAddresses.length === 0) return new Map();
       const calls = ["token0", "token1", "tickSpacing", "slot0", "liquidity"] as const;
       const results = await aggregate3Read(
-        calls.map((functionName) => ({
-          target: poolAddress,
-          callData: encodeFunctionData({ abi: v3PoolAbi, functionName }),
-        })),
+        poolAddresses.flatMap((poolAddress) =>
+          calls.map((functionName) => ({
+            target: poolAddress,
+            allowFailure: true,
+            callData: encodeFunctionData({ abi: v3PoolAbi, functionName }),
+          })),
+        ),
       );
-      const token0 = decodeFunctionResult({
-        abi: v3PoolAbi,
-        functionName: "token0",
-        data: requiredCallResult(results, 0),
-      });
-      const token1 = decodeFunctionResult({
-        abi: v3PoolAbi,
-        functionName: "token1",
-        data: requiredCallResult(results, 1),
-      });
-      const tickSpacing = decodeFunctionResult({
-        abi: v3PoolAbi,
-        functionName: "tickSpacing",
-        data: requiredCallResult(results, 2),
-      });
-      const slot0 = decodeFunctionResult({
-        abi: v3PoolAbi,
-        functionName: "slot0",
-        data: requiredCallResult(results, 3),
-      });
-      const liquidity = decodeFunctionResult({
-        abi: v3PoolAbi,
-        functionName: "liquidity",
-        data: requiredCallResult(results, 4),
-      });
-      const tick = Number(slot0[1]);
-      const [decimals0Result, decimals1Result, price0Result, price1Result] =
-        await Promise.allSettled([
-          tokenDecimalsOf(token0),
-          tokenDecimalsOf(token1),
-          priceUsd(token0),
-          priceUsd(token1),
-        ]);
-      const token0Decimals = settledFiniteNumber(decimals0Result);
-      const token1Decimals = settledFiniteNumber(decimals1Result);
-      const price0 = settledPositiveNumber(price0Result);
-      const price1 = settledPositiveNumber(price1Result);
-      const tvlUsd = (Number(liquidity) / 1e18) * (price0 ?? 0) * 4; // rough reserve proxy
-      return {
-        address: poolAddress.toLowerCase(),
-        tokenX: token0.toLowerCase(),
-        tokenY: token1.toLowerCase(),
-        tokenXSymbol: isNative(token0)
-          ? "ETH"
-          : token0.toLowerCase() === WETH9.toLowerCase()
-            ? "WETH"
-            : "TOKEN",
-        tokenYSymbol: isNative(token1)
-          ? "ETH"
-          : token1.toLowerCase() === WETH9.toLowerCase()
-            ? "WETH"
-            : "TOKEN",
-        tvlUsd: tvlUsd || 0,
-        volume24hUsd: 0,
-        fees24hUsd: 0,
-        apr: 0,
-        activeBinId: tick,
-        binStep: Number(tickSpacing),
-        currentPrice: tickToPrice(tick),
-        tokenXDecimals: token0Decimals,
-        tokenYDecimals: token1Decimals,
-        tokenXPriceUsd: price0,
-        tokenYPriceUsd: price1,
-        liquidity,
-        timestamp: Date.now(),
-        statsSource: "heuristic" as const,
-      };
+      const states = new Map<
+        string,
+        {
+          token0: Address;
+          token1: Address;
+          tickSpacing: number;
+          slot0: readonly [bigint, number, number, number, number, number, boolean];
+          liquidity: bigint;
+        }
+      >();
+      for (const [index, poolAddress] of poolAddresses.entries()) {
+        const base = index * calls.length;
+        const token0Result = results[base];
+        const token1Result = results[base + 1];
+        const spacingResult = results[base + 2];
+        const slot0Result = results[base + 3];
+        const liquidityResult = results[base + 4];
+        if (
+          token0Result === undefined ||
+          token1Result === undefined ||
+          spacingResult === undefined ||
+          slot0Result === undefined ||
+          liquidityResult === undefined ||
+          !token0Result.success ||
+          !token1Result.success ||
+          !spacingResult.success ||
+          !slot0Result.success ||
+          !liquidityResult.success
+        ) {
+          continue;
+        }
+        states.set(poolAddress.toLowerCase(), {
+          token0: decodeFunctionResult({
+            abi: v3PoolAbi,
+            functionName: "token0",
+            data: token0Result.returnData,
+          }),
+          token1: decodeFunctionResult({
+            abi: v3PoolAbi,
+            functionName: "token1",
+            data: token1Result.returnData,
+          }),
+          tickSpacing: decodeFunctionResult({
+            abi: v3PoolAbi,
+            functionName: "tickSpacing",
+            data: spacingResult.returnData,
+          }),
+          slot0: decodeFunctionResult({
+            abi: v3PoolAbi,
+            functionName: "slot0",
+            data: slot0Result.returnData,
+          }),
+          liquidity: decodeFunctionResult({
+            abi: v3PoolAbi,
+            functionName: "liquidity",
+            data: liquidityResult.returnData,
+          }),
+        });
+      }
+      return states;
     }
 
-    /** Bin array = populated ticks around the active tick via TickLens. */
-    async function v3BinArray(poolAddress: Address): Promise<BinArray> {
-      const poolState = await aggregate3Read([
-        {
-          target: poolAddress,
-          callData: encodeFunctionData({ abi: v3PoolAbi, functionName: "slot0" }),
-        },
-        {
-          target: poolAddress,
-          callData: encodeFunctionData({ abi: v3PoolAbi, functionName: "tickSpacing" }),
-        },
-      ]);
-      const slot0 = decodeFunctionResult({
-        abi: v3PoolAbi,
-        functionName: "slot0",
-        data: requiredCallResult(poolState, 0),
-      });
-      const tickSpacing = decodeFunctionResult({
-        abi: v3PoolAbi,
-        functionName: "tickSpacing",
-        data: requiredCallResult(poolState, 1),
-      });
-      const activeTick = Number(slot0[1]);
-      const word = activeTick >> 8;
-      const bins: BinData[] = [];
-      const words = [word - 1, word, word + 1];
-      const lensResults = await aggregate3Read(
-        words.map((w) => ({
+    /** Populated ticks for MANY v3 pools: all pools' three TickLens word
+     *  lookups in ONE aggregate3 (was 3 reads per pool, one pool at a time). */
+    async function v3BinArrays(
+      poolAddresses: ReadonlyArray<Address>,
+    ): Promise<ReadonlyMap<string, BinArray | null>> {
+      if (poolAddresses.length === 0) return new Map();
+      const coreStates = await v3PoolCoreStates(poolAddresses);
+      const lensTargets = poolAddresses.filter((p) => coreStates.has(p.toLowerCase()));
+      // Per-pool word window around that pool's OWN active tick: [w-1, w, w+1]
+      // where w = activeTick >> 8 (TickLens bitmap words hold 256 ticks).
+      const WORDS_PER_POOL = 3;
+      const lensCalls = lensTargets.flatMap((poolAddress) => {
+        const core = coreStates.get(poolAddress.toLowerCase());
+        const word = core === undefined ? 0 : Number(core.slot0[1]) >> 8;
+        return [word - 1, word, word + 1].map((w) => ({
           target: V3_TICK_LENS,
+          allowFailure: true,
           callData: encodeFunctionData({
             abi: tickLensAbi,
             functionName: "getPopulatedTicksInWord",
             args: [poolAddress, w],
           }),
-        })),
-      );
-      for (const result of lensResults) {
-        const populated = parsePopulatedTicks(
-          decodeFunctionResult({
-            abi: tickLensAbi,
-            functionName: "getPopulatedTicksInWord",
-            data: result.returnData,
-          }),
-        );
-        for (const p of populated) {
+        }));
+      });
+      const lensResults =
+        lensCalls.length > 0
+          ? await aggregate3Read(lensCalls).catch(() => null)
+          : null;
+      const out = new Map<string, BinArray | null>();
+      for (const poolAddress of poolAddresses) {
+        const key = poolAddress.toLowerCase();
+        const core = coreStates.get(key);
+        if (!core) {
+          out.set(key, null);
+          continue;
+        }
+        const activeTick = Number(core.slot0[1]);
+        const bins: BinData[] = [];
+        const lensBase = lensTargets.findIndex((p) => p.toLowerCase() === key) * WORDS_PER_POOL;
+        for (let w = 0; w < WORDS_PER_POOL; w++) {
+          const result = lensResults?.[lensBase + w];
+          if (result === undefined) continue;
+          if (!result.success) continue;
+          try {
+            const populated = parsePopulatedTicks(
+              decodeFunctionResult({
+                abi: tickLensAbi,
+                functionName: "getPopulatedTicksInWord",
+                data: result.returnData,
+              }),
+            );
+            for (const p of populated) {
+              bins.push({
+                binId: Number(p[0]),
+                reserveX: p[2],
+                reserveY: 0n,
+                liquiditySupply: p[2],
+                price: tickToPrice(Number(p[0])),
+              });
+            }
+          } catch {
+            continue;
+          }
+        }
+        bins.sort((a, b) => a.binId - b.binId);
+        // TickLens returns empty for wide/low-occupancy pools (no populated
+        // ticks near the active one). Mirror the v4 proxy: a synthetic active
+        // bin keeps range utilization KNOWN (1.0 while live) so the ENTER
+        // gates proceed — the volatility-scaled range width is the real
+        // utilization control, not tick occupancy. A measured value when
+        // populated, the proxy otherwise.
+        if (bins.length === 0) {
           bins.push({
-            binId: Number(p[0]),
-            reserveX: p[2],
+            binId: activeTick,
+            reserveX: core.slot0[0],
             reserveY: 0n,
-            liquiditySupply: p[2],
-            price: tickToPrice(Number(p[0])),
+            liquiditySupply: 0n,
+            price: tickToPrice(activeTick),
           });
         }
-      }
-      bins.sort((a, b) => a.binId - b.binId);
-      // TickLens returns empty for wide/low-occupancy pools (no populated
-      // ticks near the active one). Mirror the v4 proxy: a synthetic active
-      // bin keeps range utilization KNOWN (1.0 while live) so the ENTER
-      // gates proceed — the volatility-scaled range width is the real
-      // utilization control, not tick occupancy. A measured value when
-      // populated, the proxy otherwise.
-      if (bins.length === 0) {
-        bins.push({
-          binId: activeTick,
-          reserveX: slot0[0],
-          reserveY: 0n,
-          liquiditySupply: 0n,
-          price: tickToPrice(activeTick),
+        out.set(key, {
+          lowerBinId: bins[0]?.binId ?? activeTick,
+          upperBinId: bins[bins.length - 1]?.binId ?? activeTick,
+          bins,
+          activeBinId: activeTick,
+          binStep: core.tickSpacing,
+          reservesKnown: true,
         });
       }
-      return {
-        lowerBinId: bins[0]?.binId ?? activeTick,
-        upperBinId: bins[bins.length - 1]?.binId ?? activeTick,
-        bins,
-        activeBinId: activeTick,
-        binStep: Number(tickSpacing),
-        reservesKnown: true,
-      };
+      return out;
+    }
+
+    /** Engine PoolStates for MANY v3 pools, built from one batched core read
+     *  (statsSource heuristic until a GeckoTerminal integration for Robinhood
+     *  Chain lands). Pools whose core reads failed are absent. */
+    async function v3PoolStates(
+      poolAddresses: ReadonlyArray<Address>,
+    ): Promise<ReadonlyMap<string, PoolState>> {
+      if (poolAddresses.length === 0) return new Map();
+      const coreStates = await v3PoolCoreStates(poolAddresses);
+      const out = new Map<string, PoolState>();
+      const tokenSet = new Set<string>();
+      for (const core of coreStates.values()) {
+        tokenSet.add(core.token0.toLowerCase());
+        tokenSet.add(core.token1.toLowerCase());
+      }
+      const priceByMint = new Map<string, number>();
+      await Promise.all(
+        [...tokenSet].map(async (mint) => {
+          priceByMint.set(mint, await priceUsd(mint).catch(() => 0));
+        }),
+      );
+      for (const [key, core] of coreStates) {
+        const tick = Number(core.slot0[1]);
+        const price0 = priceByMint.get(core.token0.toLowerCase()) ?? 0;
+        const price1 = priceByMint.get(core.token1.toLowerCase()) ?? 0;
+        const tvlUsd = (Number(core.liquidity) / 1e18) * price0 * 4; // rough reserve proxy
+        out.set(key, {
+          address: key,
+          tokenX: core.token0.toLowerCase(),
+          tokenY: core.token1.toLowerCase(),
+          tokenXSymbol: isNative(core.token0)
+            ? "ETH"
+            : core.token0.toLowerCase() === WETH9.toLowerCase()
+              ? "WETH"
+              : "TOKEN",
+          tokenYSymbol: isNative(core.token1)
+            ? "ETH"
+            : core.token1.toLowerCase() === WETH9.toLowerCase()
+              ? "WETH"
+              : "TOKEN",
+          tvlUsd: tvlUsd || 0,
+          volume24hUsd: 0,
+          fees24hUsd: 0,
+          apr: 0,
+          activeBinId: tick,
+          binStep: core.tickSpacing,
+          currentPrice: tickToPrice(tick),
+          tokenXDecimals: await tokenDecimalsOf(core.token0).catch(() => 0),
+          tokenYDecimals: await tokenDecimalsOf(core.token1).catch(() => 0),
+          tokenXPriceUsd: price0,
+          tokenYPriceUsd: price1,
+          liquidity: core.liquidity,
+          timestamp: Date.now(),
+          statsSource: "heuristic" as const,
+        });
+      }
+      return out;
+    }
+
+    /** One v3 pool read → engine PoolState (statsSource heuristic until a
+     *  GeckoTerminal integration for Robinhood Chain lands). */
+    async function v3PoolState(poolAddress: Address): Promise<PoolState> {
+      const addr = getAddress(poolAddress);
+      const state = (await v3PoolStates([addr])).get(addr.toLowerCase());
+      if (!state) {
+        throw new Error(`v3PoolState: core state read failed for ${poolAddress}`);
+      }
+      return state;
+    }
+
+    /** Bin array = populated ticks around the active tick via TickLens. */
+    async function v3BinArray(poolAddress: Address): Promise<BinArray> {
+      const bins = await v3BinArrays([getAddress(poolAddress)]);
+      const result = bins.get(poolAddress.toLowerCase());
+      if (result === null || result === undefined) {
+        throw new Error(`v3BinArray: read failed for ${poolAddress}`);
+      }
+      return result;
     }
 
     /** v3 positions of an owner (NPM is an ERC721 enumerable). Fully batched:
@@ -3299,6 +3544,29 @@ export const AdapterLive = Layer.effect(
             return v3BinArray(getAddress(poolAddress));
           },
           catch: (e) => new Error(`getBinArray(${poolAddress}): ${underlyingErrorMessage(e)}`),
+        }),
+      getPoolStatesWithBins: (poolAddresses) =>
+        Effect.gen(function* () {
+          // Fail-open to an empty map: the scan loop skips missing pools for
+          // a cycle rather than failing the whole batch on one bad read.
+          const full = yield* Effect.tryPromise({
+            try: () => getPoolStatesWithBinsImpl(poolAddresses),
+            catch: (e) => new Error(`getPoolStatesWithBins: ${underlyingErrorMessage(e)}`),
+          }).pipe(Effect.catch(() => Effect.succeed(null)));
+          return full ?? new Map<string, { state: PoolState; bins: BinArray | null }>();
+        }),
+      getBinArrays: (poolAddresses) =>
+        Effect.gen(function* () {
+          const full = yield* Effect.tryPromise({
+            try: () => getPoolStatesWithBinsImpl(poolAddresses),
+            catch: (e) => new Error(`getBinArrays: ${underlyingErrorMessage(e)}`),
+          }).pipe(Effect.catch(() => Effect.succeed(null)));
+          const out = new Map<string, BinArray | null>();
+          for (const p of poolAddresses) {
+            const entry = full?.get(p.toLowerCase());
+            out.set(p.toLowerCase(), entry === undefined ? null : entry.bins);
+          }
+          return out;
         }),
       getPositions: (poolAddress, wallet) =>
         Effect.tryPromise({
