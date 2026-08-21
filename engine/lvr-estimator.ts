@@ -60,6 +60,11 @@ export function annualizedVarianceFromSnapshots(
   let acc = 0;
   for (const r of rets) acc += (r - mean) ** 2;
   const hourlyVar = acc / rets.length;
+  // Zero measured variance across 12+ hourly points is a stale/untracked
+  // price feed, not a genuinely frozen market — reporting σ²=0 would fake a
+  // risk-free edge (observed on first live run). Same policy as the
+  // market-stress flat-series exclusion: null, caller skips.
+  if (hourlyVar <= 0) return { variance: null, samples: rets.length };
   return { variance: hourlyVar * 24 * 365, samples: rets.length };
 }
 

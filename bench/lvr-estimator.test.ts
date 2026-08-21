@@ -48,6 +48,15 @@ describe("annualizedVarianceFromSnapshots", () => {
     expect(res.samples).toBeGreaterThanOrEqual(12);
   });
 
+  it("returns null for a perfectly flat series (stale feed, not risk-free)", () => {
+    const flat = Array.from({ length: 30 }, (_, i) => ({
+      timestamp: 1_000 * HOUR + i * HOUR,
+      price: 50,
+    }));
+    const res = annualizedVarianceFromSnapshots(flat, 1_000 * HOUR + 30 * HOUR, 48);
+    expect(res.variance).toBeNull();
+  });
+
   it("ignores non-positive prices", () => {
     const snaps = [
       ...hourlySeries([100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112]),
