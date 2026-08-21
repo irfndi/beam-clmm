@@ -203,6 +203,8 @@ function markToMarket(pos: Position, rawCurrentPrice: number): number {
         lowerBinId,
         upperBinId,
         currentPriceUsd: currentPrice,
+        lowerPriceUsd: Pa,
+        upperPriceUsd: Pb,
       })
     : null;
   if (clmm !== null && Number.isFinite(clmm) && clmm > 0) return clmm;

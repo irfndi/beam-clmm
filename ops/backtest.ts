@@ -41,6 +41,24 @@ export function replayUsesMeasuredVolume(source: PoolState["statsSource"]): bool
   return source === "datapi" || source === "krystal";
 }
 
+const MEASURED_FEE_LOOKBACK_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Infer a conservative replay age when the database begins mid-life.
+ * Measured datapi/Krystal fee metrics are rolling 24-hour observations, so a
+ * positive measured fee series proves at least that much usable pool history;
+ * the replay window's first row does not prove pool creation.
+ */
+export function inferReplayPoolAgeMs(
+  pool: Pick<PoolState, "timestamp" | "statsSource" | "fees24hUsd">,
+  firstObservedTimestamp: number,
+): number {
+  const observedAge = Math.max(0, pool.timestamp - firstObservedTimestamp);
+  return replayUsesMeasuredVolume(pool.statsSource) && pool.fees24hUsd > 0
+    ? Math.max(observedAge, MEASURED_FEE_LOOKBACK_MS)
+    : observedAge;
+}
+
 function parseArgs(argv: ReadonlyArray<string>): CliArgs {
   const out: CliArgs = {
     days: 7,
@@ -395,7 +413,7 @@ export function runBacktestFromTicks(
       challengeMode: cfg.challengeMode === true,
       challengeMinScore: cfg.challengeMinScore ?? 4,
       challengeMinPoolAgeMs: cfg.challengeMinPoolAgeMs ?? 6 * 3_600_000,
-      poolAgeMs: tick.pool.timestamp - ticks[0]!.pool.timestamp,
+      poolAgeMs: inferReplayPoolAgeMs(tick.pool, ticks[0]!.pool.timestamp),
       nowMs: tick.pool.timestamp,
       enterRoundTripGasUsd: cfg.roundTripGasUsd ?? 0,
       enterMin7dFeeOverGas: cfg.min7dFeeOverGas ?? 1,

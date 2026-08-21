@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { computeClmmValueUsd } from "../engine/pnl.js";
+import { rawTickToUsd, verifiedUsdPair } from "../ops/verified-usd-price.js";
 
 // Exact Uniswap v3/v4 CLMM IL math (square-root price bounds). The mark is
 // range-aware: below Pa the LP is 100% token0, above Pb 100% token1, and the
@@ -46,5 +47,27 @@ describe("computeClmmValueUsd", () => {
     expect(computeClmmValueUsd({ ...base, depositedUsd: 0 })).toBeNull();
     expect(computeClmmValueUsd({ ...base, lowerBinId: 50307, upperBinId: 49907 })).toBeNull();
     expect(computeClmmValueUsd({ ...base, currentPriceUsd: Number.NaN })).toBeNull();
+  });
+
+  it("accepts decimal-aware USD bounds for unequal-decimal pairs", () => {
+    const pair = verifiedUsdPair("ETH", "USDG");
+    expect(pair).not.toBeNull();
+    const lowerPriceUsd = rawTickToUsd(-205_000, pair!);
+    const upperPriceUsd = rawTickToUsd(-201_000, pair!);
+    const currentPriceUsd = rawTickToUsd(-203_000, pair!);
+    expect(lowerPriceUsd).not.toBeNull();
+    expect(upperPriceUsd).not.toBeNull();
+    expect(currentPriceUsd).not.toBeNull();
+    const corrected = computeClmmValueUsd({
+      depositedUsd: 1_000,
+      entryPriceUsd: 1_500,
+      lowerBinId: -205_000,
+      upperBinId: -201_000,
+      currentPriceUsd: currentPriceUsd!,
+      lowerPriceUsd: lowerPriceUsd!,
+      upperPriceUsd: upperPriceUsd!,
+    });
+    expect(corrected).not.toBeNull();
+    expect(corrected).not.toBeCloseTo(1_000, 3);
   });
 });

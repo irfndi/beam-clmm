@@ -97,13 +97,28 @@ export function computeClmmValueUsd(input: {
   readonly lowerBinId: number;
   readonly upperBinId: number;
   readonly currentPriceUsd: number;
+  /** Optional decimal-aware bounds when the valuation prices are already in USD. */
+  readonly lowerPriceUsd?: number | undefined;
+  readonly upperPriceUsd?: number | undefined;
 }): number | null {
-  const { depositedUsd, entryPriceUsd, lowerBinId, upperBinId, currentPriceUsd } = input;
+  const {
+    depositedUsd,
+    entryPriceUsd,
+    lowerBinId,
+    upperBinId,
+    currentPriceUsd,
+    lowerPriceUsd,
+    upperPriceUsd,
+  } = input;
   if (!(depositedUsd > 0) || !(entryPriceUsd > 0) || !(currentPriceUsd > 0)) return null;
   if (!(lowerBinId < upperBinId)) return null;
-  // Range boundary prices from ticks (price of token1 in token0 = 1.0001^tick).
-  const Pa = Math.pow(1.0001, lowerBinId);
-  const Pb = Math.pow(1.0001, upperBinId);
+  // Range boundary prices from ticks (price of token1 in token0 = 1.0001^tick),
+  // unless the caller has already converted those bounds into the valuation
+  // unit. USD replay must use the latter for pairs with unequal decimals.
+  const hasUsdBounds = lowerPriceUsd !== undefined || upperPriceUsd !== undefined;
+  if (hasUsdBounds && (lowerPriceUsd === undefined || upperPriceUsd === undefined)) return null;
+  const Pa = hasUsdBounds ? lowerPriceUsd! : Math.pow(1.0001, lowerBinId);
+  const Pb = hasUsdBounds ? upperPriceUsd! : Math.pow(1.0001, upperBinId);
   if (!(Pa > 0 && Pb > Pa)) return null;
   const sPa = Math.sqrt(Pa);
   const sPb = Math.sqrt(Pb);

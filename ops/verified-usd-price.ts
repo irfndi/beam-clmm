@@ -68,7 +68,12 @@ export function verifiedUsdPairFromMetadata(
   const xStable = STABLE_ADDRESSES.has(xAddress);
   const yStable = STABLE_ADDRESSES.has(yAddress);
   const symbolPair = verifiedUsdPair(metadata.tokenXSymbol ?? "", metadata.tokenYSymbol ?? "");
-  if (!xStable && !yStable) return symbolPair;
+  // Symbol metadata is useful for legacy rows that predate persisted token
+  // addresses, but it is not an identity proof once either address exists.
+  // Never let an arbitrary token labelled "USDC" or "USDG" pass the verified
+  // USD gate.
+  const hasPersistedAddress = xAddress.length > 0 || yAddress.length > 0;
+  if (!xStable && !yStable) return hasPersistedAddress ? null : symbolPair;
   if (xStable === yStable) return null;
   const xDecimals = metadata.tokenXDecimals;
   const yDecimals = metadata.tokenYDecimals;

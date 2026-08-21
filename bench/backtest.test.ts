@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { replayUsesMeasuredVolume } from "../ops/backtest.js";
+import { inferReplayPoolAgeMs, replayUsesMeasuredVolume } from "../ops/backtest.js";
 
 describe("replay stats-source trust", () => {
   it("treats Krystal and Data API snapshots as measured volume", () => {
@@ -11,5 +11,21 @@ describe("replay stats-source trust", () => {
     expect(replayUsesMeasuredVolume("geckoterminal")).toBe(false);
     expect(replayUsesMeasuredVolume("heuristic")).toBe(false);
     expect(replayUsesMeasuredVolume(undefined)).toBe(false);
+  });
+
+  it("does not treat the replay window start as measured-pool creation", () => {
+    const firstObserved = 1_000_000;
+    expect(
+      inferReplayPoolAgeMs(
+        { timestamp: firstObserved, statsSource: "krystal", fees24hUsd: 10 },
+        firstObserved,
+      ),
+    ).toBe(24 * 60 * 60 * 1000);
+    expect(
+      inferReplayPoolAgeMs(
+        { timestamp: firstObserved, statsSource: "heuristic", fees24hUsd: 10 },
+        firstObserved,
+      ),
+    ).toBe(0);
   });
 });

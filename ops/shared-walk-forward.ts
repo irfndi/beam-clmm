@@ -136,6 +136,8 @@ function markToMarket(position: Position, rawPrice: number): number {
           lowerBinId: position.lowerBinId,
           upperBinId: position.upperBinId,
           currentPriceUsd: currentPrice,
+          lowerPriceUsd: low,
+          upperPriceUsd: high,
         })
       : null;
   if (clmm !== null && Number.isFinite(clmm) && clmm > 0) return clmm;
@@ -177,6 +179,10 @@ function buildEvents(
       ({ snapshot }) => snapshot.timestamp >= split.startMs && snapshot.timestamp <= split.endMs,
     )
     .sort((a, b) => a.snapshot.timestamp - b.snapshot.timestamp || a.pool.localeCompare(b.pool));
+  const coverageMs =
+    timeline.length >= 2
+      ? timeline[timeline.length - 1]!.snapshot.timestamp - timeline[0]!.snapshot.timestamp
+      : 0;
 
   for (const { pool, snapshot, index } of timeline) {
     const snapshots = snapshotsByPool.get(pool)!;
@@ -313,7 +319,7 @@ function buildEvents(
     if (cost !== 0) events.push({ type: "fee", timestamp, pool, amountUsd: -cost });
   }
   orderedEvents(events);
-  return { events, acceptedEntries, coverageMs: Math.max(0, split.endMs - split.startMs) };
+  return { events, acceptedEntries, coverageMs: Math.max(0, coverageMs) };
 }
 
 function metrics(
@@ -323,20 +329,48 @@ function metrics(
   strategy: SharedWalkForwardStrategy,
   minElapsedCoverageMs: number,
 ): SharedWalkForwardMetrics {
-  const entries = new Map<string, number>();
+  interface Trade {
+    readonly depositedUsd: number;
+    readonly entryTimestamp: number;
+    feeCashflowUsd: number;
+  }
+  const openTrades = new Map<string, Trade>();
+  const pendingEntryFees = new Map<string, { timestamp: number; amountUsd: number }>();
   let grossProfitUsd = 0;
   let grossLossUsd = 0;
   let completedTrades = 0;
   for (const event of events) {
-    if (event.type === "entry-request") entries.set(event.pool, event.amountUsd);
-    else if (event.type === "exit") {
-      const deposited = entries.get(event.pool);
-      if (deposited !== undefined) {
-        const pnl = event.valueUsd - deposited;
+    if (event.type === "entry-request") {
+      const pending = pendingEntryFees.get(event.pool);
+      openTrades.set(event.pool, {
+        depositedUsd: event.amountUsd,
+        entryTimestamp: event.timestamp,
+        feeCashflowUsd: pending?.timestamp === event.timestamp ? pending.amountUsd : 0,
+      });
+      pendingEntryFees.delete(event.pool);
+    } else if (event.type === "fee") {
+      const trade = openTrades.get(event.pool);
+      if (trade !== undefined && event.timestamp >= trade.entryTimestamp) {
+        trade.feeCashflowUsd += event.amountUsd;
+      } else {
+        const pending = pendingEntryFees.get(event.pool);
+        if (pending?.timestamp === event.timestamp) pending.amountUsd += event.amountUsd;
+        else
+          pendingEntryFees.set(event.pool, {
+            timestamp: event.timestamp,
+            amountUsd: event.amountUsd,
+          });
+      }
+    } else if (event.type === "exit") {
+      const trade = openTrades.get(event.pool);
+      if (trade !== undefined) {
+        // Include positive LP fees and negative entry/exit/slippage costs in
+        // the same cash-flow ledger as the portfolio simulator.
+        const pnl = event.valueUsd - trade.depositedUsd + trade.feeCashflowUsd;
         if (pnl >= 0) grossProfitUsd += pnl;
         else grossLossUsd += -pnl;
         completedTrades++;
-        entries.delete(event.pool);
+        openTrades.delete(event.pool);
       }
     }
   }

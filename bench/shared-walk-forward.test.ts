@@ -96,4 +96,50 @@ describe("shared wallet walk-forward", () => {
 
     expect(result.winner).toBeNull();
   });
+
+  it("requires observed snapshot coverage rather than requested split width", () => {
+    const clustered = [0, 1, 2].map((hours) => ({
+      timestamp: hours * 3_600_000,
+      currentPrice: 1,
+      fees24hUsd: 100,
+      tvlUsd: 10_000,
+      activeBinId: 0,
+      drawdown24h: null,
+      usdPair: pair,
+    }));
+    const result = runSharedWalkForward({
+      snapshotsByPool: new Map([["pool-a", clustered]]),
+      candidates: [strategy],
+      toStrategy: () => strategy,
+      train: { startMs: 0, endMs: 10 * DAY },
+      validation: { startMs: 10 * DAY + 1, endMs: 20 * DAY },
+      test: { startMs: 20 * DAY + 1, endMs: 30 * DAY },
+      requirements: {
+        minAcceptedTrades: 1,
+        maxDrawdownPct: 1,
+        minElapsedCoverageMs: DAY,
+        minProfitFactor: 0,
+      },
+    });
+    expect(result.winner).toBeNull();
+  });
+
+  it("includes fees and execution costs in profit factor", () => {
+    const costlyStrategy = { ...strategy, entryCostUsd: 100, exitCostUsd: 100 };
+    const result = runSharedWalkForward({
+      snapshotsByPool: new Map([["pool-a", snapshots([1, 2, 2])]]),
+      candidates: [costlyStrategy],
+      toStrategy: () => costlyStrategy,
+      train: { startMs: 0, endMs: 2 * DAY },
+      validation: { startMs: 2 * DAY + 1, endMs: 4 * DAY },
+      test: { startMs: 4 * DAY + 1, endMs: 6 * DAY },
+      requirements: {
+        minAcceptedTrades: 1,
+        maxDrawdownPct: 1,
+        minElapsedCoverageMs: DAY,
+        minProfitFactor: 1,
+      },
+    });
+    expect(result.winner).toBeNull();
+  });
 });

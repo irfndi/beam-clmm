@@ -36,6 +36,25 @@ describe("verified USD pool price conversion", () => {
     expect(rawRatioToUsd(1.9e-9, pair!)).toBeCloseTo(1_881, 6);
   });
 
+  it("rejects symbol-only stable labels when an address is present but not allowlisted", () => {
+    expect(
+      verifiedUsdPairFromMetadata({
+        tokenXAddress: "0x0000000000000000000000000000000000000001",
+        tokenYAddress: "0x0000000000000000000000000000000000000002",
+        tokenXSymbol: "ETH",
+        tokenYSymbol: "USDC",
+        tokenXDecimals: 18,
+        tokenYDecimals: 6,
+      }),
+    ).toBeNull();
+  });
+
+  it("keeps the symbol fallback for legacy rows without addresses", () => {
+    expect(
+      verifiedUsdPairFromMetadata({ tokenXSymbol: "ETH", tokenYSymbol: "USDC" }),
+    ).not.toBeNull();
+  });
+
   it("converts tick bounds with the same decimal-aware unit", () => {
     const pair = verifiedUsdPair("ETH", "USDG");
     expect(pair).not.toBeNull();
