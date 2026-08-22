@@ -67,6 +67,58 @@ describe("computeEntrySizeUsd — legacy-identical conservative sizing", () => {
     expect(computeEntrySizeUsd({ walletBalanceUsd: 0, tvlUsd: 0 })).toBe(10);
   });
 
+  it("equity-share mode sizes off portfolio equity, not leftover wallet", () => {
+    // $10k paper anchor (paper wallet variable = static seed), deep pool:
+    // equity term ($1k @ 10%) binds over TVL and cap; sizing no longer
+    // decays as capital deploys.
+    expect(
+      computeEntrySizeUsd({
+        walletBalanceUsd: 10_000,
+        portfolioValueUsd: 10_000,
+        equityFractionUsd: 0.1,
+        tvlUsd: 1_000_000_000,
+        maxSizeUsd: 5_000,
+      }),
+    ).toBe(1_000);
+  });
+
+  it("equity-share mode still respects TVL fraction and cap", () => {
+    // Tiny meme pool at 5% TVL fraction binds below the equity term.
+    expect(
+      computeEntrySizeUsd({
+        walletBalanceUsd: 5_000,
+        portfolioValueUsd: 10_000,
+        equityFractionUsd: 0.1,
+        tvlUsd: 3_000,
+        tvlFractionUsd: 0.05,
+        maxSizeUsd: 5_000,
+      }),
+    ).toBe(150);
+    // Cap binds above the equity term.
+    expect(
+      computeEntrySizeUsd({
+        walletBalanceUsd: 20_000,
+        portfolioValueUsd: 100_000,
+        equityFractionUsd: 0.1,
+        tvlUsd: 1_000_000_000,
+        maxSizeUsd: 5_000,
+      }),
+    ).toBe(5_000);
+  });
+
+  it("equity-share mode keeps the wallet as affordability ceiling (live safety)", () => {
+    // Live wallet $200: cannot size $1k even if equity says so.
+    expect(
+      computeEntrySizeUsd({
+        walletBalanceUsd: 200,
+        portfolioValueUsd: 10_000,
+        equityFractionUsd: 0.1,
+        tvlUsd: 1_000_000_000,
+        maxSizeUsd: 5_000,
+      }),
+    ).toBe(100);
+  });
+
   it("a caller-supplied maxSizeUsd replaces the $500 cap (high-frequency rotation)", () => {
     expect(
       computeEntrySizeUsd({ walletBalanceUsd: 10_000, tvlUsd: 1_000_000, maxSizeUsd: 2_000 }),

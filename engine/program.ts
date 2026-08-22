@@ -7065,6 +7065,8 @@ export const program = Effect.gen(function* () {
               feeIlRatio,
               normalEntrySizeUsd: computeEntrySizeUsd({
                 walletBalanceUsd,
+                portfolioValueUsd,
+                equityFractionUsd: config.entrySizeEquityFraction,
                 tvlUsd: pool.tvlUsd,
                 maxSizeUsd: config.maxEntrySizeUsd,
                 tvlFractionUsd: config.entrySizeTvlFraction,
@@ -7250,6 +7252,8 @@ export const program = Effect.gen(function* () {
             });
             const faProposedSizeUsd = computeEntrySizeUsd({
               walletBalanceUsd,
+              portfolioValueUsd,
+              equityFractionUsd: config.entrySizeEquityFraction,
               tvlUsd: pool.tvlUsd,
               maxSizeUsd: config.maxEntrySizeUsd,
               tvlFractionUsd: config.entrySizeTvlFraction,
@@ -7373,6 +7377,8 @@ export const program = Effect.gen(function* () {
           ) {
             const feeGasEntrySizeUsd = computeEntrySizeUsd({
               walletBalanceUsd,
+              portfolioValueUsd,
+              equityFractionUsd: config.entrySizeEquityFraction,
               tvlUsd: pool.tvlUsd,
               maxSizeUsd: config.maxEntrySizeUsd,
               tvlFractionUsd: config.entrySizeTvlFraction,
@@ -7618,6 +7624,8 @@ export const program = Effect.gen(function* () {
             } else {
               const proposedSizeUsd = computeEntrySizeUsd({
                 walletBalanceUsd,
+                portfolioValueUsd,
+                equityFractionUsd: config.entrySizeEquityFraction,
                 tvlUsd: pool.tvlUsd,
                 maxSizeUsd: config.maxEntrySizeUsd,
                 tvlFractionUsd: config.entrySizeTvlFraction,

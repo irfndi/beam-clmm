@@ -388,6 +388,10 @@ export interface AppConfig {
    *  an $18.6 wallet is $9.30, under the $10 hard floor, so nothing deploys.
    *  Absent = default. */
   readonly entrySizeFloorUsd?: number;
+  /** Equity-share sizing: fraction of total portfolio equity each ENTER
+   *  targets (wallet + open positions). 0 = legacy half-wallet sizing.
+   *  Env ENTRY_SIZE_EQUITY_FRACTION; CHALLENGE_MODE default 0.1. */
+  readonly entrySizeEquityFraction: number;
 
   // ─── F6: Paper-trading validation period ────────────────────────────────────
   /** Require N days of paper trading before allowing live ENTER. */
@@ -1167,6 +1171,17 @@ const loadConfig = Effect.gen(function* () {
     ENTRY_SIZE_FLOOR_USD,
     100,
   );
+  // Equity-share sizing: each entry targets this fraction of TOTAL portfolio
+  // equity (wallet + open positions) instead of half-the-leftover-wallet,
+  // which decays geometrically as capital deploys (the observed $151×2-at-cap
+  // book on a $10k anchor). 0 disables (legacy wallet-based sizing). The
+  // TVL fraction, MAX_ENTRY_SIZE_USD, and every allocation gate still cap it.
+  const entrySizeEquityFraction = yield* validatedNumber(
+    "ENTRY_SIZE_EQUITY_FRACTION",
+    0,
+    challengeMode ? 0.1 : 0,
+    1,
+  );
 
   // ─── Idle-capital auto-redeploy (opt-in) ─────────────────────────────────
   const idleRedeployEnabled = yield* Config.boolean("IDLE_REDEPLOY_ENABLED").pipe(
@@ -1837,6 +1852,7 @@ const loadConfig = Effect.gen(function* () {
     maxEntrySizeUsd,
     entrySizeTvlFraction,
     entrySizeFloorUsd,
+    entrySizeEquityFraction,
     entryMinRangePct,
     gasReservePct,
     harvestMinNetUsd,

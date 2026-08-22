@@ -195,6 +195,7 @@ export function defaultAppConfig(overrides: Partial<AppConfig> = {}): AppConfig 
     maxPositionsPerPool: 2,
     maxObservedPriceRangePct: 30,
     maxEntrySizeUsd: 500,
+    entrySizeEquityFraction: 0,
     paperValidationMinDays: 7,
     paperValidationEnforce: false,
     agentiveMode: false,

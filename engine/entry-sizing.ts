@@ -14,6 +14,18 @@ export const ENTRY_SIZE_CAP_USD = 500;
 export const ENTRY_SIZE_FLOOR_USD = 10;
 
 export interface EntrySizeInput {
+  /**
+   * Fraction of PORTFOLIO EQUITY each entry targets (wallet + open positions,
+   * not just leftover cash). Sizing off the idle wallet alone decays
+   * geometrically: every deploy halves the next base, so an engaged book ends
+   * up sizing positions off dust — the observed $151.88×2-at-cap pattern on a
+   * $10k paper anchor. Equity-share sizing keeps position scale invariant
+   * across the deployment cycle. Default 10%. Env: ENTRY_SIZE_EQUITY_FRACTION.
+   */
+  readonly equityFractionUsd?: number | undefined;
+  /** Total portfolio equity (wallet + open positions). When absent, the
+   *  legacy wallet-based behavior is preserved exactly. */
+  readonly portfolioValueUsd?: number | undefined;
   readonly walletBalanceUsd: number;
   readonly tvlUsd: number;
   /** Hard dollar ceiling on the entry; defaults to ENTRY_SIZE_CAP_USD. */
@@ -30,20 +42,42 @@ export interface EntrySizeInput {
 }
 
 /**
- * Conservative base entry size: the tightest of half the wallet balance,
- * 0.5% of pool TVL, and the ceiling (ENTRY_SIZE_CAP_USD by default, or the
- * caller's `maxSizeUsd`), with a $10 floor. Byte-identical to the legacy
- * inline formula (`max(min(walletBalanceUsd * 0.5, tvlUsd * 0.005, 500), 10)`)
- * when no override is supplied — this path is UNCHANGED by the idle-redeploy
- * feature; the wider redeploy size is computed separately by the redeploy
- * pass (see computeIdleRedeploySizeUsd) and still re-capped by every risk
- * gate downstream.
+ * Conservative base entry size.
+ *
+ * Legacy mode (no portfolioValueUsd): the tightest of half the wallet
+ * balance, TVL fraction, and the ceiling, with a floor — byte-identical to
+ * the historical inline formula
+ * (`max(min(walletBalanceUsd * 0.5, tvlUsd * 0.005, 500), 10)`).
+ *
+ * Equity-share mode (portfolioValueUsd + equityFractionUsd set): the base is
+ * EQUITY × fraction instead of half-the-wallet. Sizing off leftover cash
+ * decays geometrically as capital deploys and starves an engaged book; an
+ * equity share keeps position scale invariant across the deployment cycle
+ * while every downstream cap (per-pool allocation %, positions-per-pool,
+ * book size) still bounds aggregate exposure. The wallet term becomes a hard
+ * affordability ceiling rather than the sizing basis — in paper the seed IS
+ * the portfolio so it never binds; live, it still prevents overspending the
+ * actual balance.
  */
 export function computeEntrySizeUsd(input: EntrySizeInput): number {
+  const tvlTerm = input.tvlUsd * (input.tvlFractionUsd ?? ENTRY_SIZE_TVL_FRACTION);
+  const capTerm = input.maxSizeUsd ?? ENTRY_SIZE_CAP_USD;
+  if (
+    input.portfolioValueUsd !== undefined &&
+    input.equityFractionUsd !== undefined &&
+    input.portfolioValueUsd > 0 &&
+    input.equityFractionUsd > 0
+  ) {
+    const equityTerm = input.portfolioValueUsd * input.equityFractionUsd;
+    return Math.max(
+      Math.min(equityTerm, tvlTerm, capTerm, input.walletBalanceUsd * ENTRY_SIZE_WALLET_FRACTION),
+      input.floorUsd ?? ENTRY_SIZE_FLOOR_USD,
+    );
+  }
   const maxPositionSize = Math.min(
     input.walletBalanceUsd * ENTRY_SIZE_WALLET_FRACTION,
-    input.tvlUsd * (input.tvlFractionUsd ?? ENTRY_SIZE_TVL_FRACTION),
-    input.maxSizeUsd ?? ENTRY_SIZE_CAP_USD,
+    tvlTerm,
+    capTerm,
   );
   return Math.max(maxPositionSize, input.floorUsd ?? ENTRY_SIZE_FLOOR_USD);
 }

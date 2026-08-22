@@ -67,6 +67,7 @@ function baseConfig(overrides: Partial<AppConfig> = {}): AppConfig {
     maxOpenPositions: 3,
     maxPositionsPerPool: 2,
     maxEntrySizeUsd: 500,
+    entrySizeEquityFraction: 0,
     paperValidationMinDays: 7,
     paperValidationEnforce: false,
     agentiveMode: false,
