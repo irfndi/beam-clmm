@@ -35,6 +35,7 @@ interface CliArgs {
   challengeMinScore: number;
   roundTripGasUsd: number;
   min7dFeeOverGas: number;
+  confidenceThreshold: number;
 }
 
 export function replayUsesMeasuredVolume(source: PoolState["statsSource"]): boolean {
@@ -71,6 +72,7 @@ function parseArgs(argv: ReadonlyArray<string>): CliArgs {
     challengeMinScore: 4,
     roundTripGasUsd: 0,
     min7dFeeOverGas: 1,
+    confidenceThreshold: 0.65,
   };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
@@ -125,6 +127,15 @@ function parseArgs(argv: ReadonlyArray<string>): CliArgs {
         .split(",")
         .map((s) => s.trim())
         .filter(Boolean);
+      i++;
+    } else if (a === "--confidence-threshold" && next) {
+      const parsed = Number(next);
+      if (!Number.isFinite(parsed) || parsed < 0 || parsed > 1) {
+        throw new Error(
+          `Invalid --confidence-threshold value: ${next}. Must be between 0 and 1.`,
+        );
+      }
+      out.confidenceThreshold = parsed;
       i++;
     } else if (a === "--source" && (next === "synthetic" || next === "replay")) {
       out.source = next;
@@ -269,6 +280,7 @@ interface BacktestConfig {
   challengeMinPoolAgeMs?: number;
   roundTripGasUsd?: number;
   min7dFeeOverGas?: number;
+  confidenceThreshold?: number;
 }
 
 export function runBacktestFromTicks(
@@ -288,8 +300,14 @@ export function runBacktestFromTicks(
   }
 
   let previousTvl = ticks[0]!.pool.tvlUsd;
-  let currentLowerBinId = ticks[0]!.pool.activeBinId - cfg.halfWidth;
-  let currentUpperBinId = ticks[0]!.pool.activeBinId + cfg.halfWidth;
+  // halfWidth is in BINS (live-engine semantics); v3 snapshots store the raw
+  // tick as activeBinId, so the range must scale by tickSpacing. Without this,
+  // a spacing-200 pool got a ±25-TICK range (±0.25%) where the live engine
+  // means ±25 BINS (±5%) — every drift then triggered the flat -20%
+  // out-of-range markdown in a churn loop (the fake -$754 "IL").
+  const ticksPerBin = Math.max(1, ticks[0]!.pool.binStep);
+  let currentLowerBinId = ticks[0]!.pool.activeBinId - cfg.halfWidth * ticksPerBin;
+  let currentUpperBinId = ticks[0]!.pool.activeBinId + cfg.halfWidth * ticksPerBin;
   let hasPosition = false;
   let positionSizeUsd = 0;
   let positionValueUsd = 0;
@@ -303,6 +321,8 @@ export function runBacktestFromTicks(
   let challengePeakEquityUsd = initialValue;
 
   const strategyReturns: Array<{ value: number; intervalMs: number }> = [];
+  // DEBUG_BT=1: per-decision tally (reason strings normalized) printed at end.
+  const decisionTally = new Map<string, number>();
   let previousEquityUsd = initialValue;
 
   // fees24hUsd is a rolling 24-hour aggregate. Accrue it over the actual
@@ -390,7 +410,7 @@ export function runBacktestFromTicks(
       confidenceThreshold: 0.65,
       trailingStopPct: 0.1,
       risk: {
-        confidenceThreshold: 0.65,
+        confidenceThreshold: cfg.confidenceThreshold ?? 0.65,
         maxRebalanceRangeBins: cfg.halfWidth * 2,
         stopLossPct: 0.15,
         maxPerPoolAllocationPct: 0.4,
@@ -426,6 +446,15 @@ export function runBacktestFromTicks(
     // accumulate toward the confirm-cycles EXIT.
     trailingStopBreaches = replay.trailingStopBreachCount;
     stopLossBreaches = replay.stopLossBreachCount;
+    if (process.env.DEBUG_BT === "1") {
+      const key =
+        replay.decision.action === "HOLD"
+          ? (replay.decision.reasoning ?? "HOLD").replace(/\d+\.\d+/g, "N").slice(0, 70)
+          : replay.riskApproved
+            ? `ENTER-approved size=${Math.round(replay.adjustedSizeUsd)}`
+            : `ENTER-risk-blocked: ${(replay.riskReason ?? "").replace(/\d+\.\d+/g, "N").slice(0, 55)}`;
+      decisionTally.set(key, (decisionTally.get(key) ?? 0) + 1);
+    }
     if (!replay.riskApproved) {
       previousTvl = tick.pool.tvlUsd;
       const equity = equityUsd();
@@ -447,8 +476,8 @@ export function runBacktestFromTicks(
           positionValueUsd = size;
           positionPeakUsd = size;
           cashUsd -= size;
-          currentLowerBinId = tick.pool.activeBinId - cfg.halfWidth;
-          currentUpperBinId = tick.pool.activeBinId + cfg.halfWidth;
+          currentLowerBinId = tick.pool.activeBinId - cfg.halfWidth * ticksPerBin;
+          currentUpperBinId = tick.pool.activeBinId + cfg.halfWidth * ticksPerBin;
           lastRebalanceTick = i;
           trailingStopBreaches = 0;
           stopLossBreaches = 0;
@@ -489,8 +518,8 @@ export function runBacktestFromTicks(
         rebalances++;
         totalIl += totalCost;
         cashUsd = Math.max(0, cashUsd - totalCost);
-        currentLowerBinId = tick.pool.activeBinId - cfg.halfWidth;
-        currentUpperBinId = tick.pool.activeBinId + cfg.halfWidth;
+        currentLowerBinId = tick.pool.activeBinId - cfg.halfWidth * ticksPerBin;
+        currentUpperBinId = tick.pool.activeBinId + cfg.halfWidth * ticksPerBin;
         lastRebalanceTick = i;
         let feesInNextWindow = 0;
         for (let j = i + 1; j < Math.min(i + cfg.minHoldTicks, ticks.length); j++) {
@@ -531,6 +560,11 @@ export function runBacktestFromTicks(
       : 10 * 60 * 1000;
   const ticksPerYear = (365 * 24 * 60 * 60 * 1000) / Math.max(averageIntervalMs, 1);
   const sharpe = variance > 0 ? (mean / Math.sqrt(variance)) * Math.sqrt(ticksPerYear) : 0;
+
+  if (process.env.DEBUG_BT === "1") {
+    const tally = [...decisionTally.entries()].sort((a, b) => b[1] - a[1]);
+    log.info(`  decision tally: ${JSON.stringify(tally)}`);
+  }
 
   return {
     poolAddress: ticks[0]!.pool.address,
@@ -676,6 +710,7 @@ async function runBacktest(argv: ReadonlyArray<string>): Promise<void> {
         challengeMinScore: args.challengeMinScore,
         roundTripGasUsd: args.roundTripGasUsd,
         min7dFeeOverGas: args.min7dFeeOverGas,
+        confidenceThreshold: args.confidenceThreshold,
       }),
     }));
 
