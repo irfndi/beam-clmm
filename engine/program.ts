@@ -8320,6 +8320,31 @@ export const program = Effect.gen(function* () {
         // it — every rejection used to write a 60-day warning memory, and those
         // warnings then suppressed the good-HOLD branch (hasRecentWarning),
         // feeding a self-sustaining spam loop that flooded vector memory.
+        // Hard tail cut: HOLD positions down >20% and OOR >24h never got cut
+        // because HOLD skips risk gates (see above). Force EXIT here.
+        // ponytail: 20%/24h covers the observed -99% tails (0x4722) with one check
+        if (decision.action === "HOLD" && decision.poolAddress) {
+          const tailPos = [...trackedPositions.values()].find(
+            (p) => p.poolAddress === decision.poolAddress && p.paperExitedAt == null && p.closedAt == null,
+          );
+          if (
+            tailPos?.depositedUsd &&
+            tailPos.depositedUsd > 0 &&
+            tailPos.outOfRangeSince != null &&
+            (tailPos.currentValueUsd - tailPos.depositedUsd) / tailPos.depositedUsd < -0.2 &&
+            Date.now() - tailPos.outOfRangeSince > 24 * 3600 * 1000
+          ) {
+            const lossPct = ((tailPos.currentValueUsd - tailPos.depositedUsd) / tailPos.depositedUsd) * 100;
+            const oorH = (Date.now() - tailPos.outOfRangeSince) / 3600000;
+            decision = {
+              ...decision,
+              action: "EXIT",
+              confidence: 1,
+              reasoning: `[hard-stop] ${lossPct.toFixed(1)}% + ${oorH.toFixed(1)}h OOR — tail cut`,
+              positionId: tailPos.positionId,
+            };
+          }
+        }
         // Measured 24h price range from our own snapshots (gate 4a). Skipped
         // when the window has <4 samples — a fresh pool has no history yet.
         const observedRange = yield* db
