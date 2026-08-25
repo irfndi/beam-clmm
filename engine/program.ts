@@ -7432,7 +7432,7 @@ export const program = Effect.gen(function* () {
           // a pool. Computed only for harvest-book candidates to bound the
           // snapshot query; a load failure fails CLOSED (rule 11: downgrade
           // to HOLD rather than guess from stale data).
-          const persistenceDecision =
+          let persistenceDecision =
             config.challengeMode === true && harvestBookPools.has(poolAddress.toLowerCase())
               ? yield* db
                   .getSnapshots(
@@ -7456,6 +7456,22 @@ export const program = Effect.gen(function* () {
                     ),
                   )
               : { persistent: true, reason: "not a challenge entry candidate" };
+          // 5m chasing fast lane: small-account $30-200 bypass 4/7 persistence on spike
+          // ponytail: one check, needs gecko m5 + volAuth + TVL + vol gate already passing
+          if (
+            !persistenceDecision.persistent &&
+            config.challengeMode === true &&
+            config.challenge5mSpikeEnabled === true &&
+            pool.volume5mUsd != null &&
+            pool.volume5mUsd >= (config.challenge5mMinVolumeUsd ?? 2000) &&
+            pool.volume24hUsd > 0 &&
+            pool.volume5mUsd >= (pool.volume24hUsd / 288) * (config.challenge5mMultiplier ?? 3)
+          ) {
+            persistenceDecision = {
+              persistent: true,
+              reason: `5m spike $${pool.volume5mUsd.toFixed(0)} >= ${(pool.volume24hUsd / 288).toFixed(0)}*${config.challenge5mMultiplier ?? 3} — fast lane`,
+            };
+          }
           // Exit-route proof (rule 5): never enter a pool whose legs→ETH exit
           // is not executable. Quoted + eth_call-simulated at realistic size
           // by the adapter; computed only for harvest-book candidates to

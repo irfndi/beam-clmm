@@ -96,6 +96,7 @@ export type FetchLike = (input: string | URL | Request, init?: RequestInit) => P
 export interface GeckoPoolStats {
   readonly tvlUsd: number | null;
   readonly volume24hUsd: number;
+  readonly volume5mUsd?: number | null | undefined;
   readonly fees24hUsd: number;
   readonly basePriceUsd: number | null;
   readonly quotePriceUsd: number | null;
@@ -148,6 +149,7 @@ export function parseGeckoPoolStats(raw: unknown, baseFeeRate: number): GeckoPoo
 
   const volumeUsd = attrs["volume_usd"];
   const volume24hUsd = isObject(volumeUsd) ? readFiniteNumber(volumeUsd["h24"]) : null;
+  const volume5mUsd = isObject(volumeUsd) ? readFiniteNumber(volumeUsd["m5"]) : null;
   // Volume is the one field every downstream gate (authenticity, fee/IL) needs;
   // non-positive volume is malformed data (a live pool never reports ≤0 24h
   // volume) — reject the stats ENTIRELY rather than marking garbage measured.
@@ -167,6 +169,7 @@ export function parseGeckoPoolStats(raw: unknown, baseFeeRate: number): GeckoPoo
   return {
     tvlUsd: reserveUsd !== null && reserveUsd <= 0 ? null : reserveUsd,
     volume24hUsd,
+    volume5mUsd,
     fees24hUsd: volume24hUsd * effectiveFeeRate,
     basePriceUsd: readFiniteNumber(attrs["base_token_price_usd"]),
     quotePriceUsd: readFiniteNumber(attrs["quote_token_price_usd"]),
@@ -193,6 +196,7 @@ export function enrichPoolFromGecko(pool: PoolState, stats: GeckoPoolStats): Poo
     ...pool,
     tvlUsd: tvlUsd !== null && tvlUsd > 0 ? tvlUsd : pool.tvlUsd,
     volume24hUsd: stats.volume24hUsd,
+    volume5mUsd: stats.volume5mUsd ?? pool.volume5mUsd,
     fees24hUsd: stats.fees24hUsd,
     apr: aprAnnualizedPct,
     hasFarm: null,

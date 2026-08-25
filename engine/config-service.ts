@@ -87,6 +87,10 @@ export interface AppConfig {
   readonly challengeUniverseRefreshMs?: number;
   readonly challengeHardFloorPct?: number;
   readonly challengeLossCooldownMs?: number;
+  /** 5m chasing for small accounts (CHALLENGE_5M_SPIKE): bypass fee persistence on spike. */
+  readonly challenge5mSpikeEnabled?: boolean;
+  readonly challenge5mMinVolumeUsd?: number;
+  readonly challenge5mMultiplier?: number;
   // ── Fee-truth two-seat strategy knobs (all adjustable, defaults per spec) ──
   /** Minimum full price-range width for an entry (fraction of price, both
    *  directions). Env ENTRY_MIN_RANGE_PCT; default 0.20 (>= 20% around price). */
@@ -732,6 +736,13 @@ const loadConfig = Effect.gen(function* () {
     3_600_000,
     6 * 3_600_000,
   );
+  // 5m chasing: small-account fast lane (bypass 4/7 persistence on spike).
+  // Disabled by default — enable with CHALLENGE_5M_SPIKE=true for $30-200 books.
+  const challenge5mSpikeEnabled = yield* Config.boolean("CHALLENGE_5M_SPIKE").pipe(
+    Effect.orElseSucceed(() => false),
+  );
+  const challenge5mMinVolumeUsd = yield* validatedNumber("CHALLENGE_5M_MIN_VOLUME_USD", 0, 2000);
+  const challenge5mMultiplier = yield* validatedNumber("CHALLENGE_5M_MULTIPLIER", 0, 3);
 
   // WALLET_PRIVATE_KEY (env / .env) takes precedence; otherwise fall back to the local
   // keystore written by `beam wallet generate|import`, so a generated wallet actually
@@ -1764,6 +1775,9 @@ const loadConfig = Effect.gen(function* () {
     challengeUniverseRefreshMs,
     challengeHardFloorPct,
     challengeLossCooldownMs,
+    challenge5mSpikeEnabled,
+    challenge5mMinVolumeUsd,
+    challenge5mMultiplier,
     minFeeIlRatio,
     enterRoundTripGasUsd,
     enterMin7dFeeOverGas,

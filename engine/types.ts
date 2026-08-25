@@ -129,6 +129,7 @@ export interface PoolState {
   tokenYSymbol: string;
   tvlUsd: number;
   volume24hUsd: number;
+  volume5mUsd?: number | null | undefined;
   fees24hUsd: number;
   apr: number;
   activeBinId: number;
