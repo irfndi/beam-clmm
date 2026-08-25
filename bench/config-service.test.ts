@@ -451,7 +451,7 @@ describe("ConfigService CHALLENGE_MODE presets", () => {
     vi.stubEnv("MIN_FEE_IL_RATIO", undefined);
     vi.stubEnv("MAX_ENTRY_SIZE_USD", undefined);
     const cfg = await loadConfig();
-    expect(cfg.minPoolTvlUsd).toBe(1_000);
+    expect(cfg.minPoolTvlUsd).toBe(10_000);
     expect(cfg.maxOpenPositions).toBe(4);
     expect(cfg.maxPositionsPerPool).toBe(2);
     expect(cfg.feeClaimIntervalMs).toBe(3_600_000);

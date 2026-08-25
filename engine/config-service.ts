@@ -911,8 +911,9 @@ const loadConfig = Effect.gen(function* () {
   const minPoolTvlUsd = yield* validatedNumber(
     "MIN_POOL_TVL_USD",
     0,
-    // CHALLENGE_MODE: small challenge pools qualify at $1K instead of $50K.
-    challengeMode ? 1_000 : 50_000,
+    // CHALLENGE_MODE: small challenge pools qualify at $10K (was $1K — 0xa0de
+    // $3.2K BASECAT slipped through and -100%d). Still below the 50K live floor.
+    challengeMode ? 10_000 : 50_000,
   );
   const minFeeIlRatio = yield* validatedNumber(
     "MIN_FEE_IL_RATIO",
