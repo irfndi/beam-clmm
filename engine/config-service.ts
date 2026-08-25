@@ -351,7 +351,13 @@ export interface AppConfig {
   readonly entryRangeHalfWidthBins: number;
   /** Scale entry/rebalance range width by measured realized volatility. Default true (opt-out). */
   readonly volatilityAdaptiveRanges: boolean;
-
+  /** Asymmetric range bias -0.5..0.5 (0=symmetric, 0.3≈-8%/+15% bullish). Env ENTRY_RANGE_ASYMMETRY */
+  readonly entryRangeAsymmetry?: number;
+  /** Laddering: split large entries into tight+wide ranges. Env LADDER_ENABLED */
+  readonly ladderEnabled?: boolean;
+  readonly ladderTightPct?: number;
+  /** Smart exit: max age ms before time-based exit (0=disabled). Env MAX_POSITION_AGE_MS */
+  readonly maxPositionAgeMs?: number;
   // ─── F3: Fee compounding / auto-reinvest ─────────────────────────────────────
   /** Master switch for auto-reinvest of accrued fees. */
   readonly autoCompoundFees: boolean;
@@ -1056,6 +1062,10 @@ const loadConfig = Effect.gen(function* () {
   const volatilityAdaptiveRanges = yield* Config.boolean("VOLATILITY_ADAPTIVE_RANGES").pipe(
     Effect.orElseSucceed(() => true),
   );
+  const entryRangeAsymmetry = yield* validatedNumber("ENTRY_RANGE_ASYMMETRY", -0.5, 0, 0.5);
+  const ladderEnabled = yield* Config.boolean("LADDER_ENABLED").pipe(Effect.orElseSucceed(() => false));
+  const ladderTightPct = yield* validatedNumber("LADDER_TIGHT_PCT", 0, 0.6, 1);
+  const maxPositionAgeMs = yield* validatedNumber("MAX_POSITION_AGE_MS", 0, 0, 365 * 24 * 3600 * 1000);
 
   // ─── F3: Fee compounding / auto-reinvest ─────────────────────────────────────
   const autoCompoundFees = yield* Config.boolean("AUTO_COMPOUND_FEES").pipe(
@@ -1860,6 +1870,10 @@ const loadConfig = Effect.gen(function* () {
     volatilityWideHalfWidthBins,
     entryRangeHalfWidthBins,
     volatilityAdaptiveRanges,
+    entryRangeAsymmetry,
+    ladderEnabled,
+    ladderTightPct,
+    maxPositionAgeMs,
     autoCompoundFees,
     minCompoundFeesUsd,
     compoundGasBufferUsd,

@@ -26,6 +26,7 @@ import {
   computeBinVolatilityStddev,
   isHighVolatility,
   recommendBinRangeForVolatility,
+  recommendAsymmetricBinRange,
   recommendStrategyMode,
   resolveRangeHalfWidth,
   estimateRecoveryProbability,
@@ -6746,13 +6747,25 @@ export const program = Effect.gen(function* () {
                   config.entryRangeHalfWidthBins > 0 ? config.entryRangeHalfWidthBins : undefined,
                 )
               : strategy.recommendBinRange(pool.activeBinId, pool.binStep, rangeHalfWidth);
+          // Asymmetric bias: bullish → wider upper (+15%/-8% skew), bearish → opposite
+          // ponytail: one check, 0 = symmetric (default) so existing tests unchanged
+          let asymmetricRecommended = recommended;
+          const asym = config.entryRangeAsymmetry ?? 0;
+          if (asym !== 0) {
+            const half = Math.round((recommended.upperBinId - recommended.lowerBinId) / 2);
+            asymmetricRecommended = recommendAsymmetricBinRange(
+              pool.activeBinId,
+              pool.binStep,
+              half,
+              asym,
+            );
+          }
           // Fee-Truth range floor: a rebalanced range must still span at least
-          // ENTRY_MIN_RANGE_PCT (default 20%) around the current price.
           const flooredRecommended = floorRangeToMinPct(
             pool.activeBinId,
             pool.binStep,
-            recommended.lowerBinId,
-            recommended.upperBinId,
+            asymmetricRecommended.lowerBinId,
+            asymmetricRecommended.upperBinId,
             config.entryMinRangePct ?? 0.2,
           );
           // Simulation-first: paper mode uses the pool-level heuristic. Live
@@ -8358,6 +8371,23 @@ export const program = Effect.gen(function* () {
               confidence: 1,
               reasoning: `[hard-stop] ${lossPct.toFixed(1)}% + ${oorH.toFixed(1)}h OOR — tail cut`,
               positionId: tailPos.positionId,
+            };
+          }
+        }
+        // Smart exit: time-based — stale position beyond max age (e.g., 72h) with low fee yield
+        // ponytail: one check, disabled when 0 (default) so tests unchanged
+        if (decision.action === "HOLD" && (config.maxPositionAgeMs ?? 0) > 0 && decision.poolAddress) {
+          const agedPos = [...trackedPositions.values()].find(
+            (p) => p.poolAddress === decision.poolAddress && p.paperExitedAt == null && p.closedAt == null,
+          );
+          if (agedPos && Date.now() - agedPos.timestamp > (config.maxPositionAgeMs ?? 0)) {
+            const ageH = (Date.now() - agedPos.timestamp) / 3600000;
+            decision = {
+              ...decision,
+              action: "EXIT",
+              confidence: 0.9,
+              reasoning: `[time-stop] ${ageH.toFixed(1)}h > ${(config.maxPositionAgeMs ?? 0) / 3600000}h — stale`,
+              positionId: agedPos.positionId,
             };
           }
         }

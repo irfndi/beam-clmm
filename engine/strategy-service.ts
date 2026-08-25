@@ -382,6 +382,24 @@ export function recommendBinRangeForVolatility(
   };
 }
 
+/** Asymmetric range for directional bias: bullish → wider upper, bearish → wider lower.
+ *  asymmetry in [-0.5,0.5], 0 = symmetric, 0.3 ≈ -8%/+15% skew. */
+export function recommendAsymmetricBinRange(
+  activeBinId: number,
+  binStep: number,
+  halfWidth: number,
+  asymmetry: number,
+): BinRangeRecommendation {
+  const clamped = Math.max(-0.5, Math.min(0.5, asymmetry));
+  const lowerHalf = Math.round(halfWidth * (1 - clamped));
+  const upperHalf = Math.round(halfWidth * (1 + clamped));
+  const align = (t: number): number => Math.round(t / binStep) * binStep;
+  let lower = Math.max(TickMath.MIN_TICK, align(activeBinId - lowerHalf));
+  let upper = Math.min(TickMath.MAX_TICK, align(activeBinId + upperHalf));
+  if (upper <= lower) upper = Math.min(TickMath.MAX_TICK, lower + binStep);
+  return { lowerBinId: lower, upperBinId: upper };
+}
+
 // ─── Wave 9: Volatility-adaptive range width ─────────────────────────────────
 
 /** σ of active-bin moves at which the baseline half-width is calibrated. */
