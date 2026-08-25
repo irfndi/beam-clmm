@@ -58,6 +58,7 @@ import {
   computeClmmValueUsd,
   computeHodlValueUsd,
   computeRealizedPnlUsd,
+  computeNetRealizedPnlUsd,
 } from "./pnl.js";
 import { buildRewardClaimMetadata, summarizeRewardClaim } from "./rewards.js";
 import { errorReporter } from "./error-reporter.js";
@@ -1227,6 +1228,7 @@ export function executePaper(
     strategy: StrategyApi;
     entryStrategyMode: EntryStrategyMode;
     entryRangeHalfWidth?: number;
+    paperGasCostUsd?: number;
   },
   decision: AgentDecision,
   pool: {
@@ -1330,12 +1332,16 @@ export function executePaper(
         };
       }
       if (pos) {
-        const realizedPnlUsd = computeRealizedPnlUsd(
-          pos.currentValueUsd,
-          pos.cumulativeFeesClaimedUsd,
-          pos.depositedUsd,
-          pos.cumulativeRewardsClaimedUsd,
-        );
+        // ponytail: L2 gas (enter+exit); 0.5 default covers Base/Robinhood (200k gas + L1 data)
+        const gasCostUsd = (deps.paperGasCostUsd ?? 0.5) * 2;
+        const realizedPnlUsd = computeNetRealizedPnlUsd({
+          finalValueUsd: pos.currentValueUsd,
+          cumulativeFeesClaimedUsd: pos.cumulativeFeesClaimedUsd,
+          cumulativeRewardsClaimedUsd: pos.cumulativeRewardsClaimedUsd ?? 0,
+          costBasisUsd: pos.depositedUsd,
+          settlementCostUsd: 0,
+          executionCostUsd: gasCostUsd,
+        });
         yield* db
           .savePositionEvent({
             id: randomUUID(),
@@ -4363,7 +4369,7 @@ export const program = Effect.gen(function* () {
         let executionError: string | undefined = undefined;
         if (config.paperTrading) {
           const paperResult = yield* executePaper(
-            { db, trackedPositions, strategy, entryStrategyMode, entryRangeHalfWidth },
+            { db, trackedPositions, strategy, entryStrategyMode, entryRangeHalfWidth, paperGasCostUsd: config.paperGasCostUsd },
             decision,
             candidate.pool,
             signalTimestamp,
@@ -8659,6 +8665,7 @@ export const program = Effect.gen(function* () {
               strategy,
               entryStrategyMode,
               entryRangeHalfWidth: rangeHalfWidth,
+              paperGasCostUsd: config.paperGasCostUsd,
             },
             decision,
             pool,

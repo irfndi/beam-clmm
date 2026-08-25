@@ -172,6 +172,9 @@ export interface AppConfig {
   readonly minRebalanceNetBenefitUsd: number;
   readonly confidenceThreshold: number;
   readonly paperPortfolioUsd: number;
+  /** Cost per simulated tx in paper mode (USD) — deducted from paper PnL
+   *  for profitability truth (PAPER_GAS_COST_USD). L2 realistic: ~$0.50. */
+  readonly paperGasCostUsd: number;
   readonly minBinUtilization: number;
   readonly maxRebalanceRangeBins: number;
   readonly watchlistPools: ReadonlyArray<string>;
@@ -929,6 +932,8 @@ const loadConfig = Effect.gen(function* () {
   const minRebalanceNetBenefitUsd = yield* validatedNumber("MIN_REBALANCE_NET_BENEFIT_USD", 0, 10);
   const confidenceThreshold = yield* validatedNumber("CONFIDENCE_THRESHOLD", 0, 0.65);
   const paperPortfolioUsd = yield* validatedNumber("PAPER_PORTFOLIO_USD", 1, 10_000);
+  // ponytail: 0.50 covers Base/Robinhood L2 (200k gas + L1 data); raise if L1 mainnet
+  const paperGasCostUsd = yield* validatedNumber("PAPER_GAS_COST_USD", 0, 0.5, 100);
   const minBinUtilization = yield* validatedNumber("MIN_BIN_UTILIZATION", 0, 0.3);
   const maxRebalanceRangeBins = yield* validatedNumber("MAX_REBALANCE_RANGE_BINS", 1, 50);
   const watchlistPoolsRaw = yield* Config.string("WATCHLIST_POOLS").pipe(
@@ -1769,6 +1774,7 @@ const loadConfig = Effect.gen(function* () {
     minRebalanceNetBenefitUsd,
     confidenceThreshold,
     paperPortfolioUsd,
+    paperGasCostUsd,
     minBinUtilization,
     maxRebalanceRangeBins,
     watchlistPools,

@@ -1686,10 +1686,10 @@ describe("program — multiple positions per pool", () => {
     const closedA = closed[0]!;
     expect(closedA.closedAt).not.toBeNull();
     // Realized PnL = final value (600: the HODL mark after the price halved
-    // the X leg) − basis. A4 paper fee accrual is active for this pool
+    // the X leg) − basis − gas 1.0 (2*0.5 L2). A4 paper fee accrual is active for this pool
     // (fees24h 300 > 0) but A is OUT of range (inRange = 0) so it accrued
-    // nothing — this −400 realized pin is unaffected by the accrual.
-    expect(closedA.realizedPnlUsd).toBeCloseTo(-400, 0);
+    // nothing — this −401 realized pin is unaffected by the accrual (only gas).
+    expect(closedA.realizedPnlUsd).toBeCloseTo(-401, 0);
     // A's OOR cycles accumulated independently; B never left range.
     expect(closedA.oorCycleCount).toBeGreaterThanOrEqual(1);
     expect(active[0]!.oorCycleCount).toBe(0);

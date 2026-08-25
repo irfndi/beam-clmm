@@ -51,6 +51,7 @@ function buildLayer(
     minRebalanceNetBenefitUsd: 10,
     confidenceThreshold: 0.65,
     paperPortfolioUsd: 10_000,
+    paperGasCostUsd: 0.5,
     minBinUtilization: 0.3,
     maxRebalanceRangeBins: 50,
     watchlistPools: [],

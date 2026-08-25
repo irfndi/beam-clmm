@@ -627,8 +627,8 @@ describe("paper lifecycle PnL accounting", () => {
     expect(outcome.closed).toHaveLength(1);
 
     const closed = outcome.closed[0]!;
-    // realized = final value 1100 + fees 25 − basis 1000 = 125
-    expect(closed.realizedPnlUsd).toBeCloseTo(125, 8);
+    // realized = final value 1100 + fees 25 − basis 1000 − gas 1.0 (2*0.5 L2) = 124
+    expect(closed.realizedPnlUsd).toBeCloseTo(124, 8);
     expect(closed.closedAt).not.toBeNull();
 
     expect(outcome.events.map((e) => e.event)).toEqual(["ENTER", "CLAIM", "EXIT"]);
