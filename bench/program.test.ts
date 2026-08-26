@@ -20,10 +20,12 @@ import {
   shouldHoldForSupervisedApproval,
   shouldPenalizeAppliedProposalDenial,
   snapshotBucketTimestamp,
+  paperSwapProbeInput,
 } from "../engine/program.js";
 import type { ProposalBackoff } from "../engine/proposal-backoff.js";
-import type { AgentDecision } from "../engine/types.js";
+import type { AgentDecision, PoolState } from "../engine/types.js";
 import { ConfigService } from "../engine/config-service.js";
+import { NATIVE_MINT } from "../engine/constants.js";
 import {
   AdapterService,
   StrategyService,
@@ -48,6 +50,39 @@ async function run<T, E, R>(
   // v4 layer building is async (memoized provides) — runSync is no longer valid.
   return Effect.runPromise(Effect.provide(effect, layer));
 }
+
+describe("paper swap dry-run sizing", () => {
+  const pool: PoolState = {
+    address: `0x${"1".repeat(64)}`,
+    tokenX: NATIVE_MINT,
+    tokenY: "0xb20000000000000000000078ee7ce2fe4908108c",
+    tokenXSymbol: "ETH",
+    tokenYSymbol: "TOKEN",
+    tvlUsd: 100_000,
+    volume24hUsd: 10_000,
+    fees24hUsd: 30,
+    apr: 10,
+    activeBinId: -205_656,
+    binStep: 400,
+    currentPrice: 1,
+    tokenXDecimals: 18,
+    tokenYDecimals: 8,
+    tokenXPriceUsd: 2_500,
+    tokenYPriceUsd: 0.25,
+    timestamp: 1,
+  };
+
+  it("uses the selected leg's actual USD price and decimals", () => {
+    expect(paperSwapProbeInput(pool, 25)).toEqual({
+      leg: pool.tokenY,
+      amountAtomic: 10_000_000_000n,
+    });
+  });
+
+  it("skips a probe when the selected leg has no trustworthy price", () => {
+    expect(paperSwapProbeInput({ ...pool, tokenYPriceUsd: 0 }, 25)).toBeNull();
+  });
+});
 
 describe("Program integration", () => {
   it("recovers only planned operations created before the current process", async () => {

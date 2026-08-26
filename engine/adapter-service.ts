@@ -289,7 +289,27 @@ export interface V4PoolKey {
   readonly tickSpacing: number;
   readonly hooks: Address;
 }
+
+export function isResolvedV4PoolKeyValid(key: V4PoolKey): boolean {
+  const zero = "0x0000000000000000000000000000000000000000";
+  const currency0 = key.currency0.toLowerCase();
+  const currency1 = key.currency1.toLowerCase();
+  return (
+    isAddress(key.currency0) &&
+    isAddress(key.currency1) &&
+    isAddress(key.hooks) &&
+    currency1 !== zero &&
+    currency0 !== currency1 &&
+    Number.isInteger(key.fee) &&
+    key.fee >= 0 &&
+    key.fee <= 0xffffff &&
+    Number.isInteger(key.tickSpacing) &&
+    key.tickSpacing > 0
+  );
+}
+
 export const V4_POOL_REGISTRY: Record<string, V4PoolKey> = {};
+const VERIFIED_V4_POOL_IDS = new Set<string>();
 
 /**
  * Register a v4 pool key by poolId (lowercase 0x-hex). v4 pools have no
@@ -299,6 +319,12 @@ export const V4_POOL_REGISTRY: Record<string, V4PoolKey> = {};
  */
 export function registerV4Pool(poolId: string, key: V4PoolKey): void {
   V4_POOL_REGISTRY[poolId.toLowerCase()] = key;
+}
+
+function registerVerifiedV4Pool(poolId: string, key: V4PoolKey): void {
+  const id = poolId.toLowerCase();
+  V4_POOL_REGISTRY[id] = key;
+  VERIFIED_V4_POOL_IDS.add(id);
 }
 
 // ─── Minimal ABIs (only the functions this adapter calls) ────────────────────
@@ -387,6 +413,28 @@ function tickToPrice(tick: number): number {
 function sqrtPriceX96ToPrice(sqrtPriceX96: bigint): number {
   const ratio = Number(sqrtPriceX96) / 2 ** 96;
   return ratio * ratio;
+}
+
+/** Convert a raw token1/token0 atomic-unit ratio into base tokens per mint. */
+export function rawPoolPriceToBasePerMint(
+  rawPrice: number,
+  mintIsToken0: boolean,
+  mintDecimals: number,
+  baseDecimals: number,
+): number {
+  const scale = 10 ** (mintDecimals - baseDecimals);
+  return mintIsToken0 ? rawPrice * scale : scale / rawPrice;
+}
+
+/** Pick the quote with the greatest exact output; null when none succeeded. */
+export function selectHighestOutputQuote<T extends { readonly outAmountAtomic: bigint }>(
+  quotes: ReadonlyArray<T>,
+): T | null {
+  let best: T | null = null;
+  for (const quote of quotes) {
+    if (best === null || quote.outAmountAtomic > best.outAmountAtomic) best = quote;
+  }
+  return best;
 }
 
 function settledFiniteNumber(result: PromiseSettledResult<number>): number | undefined {
@@ -1645,10 +1693,13 @@ export const AdapterLive = Layer.effect(
      * misalign range math and mint against the wrong pool identity, so
      * execution NEVER trusts the approximation when the pool is on-chain.
      */
-    async function resolveV4PoolKey(poolId: string): Promise<V4PoolKey> {
+    async function resolveV4PoolKey(
+      poolId: string,
+      allowApproximateFallback = true,
+    ): Promise<V4PoolKey> {
       const id = poolId.toLowerCase();
       const existing = V4_POOL_REGISTRY[id];
-      if (existing && existing.tickSpacing !== 400 && existing.fee > 0) {
+      if (existing && VERIFIED_V4_POOL_IDS.has(id)) {
         return existing;
       }
       // bytes25: first 25 bytes of the poolId, right-padded to a 32-byte word.
@@ -1658,20 +1709,11 @@ export const AdapterLive = Layer.effect(
         const [key] = await pm.read.poolKeys([truncated]);
         if (!key) throw new Error("poolKeys returned empty key");
         const [c0, c1, feeRaw, spacingRaw, hooksRaw] = key;
-        // SAFETY (on-chain audit): poolKeys returns ALL-ZERO tuples for some
-        // live pools — never register a garbage key over a good one. A zero
-        // address or zero fee means the lookup failed; fail closed.
-        const ZERO = "0x0000000000000000000000000000000000000000";
-        if (
-          !c0 ||
-          !c1 ||
-          !hooksRaw ||
-          c0.toLowerCase() === ZERO ||
-          c1.toLowerCase() === ZERO ||
-          Number(feeRaw) <= 0 ||
-          Number(spacingRaw) <= 0
-        ) {
-          throw new Error("poolKeys returned an invalid/zero key");
+        // SAFETY (on-chain audit): poolKeys can return an all-zero tuple for
+        // unknown ids. Native ETH is legitimately address(0), but v4 sorts it
+        // as currency0; hookless pools and zero-fee pools are also valid.
+        if (!c0 || !c1 || !hooksRaw) {
+          throw new Error("poolKeys returned an incomplete key");
         }
         const resolved: V4PoolKey = {
           currency0: getAddress(c0),
@@ -1680,10 +1722,13 @@ export const AdapterLive = Layer.effect(
           tickSpacing: Number(spacingRaw),
           hooks: getAddress(hooksRaw),
         };
-        registerV4Pool(id, resolved);
+        if (!isResolvedV4PoolKeyValid(resolved)) {
+          throw new Error("poolKeys returned an invalid/zero key");
+        }
+        registerVerifiedV4Pool(id, resolved);
         return resolved;
       } catch (e) {
-        if (existing) return existing;
+        if (existing && allowApproximateFallback) return existing;
         throw new Error(`v4 pool ${id} key unresolved on-chain (${underlyingErrorMessage(e)})`);
       }
     }
@@ -1782,9 +1827,7 @@ export const AdapterLive = Layer.effect(
             ).catch(() => null)
           : null;
       const v3States = await v3PoolStates(v3).catch(() => new Map<string, PoolState>());
-      const v3Bins = await v3BinArrays(v3).catch(
-        () => new Map<string, BinArray | null>(),
-      );
+      const v3Bins = await v3BinArrays(v3).catch(() => new Map<string, BinArray | null>());
       for (const [i, entry] of resolvedV4.entries()) {
         const slot0Result = v4Results?.[i * 2];
         const liquidityResult = v4Results?.[i * 2 + 1];
@@ -1840,8 +1883,7 @@ export const AdapterLive = Layer.effect(
 
     /** Pool state for a v4 pool (poolId) via the StateView — feeds the pure
      *  builders. PoolKey comes from the registry (poolId is one-way). */
-    async function v4PoolQuoteState(poolId: string): Promise<PoolQuoteState> {
-      const key = await resolveV4PoolKey(poolId);
+    async function v4PoolQuoteStateForKey(poolId: string, key: V4PoolKey): Promise<PoolQuoteState> {
       const stateView = v4StateView();
       const poolIdHexValue = poolIdHex(poolId.toLowerCase());
       const [slot0, liquidity] = await Promise.all([
@@ -1863,6 +1905,14 @@ export const AdapterLive = Layer.effect(
         tickCurrent: Number(slot0[1]),
         liquidity,
       };
+    }
+
+    async function v4PoolQuoteState(
+      poolId: string,
+      allowApproximateFallback = true,
+    ): Promise<PoolQuoteState> {
+      const key = await resolveV4PoolKey(poolId, allowApproximateFallback);
+      return v4PoolQuoteStateForKey(poolId, key);
     }
 
     /** Find a direct v3 pool between two mints (native maps to WETH9). All
@@ -1936,22 +1986,25 @@ export const AdapterLive = Layer.effect(
     }
 
     /** Find a registered v4 pool for a token pair (either order). */
-    function findV4PoolForPair(
+    function findV4PoolsForPair(
       tokenA: string,
       tokenB: string,
-    ): { poolId: string; key: V4PoolKey } | null {
+    ): ReadonlyArray<{ poolId: string; key: V4PoolKey }> {
       const a = isNative(tokenA)
         ? "0x0000000000000000000000000000000000000000"
         : getAddress(tokenA).toLowerCase();
       const b = isNative(tokenB)
         ? "0x0000000000000000000000000000000000000000"
         : getAddress(tokenB).toLowerCase();
+      const matches: Array<{ poolId: string; key: V4PoolKey }> = [];
       for (const [poolId, key] of Object.entries(V4_POOL_REGISTRY)) {
         const k0 = key.currency0.toLowerCase();
         const k1 = key.currency1.toLowerCase();
-        if ((k0 === a && k1 === b) || (k0 === b && k1 === a)) return { poolId, key };
+        if ((k0 === a && k1 === b) || (k0 === b && k1 === a)) {
+          matches.push({ poolId, key });
+        }
       }
-      return null;
+      return matches;
     }
 
     function usdOf(amountAtomic: bigint, decimals: number, priceUsd: number): number {
@@ -2174,24 +2227,41 @@ export const AdapterLive = Layer.effect(
       tokenOut: string,
       amountIn: bigint,
     ): Promise<{ outAmountAtomic: bigint; route: SwapRoute }> {
-      const v4 = findV4PoolForPair(tokenIn, tokenOut);
-      if (v4) {
-        const state = await v4PoolQuoteState(v4.poolId);
-        const inputAddr = isNative(tokenIn)
-          ? "0x0000000000000000000000000000000000000000"
-          : getAddress(tokenIn).toLowerCase();
-        const zeroForOne = inputAddr === state.token0.toLowerCase();
-        const { outAmountAtomic } = await quoteSwapInternal(state, zeroForOne, amountIn);
+      const v4InputAddress = isNative(tokenIn)
+        ? "0x0000000000000000000000000000000000000000"
+        : getAddress(tokenIn).toLowerCase();
+      const v4Quotes = await Promise.all(
+        findV4PoolsForPair(tokenIn, tokenOut).map(async ({ poolId }) => {
+          try {
+            // Execution must use an on-chain-resolved PoolKey. Krystal's
+            // fee/tickSpacing values are display approximations and may hash
+            // to a different pool. Quote every exact-key candidate and keep
+            // the best output so a zombie first-registration cannot mask a
+            // healthy pool for the same pair.
+            const key = await resolveV4PoolKey(poolId, false);
+            const state = await v4PoolQuoteStateForKey(poolId, key);
+            const zeroForOne = v4InputAddress === state.token0.toLowerCase();
+            const { outAmountAtomic } = await quoteSwapInternal(state, zeroForOne, amountIn);
+            return { poolId, key, state, zeroForOne, outAmountAtomic };
+          } catch {
+            return null;
+          }
+        }),
+      );
+      const v4 = selectHighestOutputQuote(
+        v4Quotes.filter((quote): quote is NonNullable<typeof quote> => quote !== null),
+      );
+      if (v4 !== null) {
         return {
-          outAmountAtomic,
+          outAmountAtomic: v4.outAmountAtomic,
           route: {
             router: "universalrouter",
             target: UNIVERSAL_ROUTER,
             poolId: v4.poolId,
             poolKey: v4.key,
-            zeroForOne,
-            decimals0: state.token0Decimals,
-            decimals1: state.token1Decimals,
+            zeroForOne: v4.zeroForOne,
+            decimals0: v4.state.token0Decimals,
+            decimals1: v4.state.token1Decimals,
           },
         };
       }
@@ -2200,8 +2270,10 @@ export const AdapterLive = Layer.effect(
         throw new Error(`no direct v3 or registered v4 pool for ${tokenIn} -> ${tokenOut}`);
       }
       const state = await v3PoolQuoteState(v3.pool);
-      const inputAddr = isNative(tokenIn) ? WETH9.toLowerCase() : getAddress(tokenIn).toLowerCase();
-      const zeroForOne = inputAddr === state.token0.toLowerCase();
+      const v3InputAddress = isNative(tokenIn)
+        ? WETH9.toLowerCase()
+        : getAddress(tokenIn).toLowerCase();
+      const zeroForOne = v3InputAddress === state.token0.toLowerCase();
       const { outAmountAtomic } = await quoteSwapInternal(state, zeroForOne, amountIn);
       return {
         outAmountAtomic,
@@ -2733,9 +2805,12 @@ export const AdapterLive = Layer.effect(
             if (liquidity <= MIN_POOL_LIQUIDITY_FOR_PRICE) continue;
             const rawPrice = sqrtPriceX96ToPrice(slot0[0]); // token1/token0 wei ratio
             const baseDecimals = cand.base === WETH9 ? 18 : 6;
-            const scale = 10 ** (decimals - baseDecimals);
-            const priceInBase =
-              token0.toLowerCase() === mintAddr ? rawPrice * scale : 1 / (rawPrice * scale);
+            const priceInBase = rawPoolPriceToBasePerMint(
+              rawPrice,
+              token0.toLowerCase() === mintAddr,
+              decimals,
+              baseDecimals,
+            );
             const priceUsd = cand.base === WETH9 ? priceInBase * wethUsd : priceInBase;
             if (priceUsd > 0 && (best === null || liquidity > best.liquidity)) {
               best = { priceUsd, liquidity };
@@ -2753,9 +2828,7 @@ export const AdapterLive = Layer.effect(
      *  multicall per pool), decoded once and shared between the PoolState
      *  and BinArray builders. Pools whose reads fail are absent from the
      *  result — callers treat that as a skip, never as "pool gone". */
-    async function v3PoolCoreStates(
-      poolAddresses: ReadonlyArray<Address>,
-    ): Promise<
+    async function v3PoolCoreStates(poolAddresses: ReadonlyArray<Address>): Promise<
       ReadonlyMap<
         string,
         {
@@ -2865,9 +2938,7 @@ export const AdapterLive = Layer.effect(
         }));
       });
       const lensResults =
-        lensCalls.length > 0
-          ? await aggregate3Read(lensCalls).catch(() => null)
-          : null;
+        lensCalls.length > 0 ? await aggregate3Read(lensCalls).catch(() => null) : null;
       const out = new Map<string, BinArray | null>();
       for (const poolAddress of poolAddresses) {
         const key = poolAddress.toLowerCase();
@@ -3722,7 +3793,7 @@ export const AdapterLive = Layer.effect(
             const owner = requireWallet();
             const isV4 = poolAddress.length === 66;
             const state = isV4
-              ? await v4PoolQuoteState(poolAddress)
+              ? await v4PoolQuoteState(poolAddress, false)
               : await v3PoolQuoteState(getAddress(poolAddress));
             const [price0, price1] = await Promise.all([
               priceUsd(state.token0),
@@ -3872,8 +3943,8 @@ export const AdapterLive = Layer.effect(
               // the sim passed, the real mint dry-run reverted). The amounts
               // (USD-sized) stand; the price/tick used for the SDK's
               // liquidity math must be current.
-              const freshState = await v4PoolQuoteState(poolAddress);
-              const key = await resolveV4PoolKey(poolAddress);
+              const freshState = await v4PoolQuoteState(poolAddress, false);
+              const key = await resolveV4PoolKey(poolAddress, false);
               const built = buildV4MintCalldata({
                 poolKey: key,
                 sqrtPriceX96: freshState.sqrtPriceX96,
@@ -4147,7 +4218,7 @@ export const AdapterLive = Layer.effect(
             let mintTx: string;
             let newTokenId: string;
             if (reclaimed.isV4) {
-              const key = await resolveV4PoolKey(poolAddress);
+              const key = await resolveV4PoolKey(poolAddress, false);
               const built = buildV4MintCalldata({
                 poolKey: key,
                 sqrtPriceX96: state.sqrtPriceX96,

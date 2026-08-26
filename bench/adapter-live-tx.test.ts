@@ -14,7 +14,10 @@ import {
   buildV4ExitCalldata,
   buildV4MintCalldata,
   decodeV4PositionInfo,
+  isResolvedV4PoolKeyValid,
   quoteSwapInternal,
+  rawPoolPriceToBasePerMint,
+  selectHighestOutputQuote,
   tickRangeAround,
   tokenIdFromMintReceipt,
   usdToAtomic,
@@ -662,6 +665,42 @@ describe("quoteSwapInternal (in-SDK, current liquidity)", () => {
 });
 
 describe("pure helpers", () => {
+  it("accepts native ETH as v4 currency0 and a hookless pool", () => {
+    expect(
+      isResolvedV4PoolKeyValid({
+        ...V4_POOL_KEY,
+        currency0: ZERO,
+        hooks: ZERO,
+      }),
+    ).toBe(true);
+  });
+
+  it("rejects zero currency1 because native ETH must sort as currency0", () => {
+    expect(isResolvedV4PoolKeyValid({ ...V4_POOL_KEY, currency1: ZERO })).toBe(false);
+  });
+
+  it("scales reverse token1 prices using mint/base decimals", () => {
+    // Raw pool price is token1 atomic units per token0 atomic unit. When the
+    // 8-decimal mint is token1 and the 18-decimal base is token0, base per
+    // mint is (1 / raw) * 10^(8-18), not 1 / (raw * 10^(8-18)).
+    expect(rawPoolPriceToBasePerMint(4, false, 8, 18)).toBeCloseTo(2.5e-11, 20);
+  });
+
+  it("preserves forward token0 price scaling", () => {
+    expect(rawPoolPriceToBasePerMint(4, true, 8, 18)).toBeCloseTo(4e-10, 20);
+  });
+
+  it("selects the greatest successful v4 quote output", () => {
+    expect(
+      selectHighestOutputQuote([
+        { poolId: "zombie", outAmountAtomic: 0n },
+        { poolId: "deep", outAmountAtomic: 300n },
+        { poolId: "shallow", outAmountAtomic: 100n },
+      ]),
+    ).toEqual({ poolId: "deep", outAmountAtomic: 300n });
+    expect(selectHighestOutputQuote([])).toBeNull();
+  });
+
   it("usdToAtomic converts USD to raw units at a price", () => {
     expect(usdToAtomic(500, 2500, 18)).toBe(200_000_000_000_000_000n);
     expect(usdToAtomic(500, 1, 6)).toBe(500_000_000n);

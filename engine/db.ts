@@ -1050,6 +1050,39 @@ const MIGRATIONS: ReadonlyArray<Migration> = [
       }
     },
   },
+  {
+    version: 27,
+    name: "pool_snapshots_address_column_compatibility",
+    up(db) {
+      // An early v26 build used token_x/token_y for the address columns. Some
+      // databases therefore record v26 as applied while retaining those legacy
+      // names. Migrations are immutable once released, so repair that shape in
+      // a new version and preserve the captured address values.
+      if (!hasTable(db, "pool_snapshots")) return;
+
+      if (!hasColumn(db, "pool_snapshots", "token_x_address")) {
+        db.exec("ALTER TABLE pool_snapshots ADD COLUMN token_x_address TEXT");
+      }
+      if (!hasColumn(db, "pool_snapshots", "token_y_address")) {
+        db.exec("ALTER TABLE pool_snapshots ADD COLUMN token_y_address TEXT");
+      }
+
+      if (hasColumn(db, "pool_snapshots", "token_x")) {
+        db.exec(`
+          UPDATE pool_snapshots
+          SET token_x_address = token_x
+          WHERE token_x_address IS NULL AND token_x IS NOT NULL
+        `);
+      }
+      if (hasColumn(db, "pool_snapshots", "token_y")) {
+        db.exec(`
+          UPDATE pool_snapshots
+          SET token_y_address = token_y
+          WHERE token_y_address IS NULL AND token_y IS NOT NULL
+        `);
+      }
+    },
+  },
 ];
 
 function runMigrations(db: Database) {

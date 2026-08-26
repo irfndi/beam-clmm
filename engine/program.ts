@@ -5,14 +5,8 @@ import { ConfigService, ConfigLive, type AppConfig } from "./config-service.js";
 import { AdapterLive, usdToAtomic, WETH9 } from "./adapter-service.js";
 import { StrategyLive } from "./strategy-service.js";
 import { MemoryLive } from "./memory-service.js";
-import {
-  assessMarketStress,
-  assessStressZScore,
-} from "./market-stress.js";
-import {
-  annualizedVarianceFromSnapshots,
-  estimateLvrEdge,
-} from "./lvr-estimator.js";
+import { assessMarketStress, assessStressZScore } from "./market-stress.js";
+import { annualizedVarianceFromSnapshots, estimateLvrEdge } from "./lvr-estimator.js";
 import {
   RiskLive,
   evaluateAgentProposal,
@@ -1425,21 +1419,12 @@ const paperSwapDryRun = (
       console.info("[PAPER][swap-dry-run] swap path not available on adapter — skipping");
       return;
     }
-    // Pick a non-native leg to swap → native ETH (exercises the unwrap multicall).
-    const isNativeLike = (m: string) =>
-      m === NATIVE_MINT ||
-      m.toLowerCase() === WETH9.toLowerCase() ||
-      m.toLowerCase() === STABLECOIN_MINT.toLowerCase();
-    const leg = !isNativeLike(pool.tokenX)
-      ? pool.tokenX
-      : !isNativeLike(pool.tokenY)
-        ? pool.tokenY
-        : pool.tokenX;
-    const amountAtomic = usdToAtomic(Math.max(decision.positionSizeUsd, 1), 1, 6);
-    if (amountAtomic <= 0n) {
+    const probe = paperSwapProbeInput(pool, decision.positionSizeUsd);
+    if (probe === null) {
       console.info("[PAPER][swap-dry-run] leg unpriceable at dry-run size — skipping");
       return;
     }
+    const { leg, amountAtomic } = probe;
     // Timeout-guard the dry-run so a hanging RPC never stalls the paper loop.
     const result = yield* Effect.result(
       Effect.timeout(
@@ -1478,6 +1463,38 @@ const paperSwapDryRun = (
         `simulated ${d.simulated ? "OK" : "FAIL"}`,
     );
   });
+
+/** Build the real-size token leg used by paper quote/prepare/simulate probes. */
+export function paperSwapProbeInput(
+  pool: PoolState,
+  positionSizeUsd: number,
+): { readonly leg: string; readonly amountAtomic: bigint } | null {
+  const isNativeLike = (mint: string) =>
+    mint === NATIVE_MINT ||
+    mint.toLowerCase() === WETH9.toLowerCase() ||
+    mint.toLowerCase() === STABLECOIN_MINT.toLowerCase();
+  const leg = !isNativeLike(pool.tokenX)
+    ? pool.tokenX
+    : !isNativeLike(pool.tokenY)
+      ? pool.tokenY
+      : pool.tokenX;
+  const isTokenX = leg.toLowerCase() === pool.tokenX.toLowerCase();
+  const decimals = isTokenX ? pool.tokenXDecimals : pool.tokenYDecimals;
+  const priceUsd = isTokenX ? pool.tokenXPriceUsd : pool.tokenYPriceUsd;
+  if (
+    decimals === undefined ||
+    !Number.isInteger(decimals) ||
+    decimals < 0 ||
+    decimals > 36 ||
+    priceUsd === undefined ||
+    !Number.isFinite(priceUsd) ||
+    priceUsd <= 0
+  ) {
+    return null;
+  }
+  const amountAtomic = usdToAtomic(Math.max(positionSizeUsd, 1), priceUsd, decimals);
+  return amountAtomic > 0n ? { leg, amountAtomic } : null;
+}
 
 // ─── Live execution ──────────────────────────────────────────────────────────
 
@@ -2998,17 +3015,17 @@ export const program = Effect.gen(function* () {
       if (now - lastStressAssessAt < 3_600_000) return; // hourly at most
       lastStressAssessAt = now;
       const sinceMs = now - 4 * 24 * 3_600_000;
-      const pools = yield* db.getTopSnapshotPools(STRESS_UNIVERSE, sinceMs).pipe(
-        Effect.catch(() => Effect.succeed([] as ReadonlyArray<string>)),
-      );
+      const pools = yield* db
+        .getTopSnapshotPools(STRESS_UNIVERSE, sinceMs)
+        .pipe(Effect.catch(() => Effect.succeed([] as ReadonlyArray<string>)));
       if (pools.length < 3) return;
       const endMs = now;
       const startMs = now - (STRESS_WINDOW_HOURS + 2) * 3_600_000;
       const seriesByPool = new Map<string, ReadonlyArray<{ timestamp: number; price: number }>>();
       for (const pool of pools) {
-        const snaps = yield* db.getSnapshots(pool, startMs, endMs).pipe(
-          Effect.catch(() => Effect.succeed([] as ReadonlyArray<PoolSnapshot>)),
-        );
+        const snaps = yield* db
+          .getSnapshots(pool, startMs, endMs)
+          .pipe(Effect.catch(() => Effect.succeed([] as ReadonlyArray<PoolSnapshot>)));
         seriesByPool.set(
           pool,
           snaps.map((s) => ({ timestamp: s.timestamp, price: s.currentPrice })),
@@ -3022,9 +3039,9 @@ export const program = Effect.gen(function* () {
         return;
       }
       // Trailing baseline of prior assessments (oldest first), capped at 168.
-      const baselineRaw = yield* db.getMetadata(STRESS_META_KEY).pipe(
-        Effect.catch(() => Effect.succeed(null)),
-      );
+      const baselineRaw = yield* db
+        .getMetadata(STRESS_META_KEY)
+        .pipe(Effect.catch(() => Effect.succeed(null)));
       const baseline: number[] = baselineRaw ? JSON.parse(baselineRaw) : [];
       const zScore = assessStressZScore(assessment.meanCorrelation, baseline);
       logger.info("Market stress assessed", {
@@ -3036,9 +3053,9 @@ export const program = Effect.gen(function* () {
       });
       baseline.push(assessment.meanCorrelation);
       while (baseline.length > 168) baseline.shift();
-      yield* db.setMetadata(STRESS_META_KEY, JSON.stringify(baseline)).pipe(
-        Effect.catch(() => Effect.void),
-      );
+      yield* db
+        .setMetadata(STRESS_META_KEY, JSON.stringify(baseline))
+        .pipe(Effect.catch(() => Effect.void));
     }).pipe(Effect.catch(() => Effect.void));
 
   // ─── LVR edge estimator (logging-only) ────────────────────────────────────
@@ -3056,9 +3073,9 @@ export const program = Effect.gen(function* () {
       const now = Date.now();
       if (now - lastLvrAssessAt < 6 * 3_600_000) return; // 6-hourly at most
       lastLvrAssessAt = now;
-      const pools = yield* db.getTopSnapshotPools(LVR_UNIVERSE, now - 7 * 24 * 3_600_000).pipe(
-        Effect.catch(() => Effect.succeed([] as ReadonlyArray<string>)),
-      );
+      const pools = yield* db
+        .getTopSnapshotPools(LVR_UNIVERSE, now - 7 * 24 * 3_600_000)
+        .pipe(Effect.catch(() => Effect.succeed([] as ReadonlyArray<string>)));
       if (pools.length === 0) return;
       const results: Array<{ pool: string; edge: number; feeYield: number; vol: number }> = [];
       for (const pool of pools) {
@@ -3100,22 +3117,20 @@ export const program = Effect.gen(function* () {
         },
       });
       // Persist per-pool history for later validation against closed trades.
-      const historyRaw = yield* db.getMetadata(LVR_META_KEY).pipe(
-        Effect.catch(() => Effect.succeed(null)),
-      );
+      const historyRaw = yield* db
+        .getMetadata(LVR_META_KEY)
+        .pipe(Effect.catch(() => Effect.succeed(null)));
       type LvrHistoryEntry = { at: number; edge: number; feeYield: number; vol: number };
-      const history: Record<string, LvrHistoryEntry[]> = historyRaw
-        ? JSON.parse(historyRaw)
-        : {};
+      const history: Record<string, LvrHistoryEntry[]> = historyRaw ? JSON.parse(historyRaw) : {};
       for (const r of results) {
         const list = history[r.pool] ?? [];
         list.push({ at: now, edge: r.edge, feeYield: r.feeYield, vol: r.vol });
         while (list.length > 120) list.shift();
         history[r.pool] = list;
       }
-      yield* db.setMetadata(LVR_META_KEY, JSON.stringify(history)).pipe(
-        Effect.catch(() => Effect.void),
-      );
+      yield* db
+        .setMetadata(LVR_META_KEY, JSON.stringify(history))
+        .pipe(Effect.catch(() => Effect.void));
     }).pipe(Effect.catch(() => Effect.void));
 
   const refreshHarvestBook = (): Effect.Effect<void, never, never> =>
@@ -4370,7 +4385,14 @@ export const program = Effect.gen(function* () {
         let executionError: string | undefined = undefined;
         if (config.paperTrading) {
           const paperResult = yield* executePaper(
-            { db, trackedPositions, strategy, entryStrategyMode, entryRangeHalfWidth, paperGasCostUsd: config.paperGasCostUsd },
+            {
+              db,
+              trackedPositions,
+              strategy,
+              entryStrategyMode,
+              entryRangeHalfWidth,
+              paperGasCostUsd: config.paperGasCostUsd,
+            },
             decision,
             candidate.pool,
             signalTimestamp,
@@ -5485,9 +5507,7 @@ export const program = Effect.gen(function* () {
           .pipe(Effect.catch(() => Effect.void));
       }
       const rawPool =
-        prefetched !== undefined
-          ? prefetched.state
-          : yield* adapter.getPoolState(poolAddress);
+        prefetched !== undefined ? prefetched.state : yield* adapter.getPoolState(poolAddress);
       const binArray =
         prefetched !== undefined && prefetched.bins !== null
           ? prefetched.bins
@@ -8354,7 +8374,10 @@ export const program = Effect.gen(function* () {
         // ponytail: 20%/24h covers the observed -99% tails (0x4722) with one check
         if (decision.action === "HOLD" && decision.poolAddress) {
           const tailPos = [...trackedPositions.values()].find(
-            (p) => p.poolAddress === decision.poolAddress && p.paperExitedAt == null && p.closedAt == null,
+            (p) =>
+              p.poolAddress === decision.poolAddress &&
+              p.paperExitedAt == null &&
+              p.closedAt == null,
           );
           if (
             tailPos?.depositedUsd &&
@@ -8363,7 +8386,8 @@ export const program = Effect.gen(function* () {
             (tailPos.currentValueUsd - tailPos.depositedUsd) / tailPos.depositedUsd < -0.2 &&
             Date.now() - tailPos.outOfRangeSince > 24 * 3600 * 1000
           ) {
-            const lossPct = ((tailPos.currentValueUsd - tailPos.depositedUsd) / tailPos.depositedUsd) * 100;
+            const lossPct =
+              ((tailPos.currentValueUsd - tailPos.depositedUsd) / tailPos.depositedUsd) * 100;
             const oorH = (Date.now() - tailPos.outOfRangeSince) / 3600000;
             decision = {
               ...decision,
@@ -8376,9 +8400,16 @@ export const program = Effect.gen(function* () {
         }
         // Smart exit: time-based — stale position beyond max age (e.g., 72h) with low fee yield
         // ponytail: one check, disabled when 0 (default) so tests unchanged
-        if (decision.action === "HOLD" && (config.maxPositionAgeMs ?? 0) > 0 && decision.poolAddress) {
+        if (
+          decision.action === "HOLD" &&
+          (config.maxPositionAgeMs ?? 0) > 0 &&
+          decision.poolAddress
+        ) {
           const agedPos = [...trackedPositions.values()].find(
-            (p) => p.poolAddress === decision.poolAddress && p.paperExitedAt == null && p.closedAt == null,
+            (p) =>
+              p.poolAddress === decision.poolAddress &&
+              p.paperExitedAt == null &&
+              p.closedAt == null,
           );
           if (agedPos && Date.now() - agedPos.timestamp > (config.maxPositionAgeMs ?? 0)) {
             const ageH = (Date.now() - agedPos.timestamp) / 3600000;
