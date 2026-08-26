@@ -2991,7 +2991,7 @@ export const program = Effect.gen(function* () {
         {
           enabled: true,
           maxTransferTaxPct: config.tokenRiskMaxTransferTaxPct ?? 5,
-          allowlistedMints: config.stablecoinMints ?? new Set<string>(),
+          allowlistedMints: new Set([...(config.stablecoinMints ?? []), WETH9.toLowerCase()]),
         },
       );
     }
