@@ -15,8 +15,10 @@ const token0 = new Token(4663, "0x0bd7d308f8e1639fab988df18a8011f41eacad73", 18)
 const token1 = new Token(4663, "0x5fc5360d0400a0fd4f2af552add042d716f1d168", 6); // USDG-like
 
 // The installed v3-sdk build is JSBI-based (not native bigint): adapt at the
-// boundary. tickCurrent is derived from the price so the Pool's PRICE_BOUNDS
-// invariant holds for out-of-range prices too.
+// boundary. jsbi stays on v3 because the SDK's JSBI-typed params reject v4
+// instances (structurally incompatible) — revisit when the SDKs go bigint-native.
+// tickCurrent is derived from the price so the Pool's PRICE_BOUNDS invariant
+// holds for out-of-range prices too.
 const sdkAmounts = (
   liquidity: bigint,
   tickLower: number,

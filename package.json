@@ -50,32 +50,32 @@
   },
   "dependencies": {
     "@clack/prompts": "^1.7.0",
-    "@uniswap/sdk-core": "^7.8.1",
-    "@uniswap/v3-sdk": "^3.24.1",
-    "@uniswap/v4-sdk": "^1.24.1",
+    "@uniswap/sdk-core": "^7.19.2",
+    "@uniswap/v3-sdk": "^3.31.3",
+    "@uniswap/v4-sdk": "^2.3.3",
     "@xenova/transformers": "^2.17.2",
     "chalk": "^6.0.0",
     "commander": "^15.0.0",
     "dotenv": "^17.4.2",
-    "effect": "4.0.0-rc.108",
+    "effect": "4.0.0-rc.112",
     "semver": "^7.8.5",
     "sqlite-vec": "^0.1.9",
-    "viem": "^2.29.0"
+    "viem": "^2.56.3"
   },
   "devDependencies": {
-    "@effect/tsgo": "0.35.0",
-    "@types/node": "^26.1.2",
+    "@effect/tsgo": "0.41.0",
+    "@types/node": "^26.4.1",
     "@types/semver": "^7.8.0",
-    "@vitest/coverage-istanbul": "^4.1.10",
-    "bun-types": "1.4.0",
+    "@vitest/coverage-istanbul": "^5.0.0",
+    "bun-types": "1.4.1",
     "fast-check": "^4.9.0",
     "jsbi": "^3.2.5",
-    "oxfmt": "^0.62.0",
-    "oxlint": "^1.77.0",
+    "oxfmt": "^0.66.0",
+    "oxlint": "^1.81.0",
     "oxlint-tsgolint": "7.0.2001",
-    "tsdown": "^0.22.14",
+    "tsdown": "^0.23.0",
     "typescript": "^7.0.2",
-    "vitest": "^4.1.10"
+    "vitest": "^5.0.0"
   },
   "engines": {
     "bun": ">=1.4.0"

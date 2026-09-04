@@ -18,17 +18,17 @@
     "typecheck": "tsc --noEmit && bun run --cwd infra typecheck"
   },
   "dependencies": {
-    "effect": "4.0.0-rc.108",
-    "hono": "^4.13.1"
+    "effect": "4.0.0-rc.112",
+    "hono": "^4.13.5"
   },
   "devDependencies": {
-    "@cloudflare/vitest-pool-workers": "^0.18.8",
-    "@cloudflare/workers-types": "^5.20260804.1",
-    "@vitest/runner": "^4.1.10",
-    "@vitest/snapshot": "^4.1.10",
-    "esbuild": "0.28.1",
+    "@cloudflare/vitest-pool-workers": "^0.22.0",
+    "@cloudflare/workers-types": "^5.20260904.1",
+    "@vitest/runner": "^4.1.11",
+    "@vitest/snapshot": "^4.1.11",
+    "esbuild": "0.28.2",
     "typescript": "^7.0.2",
-    "vitest": "^4.1.10",
-    "wrangler": "4.114.0"
+    "vitest": "^4.1.11",
+    "wrangler": "4.129.0"
   }
 }
