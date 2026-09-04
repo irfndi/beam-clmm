@@ -4,7 +4,7 @@
  * `wrangler.telegram.toml` deployment pipeline: one typed program declares
  * both Workers plus the D1 / KV / R2 / Vectorize resources they bind.
  *
- * Docs (ground truth, v2 Effect line, npm `alchemy@2.0.0-beta.64`):
+ * Docs (ground truth, v2 Effect line, npm `alchemy@2.0.0-beta.76`):
  *  - Workers (async env prop): https://alchemy.run/cloudflare/compute/workers
  *  - D1:        https://alchemy.run/cloudflare/data/d1
  *  - KV:        https://alchemy.run/cloudflare/data/kv
@@ -45,8 +45,7 @@ import * as Effect from "effect/Effect";
  */
 export const database = Cloudflare.D1.Database("database", {
   name: "beam-db",
-  migrationsDir: "../migrations",
-  migrationsTable: "d1_migrations",
+  migrations: { dir: "../migrations", table: "d1_migrations" },
 });
 
 /** KV: `beam-cache` (title is the adopted identity). Shared via the `CACHE` binding. */
