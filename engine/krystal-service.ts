@@ -1,12 +1,12 @@
 // oxlint-disable anti-slop/no-unknown-parameters, anti-slop/no-unsafe-dictionary-type, anti-slop/no-runtime-typeof -- JSON parser predicates are the I/O boundary for Krystal responses.
 import { Effect, Layer } from "effect";
 import { KrystalService, type KrystalApi } from "./services.js";
-import { registerV4Pool, type V4PoolKey } from "./adapter-service.js";
+import { registerV4Pool } from "./adapter-service.js";
 import type { PoolState } from "./types.js";
 import { NATIVE_MINT } from "./constants.js";
 import { createLogger } from "./logger.js";
 import { ACTIVE_CHAIN_ID } from "./chain-registry.js";
-import { isAddress, type Address } from "viem";
+import { isAddress } from "viem";
 
 /**
  * Krystal LP explorer — the primary pool-stats source on Robinhood Chain.
@@ -76,6 +76,16 @@ function readFiniteNumber(value: unknown): number | null {
 
 /** Parse one top_pools entry → KrystalPoolStats. Returns null on shape drift
  *  (the caller fails through to gecko/heuristic — never crashes the cycle). */
+function toNumberOrZero(value: unknown): number {
+  return readFiniteNumber(value) ?? 0;
+}
+function toSymbol(value: unknown): string {
+  return typeof value === "string" ? value : "";
+}
+function toAddressField(value: unknown): string {
+  return typeof value === "string" ? normalizeNativeAddress(value) : "";
+}
+
 export function parseKrystalPool(raw: unknown): KrystalPoolStats | null {
   if (!isObject(raw)) return null;
   const stat24h = isObject(raw.stat24h) ? raw.stat24h : {};
@@ -83,23 +93,21 @@ export function parseKrystalPool(raw: unknown): KrystalPoolStats | null {
   const token1 = isObject(raw.token1) ? raw.token1 : {};
   const tvlUsd = readFiniteNumber(raw.tvlUsd);
   if (tvlUsd === null || tvlUsd <= 0) return null;
-  const volume24hUsd = readFiniteNumber(stat24h.volumeUsd) ?? 0;
-  const feeUsd24h = readFiniteNumber(stat24h.feeUsd) ?? 0;
   return {
     tvlUsd,
-    volume24hUsd,
-    feeUsd24h,
-    apr: readFiniteNumber(stat24h.apr) ?? 0,
-    drawdown24h: readFiniteNumber(raw.drawdown24h) ?? 0,
-    priceVolatility: readFiniteNumber(raw.priceVolatility) ?? 0,
-    feeTier: readFiniteNumber(raw.feeTier) ?? 0,
-    lpFee: readFiniteNumber(raw.lpFee) ?? 0,
+    volume24hUsd: toNumberOrZero(stat24h.volumeUsd),
+    feeUsd24h: toNumberOrZero(stat24h.feeUsd),
+    apr: toNumberOrZero(stat24h.apr),
+    drawdown24h: toNumberOrZero(raw.drawdown24h),
+    priceVolatility: toNumberOrZero(raw.priceVolatility),
+    feeTier: toNumberOrZero(raw.feeTier),
+    lpFee: toNumberOrZero(raw.lpFee),
     dynamicFee: raw.dynamicFee === true,
-    protocolFee: readFiniteNumber(raw.protocolFee) ?? 0,
-    token0Symbol: typeof token0.symbol === "string" ? token0.symbol : "",
-    token1Symbol: typeof token1.symbol === "string" ? token1.symbol : "",
-    token0Address: typeof token0.address === "string" ? normalizeNativeAddress(token0.address) : "",
-    token1Address: typeof token1.address === "string" ? normalizeNativeAddress(token1.address) : "",
+    protocolFee: toNumberOrZero(raw.protocolFee),
+    token0Symbol: toSymbol(token0.symbol),
+    token1Symbol: toSymbol(token1.symbol),
+    token0Address: toAddressField(token0.address),
+    token1Address: toAddressField(token1.address),
   };
 }
 
@@ -163,6 +171,61 @@ let universeCache: UniverseCache | null = null;
 const lastKnownStats = new Map<string, { readonly stats: KrystalPoolStats; readonly at: number }>();
 const LAST_KNOWN_TTL_MS = 2 * 60 * 60 * 1_000;
 
+function buildV4KeyIfPossible(
+  entry: Record<string, unknown>,
+  stats: KrystalPoolStats,
+  poolId: string,
+): void {
+  if (entry.protocol !== "uniswapv4") return;
+  const token0 = isObject(entry.token0) ? entry.token0 : null;
+  const token1 = isObject(entry.token1) ? entry.token1 : null;
+  if (token0 === null || token1 === null || typeof token0.address !== "string") return;
+  const normalize = (addr: string): import("viem").Address | null => {
+    if (addr.toLowerCase() === "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee") return NATIVE_MINT;
+    const normalized = addr.toLowerCase();
+    return isAddress(normalized) ? normalized : null;
+  };
+  const currency0 = normalize(token0.address);
+  const currency1 = typeof token1.address === "string" ? normalize(token1.address) : NATIVE_MINT;
+  if (currency0 === null || currency1 === null) return;
+  const key: import("./adapter-service.js").V4PoolKey = {
+    currency0,
+    currency1,
+    fee: Math.max(0, Math.round((stats.lpFee || stats.feeTier) * 10_000)),
+    tickSpacing: 400,
+    hooks: "0x0000000000000000000000000000000000000000",
+  };
+  if (key.currency0.length > 0 && key.currency1.length > 0) registerV4Pool(poolId, key);
+}
+
+function fillUniverseFromResult(result: unknown[]): ReadonlyMap<string, KrystalPoolStats> {
+  const pools = new Map<string, KrystalPoolStats>();
+  for (const entry of result) {
+    if (!isObject(entry) || typeof entry.poolAddress !== "string") continue;
+    const stats = parseKrystalPool(entry);
+    if (stats === null) continue;
+    const poolId = entry.poolAddress.toLowerCase();
+    pools.set(poolId, stats);
+    lastKnownStats.set(poolId, { stats, at: Date.now() });
+    if (entry.protocol === "uniswapv4") buildV4KeyIfPossible(entry, stats, poolId);
+  }
+  return pools;
+}
+
+function pruneStaleLastKnown(): void {
+  const now2 = Date.now();
+  for (const [addr, entry] of lastKnownStats) {
+    if (now2 - entry.at > LAST_KNOWN_TTL_MS) lastKnownStats.delete(addr);
+  }
+}
+
+function staleOrEmptyUniverse(now: number): ReadonlyMap<string, KrystalPoolStats> {
+  // Safety: return the cache ONLY if reasonably fresh (2× TTL); otherwise an empty map.
+  return universeCache !== null && now - universeCache.fetchedAt <= UNIVERSE_TTL_MS * 2
+    ? universeCache.pools
+    : new Map();
+}
+
 export async function fetchKrystalUniverse(
   options: { readonly baseUrl?: string; readonly fetchImpl?: FetchLike } = {},
 ): Promise<ReadonlyMap<string, KrystalPoolStats>> {
@@ -182,74 +245,17 @@ export async function fetchKrystalUniverse(
     const response = await fetchImpl(url, { signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
     if (!response.ok) {
       logger.warn("Krystal universe fetch rejected", { status: response.status });
-      // Safety: on fetch failure return the cache ONLY if reasonably fresh
-      // (2x TTL) — a multi-day outage must not feed stale "measured" stats
-      // into the drawdown/fee gates (safety audit).
-      return universeCache !== null && now - universeCache.fetchedAt <= UNIVERSE_TTL_MS * 2
-        ? universeCache.pools
-        : new Map();
+      return staleOrEmptyUniverse(now);
     }
     const raw: unknown = await response.json();
     const result = isObject(raw) ? raw.result : null;
     if (!Array.isArray(result)) {
       logger.warn("Krystal universe response malformed");
-      // Safety: on fetch failure return the cache ONLY if reasonably fresh
-      // (2x TTL) — a multi-day outage must not feed stale "measured" stats
-      // into the drawdown/fee gates (safety audit).
-      return universeCache !== null && now - universeCache.fetchedAt <= UNIVERSE_TTL_MS * 2
-        ? universeCache.pools
-        : new Map();
+      return staleOrEmptyUniverse(now);
     }
-    const pools = new Map<string, KrystalPoolStats>();
-    for (const entry of result) {
-      if (!isObject(entry) || typeof entry.poolAddress !== "string") continue;
-      const stats = parseKrystalPool(entry);
-      if (stats === null) continue;
-      const poolId = entry.poolAddress.toLowerCase();
-      pools.set(poolId, stats);
-      lastKnownStats.set(poolId, { stats, at: Date.now() });
-      // Auto-register v4 pool keys so the adapter's StateView reads can name
-      // the legs. The key's fee/tickSpacing are cosmetic here (StateView reads
-      // by poolId; the poolId is a one-way hash, so the key is only a symbol
-      // carrier) — tokens are the truth. Krystal renders native ETH as
-      // 0xeeee…; the engine's isNative checks address(0).
-      if (entry.protocol === "uniswapv4") {
-        const token0 = isObject(entry.token0) ? entry.token0 : null;
-        const token1 = isObject(entry.token1) ? entry.token1 : null;
-        if (token0 !== null && token1 !== null && typeof token0.address === "string") {
-          const normalize = (addr: string): Address | null => {
-            if (addr.toLowerCase() === "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee") {
-              return NATIVE_MINT;
-            }
-            const normalized = addr.toLowerCase();
-            return isAddress(normalized) ? normalized : null;
-          };
-          const currency0 = normalize(token0.address);
-          const currency1 =
-            typeof token1.address === "string" ? normalize(token1.address) : NATIVE_MINT;
-          if (currency0 === null || currency1 === null) continue;
-          const key: V4PoolKey = {
-            currency0,
-            currency1,
-            fee: Math.max(0, Math.round((stats.lpFee || stats.feeTier) * 10_000)),
-            // Cosmetic: the chain convention is tickSpacing 400; only used for
-            // binStep display (StateView reads by poolId, not key).
-            tickSpacing: 400,
-            hooks: "0x0000000000000000000000000000000000000000",
-          };
-          if (key.currency0.length > 0 && key.currency1.length > 0) {
-            registerV4Pool(poolId, key);
-          }
-        }
-      }
-    }
+    const pools = fillUniverseFromResult(result as unknown[]);
     universeCache = { fetchedAt: Date.now(), pools };
-    // Prune stale last-known entries (>2h) so the fallback never goes cold-
-    // stale for a pool that has genuinely died.
-    const now2 = Date.now();
-    for (const [addr, entry] of lastKnownStats) {
-      if (now2 - entry.at > LAST_KNOWN_TTL_MS) lastKnownStats.delete(addr);
-    }
+    pruneStaleLastKnown();
     logger.info("Krystal universe refreshed", { count: pools.size });
     return pools;
   } catch (e) {

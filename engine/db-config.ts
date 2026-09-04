@@ -353,6 +353,27 @@ export function isKnownConfigField(field: string, base: AppConfig): boolean {
  * normalized (max raised to min) with a warning. Returns a new object
  * (never mutates `base`).
  */
+function normalizeInvertedBinStepRange(
+  next: AppConfig & Record<string, unknown>,
+  overrides: ReadonlyMap<string, string>,
+): AppConfig & Record<string, unknown> {
+  const binMinSpec = findDbConfigSpec("MARKET_SCAN_MIN_BIN_STEP");
+  const binMaxSpec = findDbConfigSpec("MARKET_SCAN_MAX_BIN_STEP");
+  if (binMinSpec === undefined || binMaxSpec === undefined) return next;
+  const binMinRaw = process.env[binMinSpec.envKey] ?? overrides.get(dbConfigKey(binMinSpec.envKey));
+  const binMaxRaw = process.env[binMaxSpec.envKey] ?? overrides.get(dbConfigKey(binMaxSpec.envKey));
+  const binMin =
+    binMinRaw === undefined ? binMinSpec.default : parseDbConfigValue(binMinSpec, binMinRaw);
+  const binMax =
+    binMaxRaw === undefined ? binMaxSpec.default : parseDbConfigValue(binMaxSpec, binMaxRaw);
+  if (typeof binMin !== "number" || typeof binMax !== "number" || binMin <= binMax) return next;
+  logger.warn("Inverted market-scan bin-step range; raising max to min", {
+    marketScanMinBinStep: binMin,
+    marketScanMaxBinStep: binMax,
+  });
+  return { ...next, [binMinSpec.field]: binMin, [binMaxSpec.field]: binMin };
+}
+
 export function applyDbConfigOverrides(
   base: AppConfig,
   overrides: ReadonlyMap<string, string>,
@@ -394,30 +415,7 @@ export function applyDbConfigOverrides(
     }
   }
 
-  // ── Market-scan bin-step range cross-check ──────────────────────────────
-  // Individual clamps permit MIN > MAX (e.g. MIN=100, MAX=1), which would
-  // make every pool fail the bin-step filter. Resolve both ends with the
-  // same env > DB > default precedence and normalize an inverted range by
-  // raising the max to the min (never narrows the operator's lower bound).
-  const binMinSpec = findDbConfigSpec("MARKET_SCAN_MIN_BIN_STEP");
-  const binMaxSpec = findDbConfigSpec("MARKET_SCAN_MAX_BIN_STEP");
-  if (binMinSpec !== undefined && binMaxSpec !== undefined) {
-    const binMinRaw =
-      process.env[binMinSpec.envKey] ?? overrides.get(dbConfigKey(binMinSpec.envKey));
-    const binMaxRaw =
-      process.env[binMaxSpec.envKey] ?? overrides.get(dbConfigKey(binMaxSpec.envKey));
-    const binMin =
-      binMinRaw === undefined ? binMinSpec.default : parseDbConfigValue(binMinSpec, binMinRaw);
-    const binMax =
-      binMaxRaw === undefined ? binMaxSpec.default : parseDbConfigValue(binMaxSpec, binMaxRaw);
-    if (typeof binMin === "number" && typeof binMax === "number" && binMin > binMax) {
-      logger.warn("Inverted market-scan bin-step range; raising max to min", {
-        marketScanMinBinStep: binMin,
-        marketScanMaxBinStep: binMax,
-      });
-      next = { ...next, [binMinSpec.field]: binMin, [binMaxSpec.field]: binMin };
-    }
-  }
+  next = normalizeInvertedBinStepRange(next, overrides);
 
   return next;
 }

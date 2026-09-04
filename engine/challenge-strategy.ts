@@ -28,10 +28,8 @@ export interface ChallengePoolScore {
  * Entry filters (hard): tvl ≥ $1k, dd > −5%, age ≥ 6h, fee tier ≥ 0.05%.
  * Tiers: S = stable-pair score ≥ 15; A = score ≥ 10; B = score 4–10.
  */
-export function challengePoolScore(pool: PoolState): ChallengePoolScore {
-  const reasons: string[] = [];
-  const tvl = pool.tvlUsd;
-  if (tvl < 1_000)
+function challengeTvlGate(pool: PoolState): ChallengePoolScore | null {
+  if (pool.tvlUsd < 1_000) {
     return {
       score: 0,
       tier: "none",
@@ -39,8 +37,12 @@ export function challengePoolScore(pool: PoolState): ChallengePoolScore {
       yieldPerDayPct: 0,
       drawdown24h: pool.drawdown24h ?? 0,
     };
-  const yieldPct = tvl > 0 ? (pool.fees24hUsd / tvl) * 100 : 0;
-  if (yieldPct <= 0)
+  }
+  return null;
+}
+
+function challengeYieldGate(pool: PoolState, yieldPct: number): ChallengePoolScore | null {
+  if (yieldPct <= 0) {
     return {
       score: 0,
       tier: "none",
@@ -48,8 +50,12 @@ export function challengePoolScore(pool: PoolState): ChallengePoolScore {
       yieldPerDayPct: 0,
       drawdown24h: pool.drawdown24h ?? 0,
     };
-  const dd = pool.drawdown24h ?? 0;
-  if (dd < -5)
+  }
+  return null;
+}
+
+function challengeDrawdownGate(yieldPct: number, dd: number): ChallengePoolScore | null {
+  if (dd < -5) {
     return {
       score: 0,
       tier: "none",
@@ -57,37 +63,70 @@ export function challengePoolScore(pool: PoolState): ChallengePoolScore {
       yieldPerDayPct: yieldPct,
       drawdown24h: dd,
     };
+  }
+  return null;
+}
 
+function challengeBaseScore(yieldPct: number, dd: number): number {
   // Squared penalty below zero drawdown: dd=-4% → ×0.96² ≈ ×0.92 (vs ×0.96
   // before — high-yield memes used to outrank zero-IL anchors on the weak
   // linear penalty). dd ≥ 0 keeps the legacy (1 + dd/100) uplift.
   const ddFactor = 1 + dd / 100;
-  let score = yieldPct * (dd < 0 ? ddFactor * ddFactor : ddFactor);
+  if (dd < 0) return yieldPct * ddFactor * ddFactor;
+  return yieldPct * ddFactor;
+}
+
+function challengeStableLegInfo(pool: PoolState): {
+  hasStableLeg: boolean;
+  factor: number;
+  reason: string | null;
+} {
   const xSymbol = pool.tokenXSymbol?.toUpperCase() ?? "";
   const ySymbol = pool.tokenYSymbol?.toUpperCase() ?? "";
   const hasStableLeg = STABLE_SYMBOLS.has(xSymbol) || STABLE_SYMBOLS.has(ySymbol);
-  if (hasStableLeg) {
-    score *= 1.15;
-    reasons.push("stable-leg");
-  }
+  if (hasStableLeg) return { hasStableLeg: true, factor: 1.15, reason: "stable-leg" };
+  return { hasStableLeg: false, factor: 1, reason: null };
+}
+
+function challengeFeeTierInfo(pool: PoolState): { factor: number; reason: string } {
   // Fee tier weight: high-fee pools dominate yield; sub-0.05% are churn races.
   // The adapter stores tickSpacing in binStep; map v3/v4 fee tiers from
   // fees24hUsd/volume24hUsd as a sanity check, else assume mid-tier.
   const impliedFeeRate = pool.volume24hUsd > 0 ? pool.fees24hUsd / pool.volume24hUsd : 0;
-  if (impliedFeeRate >= 0.003) {
-    score *= 1.0;
-    reasons.push("fee-tier>=0.3%");
-  } else if (impliedFeeRate >= 0.0005) {
-    score *= 0.85;
-    reasons.push("fee-tier mid");
-  } else {
-    score *= 0.5;
-    reasons.push("fee-tier low");
-  }
+  if (impliedFeeRate >= 0.003) return { factor: 1.0, reason: "fee-tier>=0.3%" };
+  if (impliedFeeRate >= 0.0005) return { factor: 0.85, reason: "fee-tier mid" };
+  return { factor: 0.5, reason: "fee-tier low" };
+}
 
+function challengeTierFor(score: number, hasStableLeg: boolean): ChallengePoolScore["tier"] {
   // S requires BOTH high score AND a stable pair (the ~0-IL anchor sleeve);
   // high-yield memes land in A.
-  const tier = score >= 15 && hasStableLeg ? "S" : score >= 10 ? "A" : score >= 4 ? "B" : "none";
+  if (score >= 15 && hasStableLeg) return "S";
+  if (score >= 10) return "A";
+  if (score >= 4) return "B";
+  return "none";
+}
+
+export function challengePoolScore(pool: PoolState): ChallengePoolScore {
+  const tvlGate = challengeTvlGate(pool);
+  if (tvlGate) return tvlGate;
+  const yieldPct = pool.tvlUsd > 0 ? (pool.fees24hUsd / pool.tvlUsd) * 100 : 0;
+  const yieldGate = challengeYieldGate(pool, yieldPct);
+  if (yieldGate) return yieldGate;
+  const dd = pool.drawdown24h ?? 0;
+  const ddGate = challengeDrawdownGate(yieldPct, dd);
+  if (ddGate) return ddGate;
+  const reasons: string[] = [];
+  let score = challengeBaseScore(yieldPct, dd);
+  const stable = challengeStableLegInfo(pool);
+  if (stable.hasStableLeg) {
+    score *= stable.factor;
+    if (stable.reason) reasons.push(stable.reason);
+  }
+  const fee = challengeFeeTierInfo(pool);
+  score *= fee.factor;
+  reasons.push(fee.reason);
+  const tier = challengeTierFor(score, stable.hasStableLeg);
   if (tier === "none") reasons.push(`score ${score.toFixed(1)} < 4`);
   return { score, tier, reasons, yieldPerDayPct: yieldPct, drawdown24h: dd };
 }

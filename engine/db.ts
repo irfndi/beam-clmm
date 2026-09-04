@@ -96,57 +96,56 @@ export function setupCustomSQLite() {
   }
 }
 
+function tryLoadVecForDatabase(db: Database): boolean {
+  // Load sqlite-vec before migrations so migration v1 can create the vec_memory
+  // virtual table without warning. Extension availability is determined by the
+  // runtime environment and won't change within a process, so a process-wide
+  // flag is used to skip repeated failing attempts.
+  if (sqliteVecEverFailed) return false;
+  try {
+    loadVec(db);
+    return true;
+  } catch (e) {
+    const envPath = process.env.BEAM_VEC0_PATH;
+    if (envPath) {
+      try {
+        db.loadExtension(envPath);
+        return true;
+      } catch (envErr) {
+        logger.warn("BEAM_VEC0_PATH sqlite-vec extension could not be loaded", {
+          error: envErr instanceof Error ? envErr.message : String(envErr),
+          hint: vecRemediationHint(),
+        });
+      }
+    }
+    const embeddedPath = getEmbeddedVec0Path();
+    if (embeddedPath) {
+      try {
+        db.loadExtension(embeddedPath);
+        return true;
+      } catch (embeddedErr) {
+        logger.warn("Embedded sqlite-vec extension could not be loaded", {
+          error: embeddedErr instanceof Error ? embeddedErr.message : String(embeddedErr),
+          hint: vecRemediationHint(),
+        });
+      }
+    }
+    logger.warn("sqlite-vec extension could not be loaded; memory will be disabled", {
+      error: e instanceof Error ? e.message : String(e),
+      hint: vecRemediationHint(),
+    });
+    sqliteVecEverFailed = true;
+    return false;
+  }
+}
+
 export function createDatabase(dbPath = "./beam.db"): Database {
   setupCustomSQLite();
   fs.mkdirSync(path.dirname(path.resolve(dbPath)), { recursive: true });
   const db = new Database(dbPath);
   db.exec("PRAGMA journal_mode = WAL;");
 
-  // Load sqlite-vec before migrations so migration v1 can create the vec_memory
-  // virtual table without warning. Extension availability is determined by the
-  // runtime environment and won't change within a process, so a process-wide
-  // flag is used to skip repeated failing attempts.
-  let vecLoaded = false;
-  if (!sqliteVecEverFailed) {
-    try {
-      loadVec(db);
-      vecLoaded = true;
-    } catch (e) {
-      const envPath = process.env.BEAM_VEC0_PATH;
-      if (envPath) {
-        try {
-          db.loadExtension(envPath);
-          vecLoaded = true;
-        } catch (envErr) {
-          logger.warn("BEAM_VEC0_PATH sqlite-vec extension could not be loaded", {
-            error: envErr instanceof Error ? envErr.message : String(envErr),
-            hint: vecRemediationHint(),
-          });
-        }
-      }
-      if (!vecLoaded) {
-        const embeddedPath = getEmbeddedVec0Path();
-        if (embeddedPath) {
-          try {
-            db.loadExtension(embeddedPath);
-            vecLoaded = true;
-          } catch (embeddedErr) {
-            logger.warn("Embedded sqlite-vec extension could not be loaded", {
-              error: embeddedErr instanceof Error ? embeddedErr.message : String(embeddedErr),
-              hint: vecRemediationHint(),
-            });
-          }
-        }
-      }
-      if (!vecLoaded) {
-        logger.warn("sqlite-vec extension could not be loaded; memory will be disabled", {
-          error: e instanceof Error ? e.message : String(e),
-          hint: vecRemediationHint(),
-        });
-        sqliteVecEverFailed = true;
-      }
-    }
-  }
+  const vecLoaded = tryLoadVecForDatabase(db);
 
   runMigrations(db);
 
@@ -322,6 +321,10 @@ function tryCreateVecMemoryTable(db: Database): void {
 }
 
 function hasColumn(db: Database, table: string, column: string): boolean {
+  // SAFETY: table is an internal migration identifier (alphanumeric + underscore only); never user input.
+  // PRAGMA table_info does not support bound parameters for the table name, so validate before interpolating.
+  if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(table)) return false;
+  // pi-lens-ignore: sql-injection
   const rows = db.query(`PRAGMA table_info(${table})`).all() as Array<{
     name: string;
   }>;

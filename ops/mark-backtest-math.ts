@@ -24,18 +24,80 @@ export function computeEntryHodlLegsUsd(input: {
 }): EntryHodlLegsUsd | null {
   const { depositedUsd, entryPriceUsd, lowerBinId, upperBinId, usdPair } = input;
   if (!(depositedUsd > 0) || !(entryPriceUsd > 0) || !(lowerBinId < upperBinId)) return null;
+  const range = usdRangeForEntry(lowerBinId, upperBinId, usdPair);
+  if (range === null) return null;
+  const { lowerPrice, upperPrice } = range;
+  const legs = sqrtLegs(lowerPrice, upperPrice, entryPriceUsd);
+  if (legs === null) return null;
+  const { sLower, sUpper, sEntry } = legs;
+  const valuePerLiquidity = valuePerLiquidityForRange(
+    entryPriceUsd,
+    lowerPrice,
+    upperPrice,
+    sLower,
+    sUpper,
+    sEntry,
+  );
+  if (valuePerLiquidity === null) return null;
+  const liquidity = depositedUsd / valuePerLiquidity;
+  const { movingAmount, numeraireAmount } = hodlAmountsForRange(
+    entryPriceUsd,
+    lowerPrice,
+    upperPrice,
+    liquidity,
+    sLower,
+    sUpper,
+    sEntry,
+  );
+  const movingUsd = movingAmount * entryPriceUsd;
+  if (
+    !Number.isFinite(movingUsd) ||
+    !Number.isFinite(numeraireAmount) ||
+    movingUsd < 0 ||
+    numeraireAmount < 0
+  ) {
+    return null;
+  }
+  return { movingUsd, numeraireUsd: numeraireAmount };
+}
+
+/** Resolve the USD price band for the entry range (stable-leg verified). */
+function usdRangeForEntry(
+  lowerBinId: number,
+  upperBinId: number,
+  usdPair: VerifiedUsdPair,
+): { lowerPrice: number; upperPrice: number } | null {
   const lowerRaw = rawTickToUsd(lowerBinId, usdPair);
   const upperRaw = rawTickToUsd(upperBinId, usdPair);
   if (!(lowerRaw !== null && upperRaw !== null)) return null;
   const lowerPrice = Math.min(lowerRaw, upperRaw);
   const upperPrice = Math.max(lowerRaw, upperRaw);
   if (!(lowerPrice > 0 && upperPrice > lowerPrice)) return null;
+  return { lowerPrice, upperPrice };
+}
 
+/** Square-root legs used by the CLMM value formula. */
+function sqrtLegs(
+  lowerPrice: number,
+  upperPrice: number,
+  entryPriceUsd: number,
+): { sLower: number; sUpper: number; sEntry: number } | null {
   const sLower = Math.sqrt(lowerPrice);
   const sUpper = Math.sqrt(upperPrice);
   const sEntry = Math.sqrt(entryPriceUsd);
   if (!(sLower > 0 && sUpper > sLower && sEntry > 0)) return null;
+  return { sLower, sUpper, sEntry };
+}
 
+/** Value per unit of liquidity at entry (same ternary order as pnl.ts). */
+function valuePerLiquidityForRange(
+  entryPriceUsd: number,
+  lowerPrice: number,
+  upperPrice: number,
+  sLower: number,
+  sUpper: number,
+  sEntry: number,
+): number | null {
   const valuePerLiquidity =
     entryPriceUsd <= lowerPrice
       ? (1 / sLower - 1 / sUpper) * entryPriceUsd
@@ -43,8 +105,19 @@ export function computeEntryHodlLegsUsd(input: {
         ? sUpper - sLower
         : (1 / sEntry - 1 / sUpper) * entryPriceUsd + (sEntry - sLower);
   if (!(valuePerLiquidity > 0)) return null;
+  return valuePerLiquidity;
+}
 
-  const liquidity = depositedUsd / valuePerLiquidity;
+/** Concentrated-range leg amounts at entry (mirrors computeEntryHodlLegsUsd formulas). */
+function hodlAmountsForRange(
+  entryPriceUsd: number,
+  lowerPrice: number,
+  upperPrice: number,
+  liquidity: number,
+  sLower: number,
+  sUpper: number,
+  sEntry: number,
+): { movingAmount: number; numeraireAmount: number } {
   const movingAmount =
     entryPriceUsd <= lowerPrice
       ? liquidity * (1 / sLower - 1 / sUpper)
@@ -57,16 +130,7 @@ export function computeEntryHodlLegsUsd(input: {
       : entryPriceUsd >= upperPrice
         ? liquidity * (sUpper - sLower)
         : liquidity * (sEntry - sLower);
-  const movingUsd = movingAmount * entryPriceUsd;
-  if (
-    !Number.isFinite(movingUsd) ||
-    !Number.isFinite(numeraireAmount) ||
-    movingUsd < 0 ||
-    numeraireAmount < 0
-  ) {
-    return null;
-  }
-  return { movingUsd, numeraireUsd: numeraireAmount };
+  return { movingAmount, numeraireAmount };
 }
 
 export interface DrawdownSnapshot {

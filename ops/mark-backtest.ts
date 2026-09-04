@@ -252,192 +252,259 @@ function trailingAvgYield(
   return count > 0 ? sum / count : null;
 }
 
+interface MarkSimBook {
+  cashUsd: number;
+  feesUsd: number;
+  realizedPnlUsd: number;
+  trades: number;
+  wins: number;
+  entryCostsUsd: number;
+  exitCostsUsd: number;
+  slippageCostsUsd: number;
+  grossProfitUsd: number;
+  grossLossUsd: number;
+  maxDrawdownUsd: number;
+  maxDrawdownPct: number;
+  longFeeGaps: number;
+  invalidData: number;
+  cooldownUntil: number;
+}
+
+function isValidMarkSnapshot(s: Snapshot): boolean {
+  return (
+    Number.isFinite(s.timestamp) &&
+    Number.isFinite(s.currentPrice) &&
+    Number.isFinite(s.fees24hUsd) &&
+    Number.isFinite(s.tvlUsd) &&
+    Number.isFinite(s.activeBinId) &&
+    s.currentPrice > 0 &&
+    s.tvlUsd >= 0
+  );
+}
+
+function failsFeeCostGate(
+  s: Snapshot,
+  size: number,
+  entryCost: number,
+  entrySlippage: number,
+  cfg: Config,
+): boolean {
+  if (cfg.minFeeCostRatio <= 0) return false;
+  const expectedSevenDayFees = s.fees24hUsd * (size / Math.max(s.tvlUsd, 1)) * 7;
+  const roundTripCost = entryCost + cfg.exitCostUsd + entrySlippage;
+  return expectedSevenDayFees < roundTripCost * cfg.minFeeCostRatio;
+}
+
+function checkStopLoss(mark: number, depositedUsd: number, cfg: Config): string | null {
+  if (!cfg.stopLossEnabled) return null;
+  const lossPct = (mark - depositedUsd) / depositedUsd;
+  if (lossPct < -cfg.stopLossPct) return `stop-loss ${(lossPct * 100).toFixed(1)}%`;
+  return null;
+}
+
+function tryEnterMarkPosition(
+  s: Snapshot,
+  cfg: Config,
+  avgYield: number | null,
+  dd: number,
+  book: MarkSimBook,
+): Position | null {
+  // ── ENTER gate ──
+  const yieldDecayed =
+    cfg.yieldHysteresis &&
+    avgYield !== null &&
+    avgYield > 0 &&
+    yieldPctOf(s) < avgYield * cfg.yieldDecayFraction;
+  const eligible =
+    s.tvlUsd >= cfg.minTvlUsd &&
+    yieldPctOf(s) > 0 &&
+    dd > -(cfg.drawdownExitPct / 100) &&
+    !yieldDecayed &&
+    s.timestamp >= book.cooldownUntil;
+  if (!eligible) return null;
+  if (s.usdPair === null) return null;
+  const entryPriceUsd = rawRatioToUsd(s.currentPrice, s.usdPair);
+  if (entryPriceUsd === null) return null;
+  const tvlCapUsd = s.tvlUsd * (cfg.poolShareCapPct / 100);
+  const size = Math.min(cfg.maxPositionUsd, tvlCapUsd, book.cashUsd);
+  if (size <= 0) return null;
+  const entrySlippage = size * (cfg.slippageBps / 10_000);
+  const entryCost = cfg.entryCostUsd + entrySlippage;
+  if (failsFeeCostGate(s, size, entryCost, entrySlippage, cfg)) return null;
+  if (book.cashUsd < size + entryCost) return null;
+  const entryLegs = computeEntryHodlLegsUsd({
+    depositedUsd: size,
+    entryPriceUsd,
+    lowerBinId: s.activeBinId - cfg.halfWidthTicks,
+    upperBinId: s.activeBinId + cfg.halfWidthTicks,
+    usdPair: s.usdPair,
+  });
+  if (entryLegs === null) return null;
+  book.cashUsd -= size + entryCost;
+  book.entryCostsUsd += cfg.entryCostUsd;
+  book.slippageCostsUsd += entrySlippage;
+  return {
+    entryPriceUsd,
+    lowerBinId: s.activeBinId - cfg.halfWidthTicks,
+    upperBinId: s.activeBinId + cfg.halfWidthTicks,
+    depositedUsd: size,
+    entryAmountXUsd: entryLegs.movingUsd,
+    entryAmountYUsd: entryLegs.numeraireUsd,
+    entryMs: s.timestamp,
+    peakValueUsd: size,
+    usdPair: s.usdPair,
+  };
+}
+
+function yieldPctOf(s: Snapshot): number {
+  return s.tvlUsd > 0 ? (s.fees24hUsd / s.tvlUsd) * 100 : 0;
+}
+
+function updateMarkPosition(
+  s: Snapshot,
+  i: number,
+  snaps: readonly Snapshot[],
+  cfg: Config,
+  position: Position,
+  avgYield: number | null,
+  yieldPct: number,
+  dd: number,
+  book: MarkSimBook,
+): Position | null {
+  // ── In-position: mark, fees, exits ──
+  const mark = markToMarket(position, s.currentPrice);
+  position.peakValueUsd = Math.max(position.peakValueUsd, mark);
+  // Proportional fee share while in-range.
+  const inRange = s.activeBinId >= position.lowerBinId && s.activeBinId <= position.upperBinId;
+  if (inRange && s.tvlUsd > 0) {
+    const rawIntervalMs = i > 0 ? s.timestamp - snaps[i - 1]!.timestamp : 30_000;
+    if (rawIntervalMs > MAX_FEE_GAP_MS) book.longFeeGaps++;
+    const intervalMs = Math.min(Math.max(rawIntervalMs, 0), MAX_FEE_GAP_MS);
+    const share = Math.min(position.depositedUsd / s.tvlUsd, 1);
+    const fee = s.fees24hUsd * share * (intervalMs / DAY_MS);
+    book.feesUsd += fee;
+    book.cashUsd += fee;
+  }
+  let exitReason: string | null = null;
+  const yieldDecayed =
+    avgYield !== null && avgYield > 0 && yieldPct < avgYield * cfg.yieldDecayFraction;
+  if (dd < -(cfg.drawdownExitPct / 100)) exitReason = `drawdown ${(dd * 100).toFixed(1)}%`;
+  else if (yieldDecayed) exitReason = `yield ${yieldPct.toFixed(1)}%/d decayed`;
+  else exitReason = checkStopLoss(mark, position.depositedUsd, cfg);
+  if (exitReason === null) {
+    const drawdown = (position.peakValueUsd - mark) / position.peakValueUsd;
+    if (drawdown > cfg.trailingStopPct) exitReason = `trailing ${(drawdown * 100).toFixed(1)}%`;
+  }
+  if (exitReason !== null) {
+    const pnl = mark - position.depositedUsd;
+    book.realizedPnlUsd += pnl;
+    if (pnl >= 0) book.grossProfitUsd += pnl;
+    else book.grossLossUsd += -pnl;
+    const exitSlippage = mark * (cfg.slippageBps / 10_000);
+    const exitCost = cfg.exitCostUsd + exitSlippage;
+    book.cashUsd += mark - exitCost;
+    book.exitCostsUsd += cfg.exitCostUsd;
+    book.slippageCostsUsd += exitSlippage;
+    if (pnl >= 0) book.wins++;
+    book.trades++;
+    book.cooldownUntil = s.timestamp + cfg.rotationCooldownMs;
+    return null;
+  }
+  return position;
+}
+
+function closeMarkPosition(
+  snaps: readonly Snapshot[],
+  cfg: Config,
+  book: MarkSimBook,
+  position: Position | null,
+  peakEquityUsd: number,
+): void {
+  // Close any open position at the final mark.
+  if (position === null) return;
+  const mark = markToMarket(position, snaps[snaps.length - 1]!.currentPrice);
+  const pnl = mark - position.depositedUsd;
+  book.realizedPnlUsd += pnl;
+  if (pnl >= 0) book.grossProfitUsd += pnl;
+  else book.grossLossUsd += -pnl;
+  const exitSlippage = mark * (cfg.slippageBps / 10_000);
+  book.cashUsd += mark - cfg.exitCostUsd - exitSlippage;
+  book.exitCostsUsd += cfg.exitCostUsd;
+  book.slippageCostsUsd += exitSlippage;
+  if (pnl >= 0) book.wins++;
+  book.trades++;
+  const finalEquity = book.cashUsd;
+  book.maxDrawdownUsd = Math.max(book.maxDrawdownUsd, peakEquityUsd - finalEquity);
+  if (peakEquityUsd > 0) {
+    book.maxDrawdownPct = Math.max(book.maxDrawdownPct, (peakEquityUsd - finalEquity) / peakEquityUsd);
+  }
+}
+
 export function simulatePool(snaps: readonly Snapshot[], cfg: Config): PoolResult {
   let position: Position | null = null;
-  let cashUsd = cfg.portfolioUsd;
-  let realizedPnlUsd = 0;
-  let feesUsd = 0;
-  let trades = 0;
-  let wins = 0;
-  let cooldownUntil = 0;
-  let entryCostsUsd = 0;
-  let exitCostsUsd = 0;
-  let slippageCostsUsd = 0;
-  let maxDrawdownUsd = 0;
-  let maxDrawdownPct = 0;
   let peakEquityUsd = cfg.portfolioUsd;
-  let invalidData = 0;
-  let grossProfitUsd = 0;
-  let grossLossUsd = 0;
-  let longFeeGaps = 0;
-
+  const book: MarkSimBook = {
+    cashUsd: cfg.portfolioUsd,
+    feesUsd: 0,
+    realizedPnlUsd: 0,
+    trades: 0,
+    wins: 0,
+    entryCostsUsd: 0,
+    exitCostsUsd: 0,
+    slippageCostsUsd: 0,
+    grossProfitUsd: 0,
+    grossLossUsd: 0,
+    maxDrawdownUsd: 0,
+    maxDrawdownPct: 0,
+    longFeeGaps: 0,
+    invalidData: 0,
+    cooldownUntil: 0,
+  };
   for (let i = 0; i < snaps.length; i++) {
     const s = snaps[i]!;
-    if (
-      !Number.isFinite(s.timestamp) ||
-      !Number.isFinite(s.currentPrice) ||
-      !Number.isFinite(s.fees24hUsd) ||
-      !Number.isFinite(s.tvlUsd) ||
-      !Number.isFinite(s.activeBinId) ||
-      s.currentPrice <= 0 ||
-      s.tvlUsd < 0
-    ) {
-      invalidData++;
+    if (!isValidMarkSnapshot(s)) {
+      book.invalidData++;
       continue;
     }
-    const yieldPct = s.tvlUsd > 0 ? (s.fees24hUsd / s.tvlUsd) * 100 : 0;
+    const yieldPct = yieldPctOf(s);
     const avgYield = trailingAvgYield(snaps, i);
     const dd = normalizedDrawdown(s, drawdown24h(snaps, i));
 
     if (position === null) {
-      // ── ENTER gate ──
-      const yieldDecayed =
-        cfg.yieldHysteresis &&
-        avgYield !== null &&
-        avgYield > 0 &&
-        yieldPct < avgYield * cfg.yieldDecayFraction;
-      const eligible =
-        s.tvlUsd >= cfg.minTvlUsd &&
-        yieldPct > 0 &&
-        dd > -(cfg.drawdownExitPct / 100) &&
-        !yieldDecayed &&
-        s.timestamp >= cooldownUntil;
-      if (eligible) {
-        if (s.usdPair === null) continue;
-        const entryPriceUsd = rawRatioToUsd(s.currentPrice, s.usdPair);
-        if (entryPriceUsd === null) continue;
-        const tvlCapUsd = s.tvlUsd * (cfg.poolShareCapPct / 100);
-        const size = Math.min(cfg.maxPositionUsd, tvlCapUsd, cashUsd);
-        if (size > 0) {
-          const entrySlippage = size * (cfg.slippageBps / 10_000);
-          const entryCost = cfg.entryCostUsd + entrySlippage;
-          const expectedSevenDayFees = s.fees24hUsd * (size / Math.max(s.tvlUsd, 1)) * 7;
-          const roundTripCost = entryCost + cfg.exitCostUsd + entrySlippage;
-          if (
-            cfg.minFeeCostRatio > 0 &&
-            expectedSevenDayFees < roundTripCost * cfg.minFeeCostRatio
-          ) {
-            continue;
-          }
-          if (cashUsd < size + entryCost) continue;
-          const entryLegs = computeEntryHodlLegsUsd({
-            depositedUsd: size,
-            entryPriceUsd,
-            lowerBinId: s.activeBinId - cfg.halfWidthTicks,
-            upperBinId: s.activeBinId + cfg.halfWidthTicks,
-            usdPair: s.usdPair,
-          });
-          if (entryLegs === null) continue;
-          position = {
-            entryPriceUsd,
-            lowerBinId: s.activeBinId - cfg.halfWidthTicks,
-            upperBinId: s.activeBinId + cfg.halfWidthTicks,
-            depositedUsd: size,
-            entryAmountXUsd: entryLegs.movingUsd,
-            entryAmountYUsd: entryLegs.numeraireUsd,
-            entryMs: s.timestamp,
-            peakValueUsd: size,
-            usdPair: s.usdPair,
-          };
-          cashUsd -= size + entryCost;
-          entryCostsUsd += cfg.entryCostUsd;
-          slippageCostsUsd += entrySlippage;
-        }
-      }
+      const entered = tryEnterMarkPosition(s, cfg, avgYield, dd, book);
+      if (entered !== null) position = entered;
       continue;
     }
 
-    // ── In-position: mark, fees, exits ──
-    const mark = markToMarket(position, s.currentPrice);
-    position.peakValueUsd = Math.max(position.peakValueUsd, mark);
-
-    // Proportional fee share while in-range.
-    const inRange = s.activeBinId >= position.lowerBinId && s.activeBinId <= position.upperBinId;
-    if (inRange && s.tvlUsd > 0) {
-      const rawIntervalMs = i > 0 ? s.timestamp - snaps[i - 1]!.timestamp : 30_000;
-      if (rawIntervalMs > MAX_FEE_GAP_MS) longFeeGaps++;
-      const intervalMs = Math.min(Math.max(rawIntervalMs, 0), MAX_FEE_GAP_MS);
-      const share = Math.min(position.depositedUsd / s.tvlUsd, 1);
-      const fee = s.fees24hUsd * share * (intervalMs / DAY_MS);
-      feesUsd += fee;
-      cashUsd += fee;
-    }
-
-    let exitReason: string | null = null;
-    const yieldDecayed =
-      avgYield !== null && avgYield > 0 && yieldPct < avgYield * cfg.yieldDecayFraction;
-    if (dd < -(cfg.drawdownExitPct / 100)) exitReason = `drawdown ${(dd * 100).toFixed(1)}%`;
-    else if (yieldDecayed) exitReason = `yield ${yieldPct.toFixed(1)}%/d decayed`;
-    else if (cfg.stopLossEnabled) {
-      const lossPct = (mark - position.depositedUsd) / position.depositedUsd;
-      if (lossPct < -cfg.stopLossPct) exitReason = `stop-loss ${(lossPct * 100).toFixed(1)}%`;
-    }
-    if (exitReason === null) {
-      const drawdown = (position.peakValueUsd - mark) / position.peakValueUsd;
-      if (drawdown > cfg.trailingStopPct) exitReason = `trailing ${(drawdown * 100).toFixed(1)}%`;
-    }
-
-    if (exitReason !== null) {
-      const pnl = mark - position.depositedUsd;
-      realizedPnlUsd += pnl;
-      if (pnl >= 0) grossProfitUsd += pnl;
-      else grossLossUsd += -pnl;
-      const exitSlippage = mark * (cfg.slippageBps / 10_000);
-      const exitCost = cfg.exitCostUsd + exitSlippage;
-      cashUsd += mark - exitCost;
-      exitCostsUsd += cfg.exitCostUsd;
-      slippageCostsUsd += exitSlippage;
-      if (pnl >= 0) wins++;
-      trades++;
-      position = null;
-      cooldownUntil = s.timestamp + cfg.rotationCooldownMs;
-    }
-
-    const equity = cashUsd + (position === null ? 0 : mark);
+    position = updateMarkPosition(s, i, snaps, cfg, position, avgYield, yieldPct, dd, book);
+    const equity = book.cashUsd + (position === null ? 0 : markToMarket(position, s.currentPrice));
     peakEquityUsd = Math.max(peakEquityUsd, equity);
-    maxDrawdownUsd = Math.max(maxDrawdownUsd, peakEquityUsd - equity);
+    book.maxDrawdownUsd = Math.max(book.maxDrawdownUsd, peakEquityUsd - equity);
     if (peakEquityUsd > 0)
-      maxDrawdownPct = Math.max(maxDrawdownPct, (peakEquityUsd - equity) / peakEquityUsd);
+      book.maxDrawdownPct = Math.max(book.maxDrawdownPct, (peakEquityUsd - equity) / peakEquityUsd);
   }
 
   // Close any open position at the final mark.
-  if (position !== null) {
-    const mark = markToMarket(position, snaps[snaps.length - 1]!.currentPrice);
-    const pnl = mark - position.depositedUsd;
-    realizedPnlUsd += pnl;
-    if (pnl >= 0) grossProfitUsd += pnl;
-    else grossLossUsd += -pnl;
-    const exitSlippage = mark * (cfg.slippageBps / 10_000);
-    cashUsd += mark - cfg.exitCostUsd - exitSlippage;
-    exitCostsUsd += cfg.exitCostUsd;
-    slippageCostsUsd += exitSlippage;
-    if (pnl >= 0) wins++;
-    trades++;
-    const finalEquity = cashUsd;
-    maxDrawdownUsd = Math.max(maxDrawdownUsd, peakEquityUsd - finalEquity);
-    if (peakEquityUsd > 0) {
-      maxDrawdownPct = Math.max(maxDrawdownPct, (peakEquityUsd - finalEquity) / peakEquityUsd);
-    }
-  }
+  closeMarkPosition(snaps, cfg, book, position, peakEquityUsd);
 
   return {
     pool: "",
-    trades,
-    wins,
-    realizedPnlUsd,
-    feesUsd,
-    netPnlUsd: realizedPnlUsd + feesUsd - entryCostsUsd - exitCostsUsd - slippageCostsUsd,
-    finalValueUsd: cashUsd,
-    entryCostsUsd,
-    exitCostsUsd,
-    slippageCostsUsd,
-    maxDrawdownUsd,
-    maxDrawdownPct,
-    grossProfitUsd,
-    grossLossUsd,
-    invalidData,
+    trades: book.trades,
+    wins: book.wins,
+    realizedPnlUsd: book.realizedPnlUsd,
+    feesUsd: book.feesUsd,
+    netPnlUsd: book.realizedPnlUsd + book.feesUsd - book.entryCostsUsd - book.exitCostsUsd - book.slippageCostsUsd,
+    finalValueUsd: book.cashUsd,
+    entryCostsUsd: book.entryCostsUsd,
+    exitCostsUsd: book.exitCostsUsd,
+    slippageCostsUsd: book.slippageCostsUsd,
+    maxDrawdownUsd: book.maxDrawdownUsd,
+    maxDrawdownPct: book.maxDrawdownPct,
+    grossProfitUsd: book.grossProfitUsd,
+    grossLossUsd: book.grossLossUsd,
+    invalidData: book.invalidData,
     insufficientData: snaps.length < 2 ? 1 : 0,
-    longFeeGaps,
+    longFeeGaps: book.longFeeGaps,
   };
 }
 

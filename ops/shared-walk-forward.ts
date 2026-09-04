@@ -158,6 +158,178 @@ function orderedEvents(events: SharedPortfolioEvent[]): void {
   );
 }
 
+interface WalkForwardBook {
+  shadowCashUsd: number;
+  shadowDeployedUsd: number;
+  activePositions: number;
+  acceptedEntries: number;
+}
+
+function pushFeeIfNonZero(
+  events: SharedPortfolioEvent[],
+  timestamp: number,
+  pool: string,
+  amountUsd: number,
+): void {
+  if (amountUsd !== 0) events.push({ type: "fee", timestamp, pool, amountUsd });
+}
+
+function accrueWalkForwardFees(
+  events: SharedPortfolioEvent[],
+  position: Position,
+  pool: string,
+  snapshot: SharedWalkForwardSnapshot,
+  previous: number | null,
+): void {
+  if (
+    snapshot.activeBinId >= position.lowerBinId &&
+    snapshot.activeBinId <= position.upperBinId &&
+    snapshot.tvlUsd > 0 &&
+    previous !== null &&
+    snapshot.timestamp - previous <= MAX_FEE_GAP_MS
+  ) {
+    events.push({
+      type: "fee",
+      timestamp: snapshot.timestamp,
+      pool,
+      amountUsd:
+        snapshot.fees24hUsd *
+        Math.min(position.depositedUsd / snapshot.tvlUsd, 1) *
+        ((snapshot.timestamp - previous) / DAY_MS),
+    });
+  }
+}
+
+function maybeExitWalkForwardPosition(
+  book: WalkForwardBook,
+  events: SharedPortfolioEvent[],
+  state: PoolState,
+  pool: string,
+  snapshot: SharedWalkForwardSnapshot,
+  position: Position,
+  average: number | null,
+  yieldPct: number,
+  dd: number,
+  strategy: SharedWalkForwardStrategy,
+): void {
+  const mark = markToMarket(position, snapshot.currentPrice);
+  const decayed =
+    average !== null && average > 0 && yieldPct < average * strategy.yieldDecayFraction;
+  const loss = (mark - position.depositedUsd) / position.depositedUsd;
+  const trailing = (position.peakValueUsd - mark) / position.peakValueUsd;
+  if (
+    dd < -(strategy.drawdownExitPct / 100) ||
+    decayed ||
+    (strategy.stopLossEnabled && loss < -strategy.stopLossPct) ||
+    trailing > strategy.trailingStopPct
+  ) {
+    const cost = strategy.exitCostUsd + mark * (strategy.slippageBps / 10_000);
+    events.push({ type: "exit", timestamp: snapshot.timestamp, pool, valueUsd: mark });
+    pushFeeIfNonZero(events, snapshot.timestamp, pool, -cost);
+    book.shadowCashUsd += mark - cost;
+    book.shadowDeployedUsd -= position.depositedUsd;
+    book.activePositions--;
+    state.position = null;
+    state.cooldownUntil = snapshot.timestamp + strategy.rotationCooldownMs;
+  }
+}
+
+function passesFeeCostGate(minFeeCostRatio: number, expectedFees: number, roundTrip: number): boolean {
+  return minFeeCostRatio <= 0 || expectedFees >= roundTrip * minFeeCostRatio;
+}
+
+function tryOpenWalkForwardPosition(
+  book: WalkForwardBook,
+  events: SharedPortfolioEvent[],
+  state: PoolState,
+  pool: string,
+  snapshot: SharedWalkForwardSnapshot,
+  average: number | null,
+  yieldPct: number,
+  dd: number,
+  strategy: SharedWalkForwardStrategy,
+): void {
+  const decayed =
+    average !== null && average > 0 && yieldPct < average * strategy.yieldDecayFraction;
+  if (
+    snapshot.tvlUsd >= strategy.minTvlUsd &&
+    yieldPct > 0 &&
+    dd > -(strategy.drawdownExitPct / 100) &&
+    !(strategy.yieldHysteresis && decayed) &&
+    snapshot.usdPair !== null
+  ) {
+    const entryPriceUsd = rawRatioToUsd(snapshot.currentPrice, snapshot.usdPair);
+    if (entryPriceUsd === null) return;
+    const size = Math.min(
+      strategy.maxPositionUsd,
+      snapshot.tvlUsd * (strategy.poolShareCapPct / 100),
+      book.shadowCashUsd,
+    );
+    const entrySlippage = size * (strategy.slippageBps / 10_000);
+    const entryCost = strategy.entryCostUsd + entrySlippage;
+    const expectedFees = snapshot.fees24hUsd * (size / Math.max(snapshot.tvlUsd, 1)) * 7;
+    const roundTrip = entryCost + strategy.exitCostUsd + entrySlippage;
+    const legs = computeEntryHodlLegsUsd({
+      depositedUsd: size,
+      entryPriceUsd,
+      lowerBinId: snapshot.activeBinId - strategy.halfWidthTicks,
+      upperBinId: snapshot.activeBinId + strategy.halfWidthTicks,
+      usdPair: snapshot.usdPair,
+    });
+    const canEnter =
+      size > 0 &&
+      legs !== null &&
+      book.shadowCashUsd >= size + entryCost &&
+      book.shadowDeployedUsd + size <= strategy.portfolioUsd * (strategy.maxDeployedPct / 100) &&
+      book.activePositions < strategy.maxConcurrentPositions &&
+      passesFeeCostGate(strategy.minFeeCostRatio, expectedFees, roundTrip);
+    if (canEnter) {
+      events.push({
+        type: "entry-request",
+        timestamp: snapshot.timestamp,
+        pool,
+        amountUsd: size,
+      });
+      pushFeeIfNonZero(events, snapshot.timestamp, pool, -entryCost);
+      book.shadowCashUsd -= size + entryCost;
+      book.shadowDeployedUsd += size;
+      book.activePositions++;
+      state.position = {
+        entryPriceUsd,
+        lowerBinId: snapshot.activeBinId - strategy.halfWidthTicks,
+        upperBinId: snapshot.activeBinId + strategy.halfWidthTicks,
+        depositedUsd: size,
+        entryAmountXUsd: legs.movingUsd,
+        entryAmountYUsd: legs.numeraireUsd,
+        usdPair: snapshot.usdPair,
+        peakValueUsd: size,
+      };
+      book.acceptedEntries++;
+    }
+  }
+}
+
+function closeWalkForwardPositions(
+  events: SharedPortfolioEvent[],
+  states: ReadonlyMap<string, PoolState>,
+  snapshotsByPool: ReadonlyMap<string, readonly SharedWalkForwardSnapshot[]>,
+  split: SharedWalkForwardSplit,
+  strategy: SharedWalkForwardStrategy,
+): void {
+  for (const [pool, state] of states) {
+    if (state.position === null) continue;
+    const snapshots = snapshotsByPool.get(pool)!;
+    const final = [...snapshots].reverse().find((snapshot) => snapshot.timestamp <= split.endMs);
+    if (final === undefined) continue;
+    const timestamp = final.timestamp + 1;
+    const mark = markToMarket(state.position, final.currentPrice);
+    events.push({ type: "mark", timestamp, pool, valueUsd: mark });
+    events.push({ type: "exit", timestamp, pool, valueUsd: mark });
+    const cost = strategy.exitCostUsd + mark * (strategy.slippageBps / 10_000);
+    pushFeeIfNonZero(events, timestamp, pool, -cost);
+  }
+}
+
 function buildEvents(
   snapshotsByPool: ReadonlyMap<string, readonly SharedWalkForwardSnapshot[]>,
   strategy: SharedWalkForwardStrategy,
@@ -169,10 +341,12 @@ function buildEvents(
 } {
   const states = new Map<string, PoolState>();
   const events: SharedPortfolioEvent[] = [];
-  let acceptedEntries = 0;
-  let shadowCashUsd = strategy.portfolioUsd;
-  let shadowDeployedUsd = 0;
-  let activePositions = 0;
+  const book: WalkForwardBook = {
+    shadowCashUsd: strategy.portfolioUsd,
+    shadowDeployedUsd: 0,
+    activePositions: 0,
+    acceptedEntries: 0,
+  };
   const timeline = [...snapshotsByPool.entries()]
     .flatMap(([pool, snapshots]) => snapshots.map((snapshot, index) => ({ pool, snapshot, index })))
     .filter(
@@ -197,129 +371,20 @@ function buildEvents(
       const mark = markToMarket(position, snapshot.currentPrice);
       position.peakValueUsd = Math.max(position.peakValueUsd, mark);
       events.push({ type: "mark", timestamp: snapshot.timestamp, pool, valueUsd: mark });
-      if (
-        snapshot.activeBinId >= position.lowerBinId &&
-        snapshot.activeBinId <= position.upperBinId &&
-        snapshot.tvlUsd > 0 &&
-        previous !== null &&
-        snapshot.timestamp - previous <= MAX_FEE_GAP_MS
-      ) {
-        events.push({
-          type: "fee",
-          timestamp: snapshot.timestamp,
-          pool,
-          amountUsd:
-            snapshot.fees24hUsd *
-            Math.min(position.depositedUsd / snapshot.tvlUsd, 1) *
-            ((snapshot.timestamp - previous) / DAY_MS),
-        });
-      }
-      const decayed =
-        average !== null && average > 0 && yieldPct < average * strategy.yieldDecayFraction;
-      const loss = (mark - position.depositedUsd) / position.depositedUsd;
-      const trailing = (position.peakValueUsd - mark) / position.peakValueUsd;
-      if (
-        dd < -(strategy.drawdownExitPct / 100) ||
-        decayed ||
-        (strategy.stopLossEnabled && loss < -strategy.stopLossPct) ||
-        trailing > strategy.trailingStopPct
-      ) {
-        const cost = strategy.exitCostUsd + mark * (strategy.slippageBps / 10_000);
-        events.push({ type: "exit", timestamp: snapshot.timestamp, pool, valueUsd: mark });
-        if (cost !== 0)
-          events.push({ type: "fee", timestamp: snapshot.timestamp, pool, amountUsd: -cost });
-        shadowCashUsd += mark - cost;
-        shadowDeployedUsd -= position.depositedUsd;
-        activePositions--;
-        state.position = null;
-        state.cooldownUntil = snapshot.timestamp + strategy.rotationCooldownMs;
-      }
+      accrueWalkForwardFees(events, position, pool, snapshot, previous);
+      maybeExitWalkForwardPosition(book, events, state, pool, snapshot, position, average, yieldPct, dd, strategy);
     }
 
     if (state.position === null && snapshot.timestamp >= state.cooldownUntil) {
-      const decayed =
-        average !== null && average > 0 && yieldPct < average * strategy.yieldDecayFraction;
-      if (
-        snapshot.tvlUsd >= strategy.minTvlUsd &&
-        yieldPct > 0 &&
-        dd > -(strategy.drawdownExitPct / 100) &&
-        !(strategy.yieldHysteresis && decayed) &&
-        snapshot.usdPair !== null
-      ) {
-        const entryPriceUsd = rawRatioToUsd(snapshot.currentPrice, snapshot.usdPair);
-        if (entryPriceUsd !== null) {
-          const size = Math.min(
-            strategy.maxPositionUsd,
-            snapshot.tvlUsd * (strategy.poolShareCapPct / 100),
-          );
-          const entrySlippage = size * (strategy.slippageBps / 10_000);
-          const entryCost = strategy.entryCostUsd + entrySlippage;
-          const expectedFees = snapshot.fees24hUsd * (size / Math.max(snapshot.tvlUsd, 1)) * 7;
-          const roundTrip = entryCost + strategy.exitCostUsd + entrySlippage;
-          const legs = computeEntryHodlLegsUsd({
-            depositedUsd: size,
-            entryPriceUsd,
-            lowerBinId: snapshot.activeBinId - strategy.halfWidthTicks,
-            upperBinId: snapshot.activeBinId + strategy.halfWidthTicks,
-            usdPair: snapshot.usdPair,
-          });
-          const canEnter =
-            size > 0 &&
-            legs !== null &&
-            shadowCashUsd >= size + entryCost &&
-            shadowDeployedUsd + size <= strategy.portfolioUsd * (strategy.maxDeployedPct / 100) &&
-            activePositions < strategy.maxConcurrentPositions &&
-            (strategy.minFeeCostRatio <= 0 || expectedFees >= roundTrip * strategy.minFeeCostRatio);
-          if (canEnter) {
-            events.push({
-              type: "entry-request",
-              timestamp: snapshot.timestamp,
-              pool,
-              amountUsd: size,
-            });
-            if (entryCost !== 0)
-              events.push({
-                type: "fee",
-                timestamp: snapshot.timestamp,
-                pool,
-                amountUsd: -entryCost,
-              });
-            shadowCashUsd -= size + entryCost;
-            shadowDeployedUsd += size;
-            activePositions++;
-            state.position = {
-              entryPriceUsd,
-              lowerBinId: snapshot.activeBinId - strategy.halfWidthTicks,
-              upperBinId: snapshot.activeBinId + strategy.halfWidthTicks,
-              depositedUsd: size,
-              entryAmountXUsd: legs.movingUsd,
-              entryAmountYUsd: legs.numeraireUsd,
-              usdPair: snapshot.usdPair,
-              peakValueUsd: size,
-            };
-            acceptedEntries++;
-          }
-        }
-      }
+      tryOpenWalkForwardPosition(book, events, state, pool, snapshot, average, yieldPct, dd, strategy);
     }
     state.previousTimestamp = snapshot.timestamp;
     states.set(pool, state);
   }
 
-  for (const [pool, state] of states) {
-    if (state.position === null) continue;
-    const snapshots = snapshotsByPool.get(pool)!;
-    const final = [...snapshots].reverse().find((snapshot) => snapshot.timestamp <= split.endMs);
-    if (final === undefined) continue;
-    const timestamp = final.timestamp + 1;
-    const mark = markToMarket(state.position, final.currentPrice);
-    events.push({ type: "mark", timestamp, pool, valueUsd: mark });
-    events.push({ type: "exit", timestamp, pool, valueUsd: mark });
-    const cost = strategy.exitCostUsd + mark * (strategy.slippageBps / 10_000);
-    if (cost !== 0) events.push({ type: "fee", timestamp, pool, amountUsd: -cost });
-  }
+  closeWalkForwardPositions(events, states, snapshotsByPool, split, strategy);
   orderedEvents(events);
-  return { events, acceptedEntries, coverageMs: Math.max(0, coverageMs) };
+  return { events, acceptedEntries: book.acceptedEntries, coverageMs: Math.max(0, coverageMs) };
 }
 
 function metrics(

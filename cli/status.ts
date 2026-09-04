@@ -1,9 +1,9 @@
 import { Command } from "commander";
 import { Effect, Layer } from "effect";
-import { DbLive } from "../engine/db-service.js";
-import { DbService, AuditService, AdapterService } from "../engine/services.js";
+import { DbLive, type PositionRecord } from "../engine/db-service.js";
+import { DbService, AuditService, AdapterService, type AdapterApi, type DecisionRecord } from "../engine/services.js";
 import { AuditLive } from "../engine/audit-service.js";
-import { ConfigLive, ConfigService } from "../engine/config-service.js";
+import { ConfigLive, ConfigService, type AppConfig } from "../engine/config-service.js";
 import { AdapterLive } from "../engine/adapter-service.js";
 import {
   computeSummaryWithEquity,
@@ -15,6 +15,12 @@ import { createLogger } from "../engine/logger.js";
 import { readLockfile, isProcessAlive, findRunningEngineProcess } from "./lockfile.js";
 import { getBeamDbPath } from "../engine/paths.js";
 import { resolveEffectiveWallet } from "../engine/wallet-keystore.js";
+import type {
+  TokenCandidateRecord,
+  ExecutionOperationRecord,
+  SettlementJobRecord,
+  SafetyPauseRecord,
+} from "../engine/types.js";
 
 const logger = createLogger("status-cli");
 
@@ -165,6 +171,439 @@ function buildProgram(): Layer.Layer<
   return Layer.mergeAll(dbLayer, auditLayer, configLayer, adapterLayer);
 }
 
+interface StatusAutonomousData {
+  readonly candidates: ReadonlyArray<TokenCandidateRecord>;
+  readonly operations: ReadonlyArray<ExecutionOperationRecord>;
+  readonly settlements: ReadonlyArray<SettlementJobRecord>;
+  readonly safetyPause: SafetyPauseRecord | null;
+}
+
+interface StatusReportContext {
+  readonly running: boolean;
+  readonly config: AppConfig;
+  readonly summary: PortfolioSummary;
+  readonly activePositions: ReadonlyArray<PositionRecord>;
+  readonly prices: ReadonlyMap<string, number>;
+  readonly recentAudit: ReadonlyArray<DecisionRecord>;
+  readonly walletAddress: string | null;
+  readonly walletError: string | null;
+  readonly autonomous: StatusAutonomousData;
+  readonly pnlText: string;
+  readonly agentStatus: string;
+}
+
+function printStatusJson(ctx: StatusReportContext): void {
+  const json: StatusJsonOutput = {
+    running: ctx.running,
+    dbPath: process.env.SQLITE_DB_PATH ?? getBeamDbPath(),
+    timestamp: new Date().toISOString(),
+    agentRuntime: {
+      enabled: ctx.config.agentiveMode,
+      runtime: ctx.config.agentRuntime,
+      acpCommand: ctx.config.agentAcpCommand,
+      gatewayUrl: ctx.config.agentGatewayUrl,
+      checkinIntervalMs: ctx.config.agentCheckinIntervalMs,
+      checkinOnEvents: ctx.config.agentCheckinOnEvents,
+    },
+    portfolio: ctx.summary,
+    positions: toJsonOutput(ctx.activePositions, ctx.prices).positions,
+    recentDecisions: ctx.recentAudit.slice(0, 10).map((d) => ({
+      timestamp: new Date(d.timestamp).toISOString(),
+      action: d.action,
+      pool: d.poolAddress,
+      confidence: d.confidence,
+      reasoning: d.reasoning,
+      executed: d.executed,
+      paperTrading: d.paperTrading,
+    })),
+    autonomous: {
+      mode: ctx.config.autonomousTokenMode,
+      walletAddress: ctx.walletAddress,
+      agentInstanceId: ctx.config.agentInstanceId,
+      candidates: ctx.autonomous.candidates.map((candidate) => ({
+        id: candidate.id,
+        state: candidate.state,
+        poolAddress: candidate.poolAddress,
+        tokenMint: candidate.tokenMint,
+        healthyScanCount: candidate.healthyScanCount,
+        updatedAt: new Date(candidate.updatedAt).toISOString(),
+      })),
+      operations: ctx.autonomous.operations.map((operation) => ({
+        id: operation.id,
+        candidateId: operation.candidateId,
+        positionId: operation.positionId,
+        type: operation.operationType,
+        status: operation.status,
+        poolAddress: operation.poolAddress,
+        tokenMint: operation.tokenMint,
+        txSignature: operation.txSignature,
+        error: operation.error,
+        updatedAt: new Date(operation.updatedAt).toISOString(),
+      })),
+      settlements: ctx.autonomous.settlements.map((settlement) => ({
+        id: settlement.id,
+        positionId: settlement.positionId,
+        status: settlement.status,
+        poolAddress: settlement.poolAddress,
+        tokenMint: settlement.tokenMint,
+        amountAtomic: settlement.amountAtomic,
+        confirmedOutputAtomic: settlement.confirmedOutputAtomic,
+        attempts: settlement.attempts,
+        nextRetryAt:
+          settlement.nextRetryAt === null
+            ? null
+            : new Date(settlement.nextRetryAt).toISOString(),
+        expiresAt: new Date(settlement.expiresAt).toISOString(),
+        createdAt: new Date(settlement.createdAt).toISOString(),
+        txSignature: settlement.txSignature,
+        error: settlement.error,
+      })),
+      safetyPause:
+        ctx.autonomous.safetyPause === null
+          ? null
+          : {
+              active: ctx.autonomous.safetyPause.resolvedAt === null,
+              reason: ctx.autonomous.safetyPause.reason,
+              triggeredAt: new Date(ctx.autonomous.safetyPause.triggeredAt).toISOString(),
+              resolvedAt:
+                ctx.autonomous.safetyPause.resolvedAt === null
+                  ? null
+                  : new Date(ctx.autonomous.safetyPause.resolvedAt).toISOString(),
+            },
+    },
+  };
+  console.log(JSON.stringify(json, null, 2));
+}
+
+function printStatusMessage(ctx: StatusReportContext): void {
+  const pnlEmoji = ctx.summary.totalUnrealizedPnlUsd >= 0 ? "🟢" : "🔴";
+  const positionLines =
+    ctx.activePositions.length === 0
+      ? ["No open positions."]
+      : ctx.activePositions.map((p) => {
+          const pnl = p.currentValueUsd - p.depositedUsd;
+          const emoji = pnl >= 0 ? "🟢" : "🔴";
+          return `${emoji} ${p.tokenXSymbol}/${p.tokenYSymbol}: $${p.currentValueUsd.toFixed(2)} (${pnl >= 0 ? "+" : ""}$${pnl.toFixed(2)})`;
+        });
+  const decisionLines =
+    ctx.recentAudit.length === 0
+      ? ["No recent decisions."]
+      : ctx.recentAudit.slice(0, 3).map((d) => {
+          const pool = `${d.poolAddress.slice(0, 6)}...${d.poolAddress.slice(-4)}`;
+          return `• ${d.action} ${pool} — ${(d.confidence * 100).toFixed(0)}% confidence`;
+        });
+  const lines = [
+    "🔺 *Beam Status*",
+    "",
+    `Positions: ${ctx.activePositions.length} active`,
+    `Deposited: $${ctx.summary.totalDepositedUsd.toFixed(2)}`,
+    `Current:   $${ctx.summary.totalCurrentValueUsd.toFixed(2)}`,
+    ...(ctx.summary.walletKnown
+      ? [`Wallet:    $${(ctx.summary.walletBalanceUsd ?? 0).toFixed(2)}`]
+      : []),
+    `Equity:    $${ctx.summary.totalEquityUsd.toFixed(2)}`,
+    `Fees:      $${ctx.summary.totalFeesClaimedUsd.toFixed(2)}`,
+    ...(ctx.summary.totalRewardsClaimedUsd > 0
+      ? [`Rewards:   $${ctx.summary.totalRewardsClaimedUsd.toFixed(2)}`]
+      : []),
+    `Unrealized: ${pnlEmoji} $${ctx.summary.totalUnrealizedPnlUsd.toFixed(2)} (${ctx.summary.totalUnrealizedPnlPct.toFixed(2)}%)`,
+    "",
+    "*Open positions*",
+    ...positionLines,
+    "",
+    "*Recent decisions*",
+    ...decisionLines,
+  ];
+  if (ctx.config.agentiveMode) {
+    lines.push("", `Agent overlay: ${ctx.config.agentRuntime}`);
+  }
+  console.log(lines.join("\n"));
+}
+
+type ClassifiedStrandedSettlement = {
+  readonly settlement: SettlementJobRecord;
+} & StrandedSettlementClassification;
+
+function fetchStrandedClassification(
+  adapter: AdapterApi,
+  settlements: ReadonlyArray<SettlementJobRecord>,
+  dustUsd: number,
+): Effect.Effect<
+  {
+    readonly stranded: ReadonlyArray<ClassifiedStrandedSettlement & { readonly valueUsd: number }>;
+    readonly unpriceable: ReadonlyArray<ClassifiedStrandedSettlement>;
+    readonly unavailable: ReadonlyArray<ClassifiedStrandedSettlement>;
+  },
+  never,
+  never
+> {
+  return Effect.gen(function* () {
+    // Issue #166: surface terminal settlements whose swap never
+    // recovered the token so stranded capital stays visible until
+    // the orphan sweep re-queues it. A terminal record is historical
+    // only when a CONFIRMED settlement for the same mint is newer than
+    // it (the sweep sold the token) — a terminal record NEWER than any
+    // confirmed one is a recurring stranding and must stay visible.
+    const newestConfirmedAt = new Map<string, number>();
+    for (const settlement of settlements) {
+      if (settlement.status !== "confirmed") continue;
+      const previous = newestConfirmedAt.get(settlement.tokenMint);
+      if (previous === undefined || settlement.createdAt > previous) {
+        newestConfirmedAt.set(settlement.tokenMint, settlement.createdAt);
+      }
+    }
+    const strandedCandidates = settlements.filter(
+      (settlement) =>
+        settlement.status === "terminal" &&
+        settlement.confirmedOutputAtomic === null &&
+        (newestConfirmedAt.get(settlement.tokenMint) ?? -1) < settlement.createdAt,
+    );
+    // Issue #183: classify against the sweep's dust policy. Prices are
+    // batched into ONE call (all candidates known upfront); decimals
+    // run with bounded concurrency so a stranded-token burst cannot
+    // fire unbounded parallel RPC.
+    const candidateMints = [...new Set(strandedCandidates.map((s) => s.tokenMint))];
+    // Price channel: fetchTokenPrices NEVER fails — every source
+    // (RPC/price providers) catches its own errors and returns {},
+    // and unresolved mints come back as price 0 — so a total
+    // price-provider outage is INDISTINGUISHABLE from a genuinely
+    // unquotable mint at this API and classifies as Unpriceable (the
+    // label is factual: no USD price resolved at query time). Only a
+    // DEFECT (sync throw from a malformed mint) is caught here, with a
+    // per-mint fallback so one bad mint cannot label every candidate.
+    // useFallback: false — the default serves the hardcoded fallback
+    // prices as if measured during
+    // a total outage, which would report stranded capital at
+    // FABRICATED values (the wallet-reconciliation path avoids them
+    // for the same reason).
+    const resolvePriceForMint = (mint: string) =>
+      adapter.getTokenPrices([mint], { useFallback: false }).pipe(
+        Effect.map((p) => {
+          const price = p[mint] ?? 0;
+          return {
+            mint,
+            state: priceLookupState(price),
+            value: price,
+          };
+        }),
+        Effect.catchCause(() =>
+          Effect.succeed({ mint, state: "unpriceable" as const, value: 0 }),
+        ),
+      );
+    const priceLookup = yield* adapter
+      .getTokenPrices(candidateMints, { useFallback: false })
+      .pipe(
+        Effect.map((prices) => {
+          const entries = candidateMints.map((mint) => {
+            const price = prices[mint] ?? 0;
+            return [
+              mint,
+              {
+                state: priceLookupState(price),
+                value: price,
+              },
+            ] as const;
+          });
+          return new Map(entries);
+        }),
+        // Batch defect: one malformed mint must not label every candidate
+        // Unpriceable — fall back to per-mint fetches, deduplicated (one
+        // fetch per unique mint, not per settlement).
+        Effect.catchCause(() =>
+          Effect.all(candidateMints.map(resolvePriceForMint), { concurrency: 4 }).pipe(
+            Effect.map((results) => new Map(results.map((r) => [r.mint, r]))),
+          ),
+        ),
+      );
+    // Decimals channel: getTokenDecimals DOES fail typed, and the error
+    // message distinguishes an RPC outage (→ Unavailable) from the
+    // adapter's "Cannot resolve decimals for mint X" unresolvable case
+    // (→ Unpriceable — a retry can never succeed). Deduplicated per
+    // unique mint, bounded concurrency.
+    const decimalsLookup = new Map<string, { state: StrandedLookupState; value: number }>();
+    yield* Effect.all(
+      candidateMints
+        .filter((mint) => priceLookup.get(mint)?.state === "ok")
+        .map((mint) =>
+          adapter.getTokenDecimals(mint).pipe(
+            Effect.map((decimals) => {
+              const state: StrandedLookupState = decimals > 0 ? "ok" : "unpriceable";
+              return { mint, state, value: decimals };
+            }),
+            Effect.catch((err) =>
+              Effect.succeed({
+                mint,
+                state: decimalsFailureState(String(err)),
+                value: 0,
+              }),
+            ),
+            Effect.catchCause(() =>
+              Effect.succeed({ mint, state: "unpriceable" as const, value: 0 }),
+            ),
+          ),
+        ),
+      { concurrency: 4 },
+    ).pipe(
+      Effect.map((results) => {
+        for (const r of results) decimalsLookup.set(r.mint, r);
+      }),
+    );
+    const strandedClassification = strandedCandidates.map((settlement) => {
+      const price = priceLookup.get(settlement.tokenMint) ?? {
+        state: "unpriceable" as const,
+        value: 0,
+      };
+      const decimals = decimalsLookup.get(settlement.tokenMint) ?? {
+        state: "unpriceable" as const,
+        value: 0,
+      };
+      return {
+        settlement,
+        ...classifyStrandedSettlement({
+          priceState: price.state,
+          priceUsd: price.value,
+          decimalsState: decimals.state,
+          decimals: decimals.value,
+          amountAtomic: settlement.amountAtomic,
+          dustUsd,
+        }),
+      };
+    });
+    return {
+      stranded: strandedClassification.filter(
+        (entry): entry is typeof entry & { valueUsd: number } => entry.kind === "stranded",
+      ),
+      unpriceable: strandedClassification.filter((entry) => entry.kind === "unpriceable"),
+      unavailable: strandedClassification.filter((entry) => entry.kind === "unavailable"),
+    };
+  });
+}
+
+function formatLatchedBySettlements(autonomous: StatusAutonomousData): string | null {
+  // Acceptance for issue #167: an active settlement_overdue pause
+  // names the non-terminal jobs keeping it latched (oldest first).
+  if (
+    autonomous.safetyPause === null ||
+    autonomous.safetyPause.resolvedAt !== null ||
+    autonomous.safetyPause.reason !== "settlement_overdue"
+  ) {
+    return null;
+  }
+  const now = Date.now();
+  const offenders = autonomous.settlements
+    .filter((job) => job.status !== "confirmed" && job.status !== "terminal")
+    .sort((a, b) => a.createdAt - b.createdAt)
+    .slice(0, 3);
+  if (offenders.length === 0) return null;
+  return `  Latched by: ${offenders
+    .map(
+      (job) =>
+        `${job.id.slice(0, 8)}… ${job.status} ${((now - job.createdAt) / 3_600_000).toFixed(1)}h${job.error ? ` (${job.error})` : ""}`,
+    )
+    .join(", ")}`;
+}
+
+function printStatusHuman(
+  adapter: AdapterApi,
+  ctx: StatusReportContext,
+): Effect.Effect<void, never, never> {
+  return Effect.gen(function* () {
+    const classification = yield* fetchStrandedClassification(
+      adapter,
+      ctx.autonomous.settlements,
+      ctx.config.settlementDustUsd,
+    );
+    // Acceptance for issue #167: an active settlement_overdue pause
+    // names the non-terminal jobs keeping it latched (oldest first).
+    const latchedBySettlements = formatLatchedBySettlements(ctx.autonomous);
+    console.log(
+      [
+        "Beam Status",
+        "============",
+        `  Database:    ${process.env.SQLITE_DB_PATH ?? getBeamDbPath()}`,
+        `  Positions:   ${ctx.activePositions.length} active`,
+        `  Deposited:   $${ctx.summary.totalDepositedUsd.toFixed(2)}`,
+        `  Current:     $${ctx.summary.totalCurrentValueUsd.toFixed(2)}`,
+        ...(ctx.summary.walletKnown
+          ? [`  Wallet:      $${(ctx.summary.walletBalanceUsd ?? 0).toFixed(2)}`]
+          : []),
+        `  Equity:      $${ctx.summary.totalEquityUsd.toFixed(2)}`,
+        `  Fees:        $${ctx.summary.totalFeesClaimedUsd.toFixed(2)}`,
+        ...(ctx.summary.totalRewardsClaimedUsd > 0
+          ? [`  Rewards:     $${ctx.summary.totalRewardsClaimedUsd.toFixed(2)}`]
+          : []),
+        `  Unrealized:  ${ctx.pnlText}`,
+        `  ${ctx.agentStatus}`,
+        `  Autonomous:  ${ctx.config.autonomousTokenMode} (${ctx.walletAddress ?? "paper"})`,
+        ...(ctx.walletError ? [`  Wallet error: ${ctx.walletError}`] : []),
+        `  Candidates:  ${ctx.autonomous.candidates.length}`,
+        `  Operations:  ${ctx.autonomous.operations.length}`,
+        `  Settlements: ${ctx.autonomous.settlements.length}`,
+        ...(classification.stranded.length > 0
+          ? [
+              `  Stranded:    ${classification.stranded.length} terminal settlement(s) with unspent balance (${classification.stranded
+                .map(
+                  (entry) =>
+                    `${(entry.settlement.poolAddress || "?").slice(0, 8)}/${entry.settlement.tokenMint.slice(0, 8)} ($${entry.valueUsd.toFixed(2)})`,
+                )
+                .join(", ")}) — see --json for details`,
+            ]
+          : []),
+        ...(classification.unpriceable.length > 0
+          ? [
+              `  Unpriceable: ${classification.unpriceable.length} terminal settlement(s) with no USD price resolved at query time — cannot value, left in wallet (${classification.unpriceable
+                .map(
+                  (entry) =>
+                    `${(entry.settlement.poolAddress || "?").slice(0, 8)}/${entry.settlement.tokenMint.slice(0, 8)}`,
+                )
+                .join(", ")})`,
+            ]
+          : []),
+        ...(classification.unavailable.length > 0
+          ? [
+              `  Unavailable: ${classification.unavailable.length} terminal settlement(s) — price/decimals lookup unreachable, value unknown (${classification.unavailable
+                .map(
+                  (entry) =>
+                    `${(entry.settlement.poolAddress || "?").slice(0, 8)}/${entry.settlement.tokenMint.slice(0, 8)}`,
+                )
+                .join(", ")}) — retry later`,
+            ]
+          : []),
+        `  Safety pause: ${
+          ctx.autonomous.safetyPause === null
+            ? "none"
+            : ctx.autonomous.safetyPause.resolvedAt === null
+              ? `ACTIVE (${ctx.autonomous.safetyPause.reason})`
+              : `resolved (${ctx.autonomous.safetyPause.reason})`
+        }`,
+        ...(latchedBySettlements !== null ? [latchedBySettlements] : []),
+        "",
+        `  Recent decisions: ${ctx.recentAudit.length}`,
+        ...ctx.recentAudit
+          .slice(0, 5)
+          .map(
+            (d) =>
+              `    ${d.action} ${d.poolAddress.slice(0, 16)}... (${d.confidence.toFixed(2)})`,
+          ),
+      ].join("\n"),
+    );
+  });
+}
+
+function isEngineRunning(
+  lock: { readonly pid: number } | null,
+  runningProcess: { readonly pid: number } | null,
+  hasDb: boolean,
+  lastActivityAt: number,
+  scanIntervalMs: number,
+): boolean {
+  return (
+    (lock !== null && isProcessAlive(lock.pid)) ||
+    runningProcess !== null ||
+    (hasDb && Date.now() - lastActivityAt < scanIntervalMs * 2)
+  );
+}
+
 export const statusCommand = new Command("status")
   .description("Show current agent status for humans and agent runtimes")
   .option("-j, --json", "Output as JSON for agent consumption")
@@ -224,399 +663,43 @@ network; with no stranded settlements it is fully offline.`,
           }
           const hasDb = positions.length > 0 || recentAudit.length > 0;
           const lastActivityAt = recentAudit[0]?.timestamp ?? 0;
-          const lock = readLockfile();
-          const runningProcess = findRunningEngineProcess();
-          const running =
-            (lock !== null && isProcessAlive(lock.pid)) ||
-            runningProcess !== null ||
-            (hasDb && Date.now() - lastActivityAt < config.scanIntervalMs * 2);
-
-          if (opts.json) {
-            const json: StatusJsonOutput = {
-              running: running,
-              dbPath: process.env.SQLITE_DB_PATH ?? getBeamDbPath(),
-              timestamp: new Date().toISOString(),
-              agentRuntime: {
-                enabled: config.agentiveMode,
-                runtime: config.agentRuntime,
-                acpCommand: config.agentAcpCommand,
-                gatewayUrl: config.agentGatewayUrl,
-                checkinIntervalMs: config.agentCheckinIntervalMs,
-                checkinOnEvents: config.agentCheckinOnEvents,
-              },
-              portfolio: summary,
-              positions: toJsonOutput(activePositions, prices).positions,
-              recentDecisions: recentAudit.slice(0, 10).map((d) => ({
-                timestamp: new Date(d.timestamp).toISOString(),
-                action: d.action,
-                pool: d.poolAddress,
-                confidence: d.confidence,
-                reasoning: d.reasoning,
-                executed: d.executed,
-                paperTrading: d.paperTrading,
-              })),
-              autonomous: {
-                mode: config.autonomousTokenMode,
-                walletAddress,
-                agentInstanceId: config.agentInstanceId,
-                candidates: autonomous.candidates.map((candidate) => ({
-                  id: candidate.id,
-                  state: candidate.state,
-                  poolAddress: candidate.poolAddress,
-                  tokenMint: candidate.tokenMint,
-                  healthyScanCount: candidate.healthyScanCount,
-                  updatedAt: new Date(candidate.updatedAt).toISOString(),
-                })),
-                operations: autonomous.operations.map((operation) => ({
-                  id: operation.id,
-                  candidateId: operation.candidateId,
-                  positionId: operation.positionId,
-                  type: operation.operationType,
-                  status: operation.status,
-                  poolAddress: operation.poolAddress,
-                  tokenMint: operation.tokenMint,
-                  txSignature: operation.txSignature,
-                  error: operation.error,
-                  updatedAt: new Date(operation.updatedAt).toISOString(),
-                })),
-                settlements: autonomous.settlements.map((settlement) => ({
-                  id: settlement.id,
-                  positionId: settlement.positionId,
-                  status: settlement.status,
-                  poolAddress: settlement.poolAddress,
-                  tokenMint: settlement.tokenMint,
-                  amountAtomic: settlement.amountAtomic,
-                  confirmedOutputAtomic: settlement.confirmedOutputAtomic,
-                  attempts: settlement.attempts,
-                  nextRetryAt:
-                    settlement.nextRetryAt === null
-                      ? null
-                      : new Date(settlement.nextRetryAt).toISOString(),
-                  expiresAt: new Date(settlement.expiresAt).toISOString(),
-                  createdAt: new Date(settlement.createdAt).toISOString(),
-                  txSignature: settlement.txSignature,
-                  error: settlement.error,
-                })),
-                safetyPause:
-                  autonomous.safetyPause === null
-                    ? null
-                    : {
-                        active: autonomous.safetyPause.resolvedAt === null,
-                        reason: autonomous.safetyPause.reason,
-                        triggeredAt: new Date(autonomous.safetyPause.triggeredAt).toISOString(),
-                        resolvedAt:
-                          autonomous.safetyPause.resolvedAt === null
-                            ? null
-                            : new Date(autonomous.safetyPause.resolvedAt).toISOString(),
-                      },
-              },
-            };
-            console.log(JSON.stringify(json, null, 2));
-            return;
-          }
-
-          if (opts.message) {
-            const pnlEmoji = summary.totalUnrealizedPnlUsd >= 0 ? "🟢" : "🔴";
-            const positionLines =
-              activePositions.length === 0
-                ? ["No open positions."]
-                : activePositions.map((p) => {
-                    const pnl = p.currentValueUsd - p.depositedUsd;
-                    const emoji = pnl >= 0 ? "🟢" : "🔴";
-                    return `${emoji} ${p.tokenXSymbol}/${p.tokenYSymbol}: $${p.currentValueUsd.toFixed(2)} (${pnl >= 0 ? "+" : ""}$${pnl.toFixed(2)})`;
-                  });
-            const decisionLines =
-              recentAudit.length === 0
-                ? ["No recent decisions."]
-                : recentAudit.slice(0, 3).map((d) => {
-                    const pool = `${d.poolAddress.slice(0, 6)}...${d.poolAddress.slice(-4)}`;
-                    return `• ${d.action} ${pool} — ${(d.confidence * 100).toFixed(0)}% confidence`;
-                  });
-            const lines = [
-              "🔺 *Beam Status*",
-              "",
-              `Positions: ${activePositions.length} active`,
-              `Deposited: $${summary.totalDepositedUsd.toFixed(2)}`,
-              `Current:   $${summary.totalCurrentValueUsd.toFixed(2)}`,
-              ...(summary.walletKnown
-                ? [`Wallet:    $${(summary.walletBalanceUsd ?? 0).toFixed(2)}`]
-                : []),
-              `Equity:    $${summary.totalEquityUsd.toFixed(2)}`,
-              `Fees:      $${summary.totalFeesClaimedUsd.toFixed(2)}`,
-              ...(summary.totalRewardsClaimedUsd > 0
-                ? [`Rewards:   $${summary.totalRewardsClaimedUsd.toFixed(2)}`]
-                : []),
-              `Unrealized: ${pnlEmoji} $${summary.totalUnrealizedPnlUsd.toFixed(2)} (${summary.totalUnrealizedPnlPct.toFixed(2)}%)`,
-              "",
-              "*Open positions*",
-              ...positionLines,
-              "",
-              "*Recent decisions*",
-              ...decisionLines,
-            ];
-            if (config.agentiveMode) {
-              lines.push("", `Agent overlay: ${config.agentRuntime}`);
-            }
-            console.log(lines.join("\n"));
-            return;
-          }
+          const running = isEngineRunning(
+            readLockfile(),
+            findRunningEngineProcess(),
+            hasDb,
+            lastActivityAt,
+            config.scanIntervalMs,
+          );
 
           const pnlText = `${summary.totalUnrealizedPnlUsd >= 0 ? "+" : ""}$${summary.totalUnrealizedPnlUsd.toFixed(2)} (${summary.totalUnrealizedPnlPct.toFixed(2)}%)`;
           const agentStatus = config.agentiveMode
             ? `agent overlay: ${config.agentRuntime}`
             : "agent overlay: off";
-          // Issue #166: surface terminal settlements whose swap never
-          // recovered the token so stranded capital stays visible until
-          // the orphan sweep re-queues it. A terminal record is historical
-          // only when a CONFIRMED settlement for the same mint is newer than
-          // it (the sweep sold the token) — a terminal record NEWER than any
-          // confirmed one is a recurring stranding and must stay visible.
-          // Issue #183: classify against the sweep's dust policy — a
-          // sub-dust terminal is intentionally never re-queued (not stranded
-          // capital, so it is excluded), an unpriceable terminal cannot be
-          // valued (stays visible, labeled unpriceable), and only priceable
-          // value at/above the dust cutoff is real stranded capital.
-          const newestConfirmedAt = new Map<string, number>();
-          for (const settlement of autonomous.settlements) {
-            if (settlement.status !== "confirmed") continue;
-            const previous = newestConfirmedAt.get(settlement.tokenMint);
-            if (previous === undefined || settlement.createdAt > previous) {
-              newestConfirmedAt.set(settlement.tokenMint, settlement.createdAt);
-            }
+          const ctx: StatusReportContext = {
+            running,
+            config,
+            summary,
+            activePositions,
+            prices,
+            recentAudit,
+            walletAddress,
+            walletError: effectiveWallet?.error ?? null,
+            autonomous,
+            pnlText,
+            agentStatus,
+          };
+          if (opts.json) {
+            printStatusJson(ctx);
+            return;
           }
-          const strandedCandidates = autonomous.settlements.filter(
-            (settlement) =>
-              settlement.status === "terminal" &&
-              settlement.confirmedOutputAtomic === null &&
-              (newestConfirmedAt.get(settlement.tokenMint) ?? -1) < settlement.createdAt,
-          );
-          // Issue #183: classify against the sweep's dust policy. Prices are
-          // batched into ONE call (all candidates known upfront); decimals
-          // run with bounded concurrency so a stranded-token burst cannot
-          // fire unbounded parallel RPC. Classification is three-way:
-          // - stranded — priceable value at/above SETTLEMENT_DUST_USD (the
-          //   sweep deliberately re-queues nothing here; real capital).
-          // - dust — priceable value below the cutoff (intentionally never
-          //   re-queued; excluded from the report).
-          // - unpriceable — no resolvable price/decimals (genuinely
-          //   unquotable mint, or a malformed/defective lookup): cannot be
-          //   valued, surfaced on its own line.
-          // - unavailable — the decimals/RPC lookup failed with an outage
-          //   error: distinct from unpriceable so an outage never mislabels
-          //   real stranded capital as worthless dust.
+
+          if (opts.message) {
+            printStatusMessage(ctx);
+            return;
+          }
+
           const adapter = yield* AdapterService;
-          const candidateMints = [...new Set(strandedCandidates.map((s) => s.tokenMint))];
-          // Price channel: fetchTokenPrices NEVER fails — every source
-          // (RPC/price providers) catches its own errors and returns {},
-          // and unresolved mints come back as price 0 — so a total
-          // price-provider outage is INDISTINGUISHABLE from a genuinely
-          // unquotable mint at this API and classifies as Unpriceable (the
-          // label is factual: no USD price resolved at query time). Only a
-          // DEFECT (sync throw from a malformed mint) is caught here, with a
-          // per-mint fallback so one bad mint cannot label every candidate.
-          // useFallback: false — the default serves the hardcoded fallback
-          // prices as if measured during
-          // a total outage, which would report stranded capital at
-          // FABRICATED values (the wallet-reconciliation path avoids them
-          // for the same reason).
-          const resolvePriceForMint = (mint: string) =>
-            adapter.getTokenPrices([mint], { useFallback: false }).pipe(
-              Effect.map((p) => {
-                const price = p[mint] ?? 0;
-                return {
-                  mint,
-                  state: priceLookupState(price),
-                  value: price,
-                };
-              }),
-              Effect.catchCause(() =>
-                Effect.succeed({ mint, state: "unpriceable" as const, value: 0 }),
-              ),
-            );
-          const priceLookup = yield* adapter
-            .getTokenPrices(candidateMints, { useFallback: false })
-            .pipe(
-              Effect.map((prices) => {
-                const entries = candidateMints.map((mint) => {
-                  const price = prices[mint] ?? 0;
-                  return [
-                    mint,
-                    {
-                      state: priceLookupState(price),
-                      value: price,
-                    },
-                  ] as const;
-                });
-                return new Map(entries);
-              }),
-              // Batch defect: one malformed mint must not label every candidate
-              // Unpriceable — fall back to per-mint fetches, deduplicated (one
-              // fetch per unique mint, not per settlement).
-              Effect.catchCause(() =>
-                Effect.all(candidateMints.map(resolvePriceForMint), { concurrency: 4 }).pipe(
-                  Effect.map((results) => new Map(results.map((r) => [r.mint, r]))),
-                ),
-              ),
-            );
-          // Decimals channel: getTokenDecimals DOES fail typed, and the error
-          // message distinguishes an RPC outage (→ Unavailable) from the
-          // adapter's "Cannot resolve decimals for mint X" unresolvable case
-          // (→ Unpriceable — a retry can never succeed). Deduplicated per
-          // unique mint, bounded concurrency.
-          const decimalsLookup = new Map<string, { state: StrandedLookupState; value: number }>();
-          yield* Effect.all(
-            candidateMints
-              .filter((mint) => priceLookup.get(mint)?.state === "ok")
-              .map((mint) =>
-                adapter.getTokenDecimals(mint).pipe(
-                  Effect.map((decimals) => {
-                    const state: StrandedLookupState = decimals > 0 ? "ok" : "unpriceable";
-                    return { mint, state, value: decimals };
-                  }),
-                  Effect.catch((err) =>
-                    Effect.succeed({
-                      mint,
-                      state: decimalsFailureState(String(err)),
-                      value: 0,
-                    }),
-                  ),
-                  Effect.catchCause(() =>
-                    Effect.succeed({ mint, state: "unpriceable" as const, value: 0 }),
-                  ),
-                ),
-              ),
-            { concurrency: 4 },
-          ).pipe(
-            Effect.map((results) => {
-              for (const r of results) decimalsLookup.set(r.mint, r);
-            }),
-          );
-          const strandedClassification = strandedCandidates.map((settlement) => {
-            const price = priceLookup.get(settlement.tokenMint) ?? {
-              state: "unpriceable" as const,
-              value: 0,
-            };
-            const decimals = decimalsLookup.get(settlement.tokenMint) ?? {
-              state: "unpriceable" as const,
-              value: 0,
-            };
-            return {
-              settlement,
-              ...classifyStrandedSettlement({
-                priceState: price.state,
-                priceUsd: price.value,
-                decimalsState: decimals.state,
-                decimals: decimals.value,
-                amountAtomic: settlement.amountAtomic,
-                dustUsd: config.settlementDustUsd,
-              }),
-            };
-          });
-          const strandedSettlements = strandedClassification.filter(
-            (entry): entry is typeof entry & { valueUsd: number } => entry.kind === "stranded",
-          );
-          const unpriceableStranded = strandedClassification.filter(
-            (entry) => entry.kind === "unpriceable",
-          );
-          const unavailableStranded = strandedClassification.filter(
-            (entry) => entry.kind === "unavailable",
-          );
-
-          // Acceptance for issue #167: an active settlement_overdue pause
-          // names the non-terminal jobs keeping it latched (oldest first).
-          const latchedBySettlements = (() => {
-            if (
-              autonomous.safetyPause === null ||
-              autonomous.safetyPause.resolvedAt !== null ||
-              autonomous.safetyPause.reason !== "settlement_overdue"
-            ) {
-              return null;
-            }
-            const now = Date.now();
-            const offenders = autonomous.settlements
-              .filter((job) => job.status !== "confirmed" && job.status !== "terminal")
-              .sort((a, b) => a.createdAt - b.createdAt)
-              .slice(0, 3);
-            if (offenders.length === 0) return null;
-            return `  Latched by: ${offenders
-              .map(
-                (job) =>
-                  `${job.id.slice(0, 8)}… ${job.status} ${((now - job.createdAt) / 3_600_000).toFixed(1)}h${job.error ? ` (${job.error})` : ""}`,
-              )
-              .join(", ")}`;
-          })();
-
-          console.log(
-            [
-              "Beam Status",
-              "============",
-              `  Database:    ${process.env.SQLITE_DB_PATH ?? getBeamDbPath()}`,
-              `  Positions:   ${activePositions.length} active`,
-              `  Deposited:   $${summary.totalDepositedUsd.toFixed(2)}`,
-              `  Current:     $${summary.totalCurrentValueUsd.toFixed(2)}`,
-              ...(summary.walletKnown
-                ? [`  Wallet:      $${(summary.walletBalanceUsd ?? 0).toFixed(2)}`]
-                : []),
-              `  Equity:      $${summary.totalEquityUsd.toFixed(2)}`,
-              `  Fees:        $${summary.totalFeesClaimedUsd.toFixed(2)}`,
-              ...(summary.totalRewardsClaimedUsd > 0
-                ? [`  Rewards:     $${summary.totalRewardsClaimedUsd.toFixed(2)}`]
-                : []),
-              `  Unrealized:  ${pnlText}`,
-              `  ${agentStatus}`,
-              `  Autonomous:  ${config.autonomousTokenMode} (${walletAddress ?? "paper"})`,
-              ...(effectiveWallet?.error ? [`  Wallet error: ${effectiveWallet.error}`] : []),
-              `  Candidates:  ${autonomous.candidates.length}`,
-              `  Operations:  ${autonomous.operations.length}`,
-              `  Settlements: ${autonomous.settlements.length}`,
-              ...(strandedSettlements.length > 0
-                ? [
-                    `  Stranded:    ${strandedSettlements.length} terminal settlement(s) with unspent balance (${strandedSettlements
-                      .map(
-                        (entry) =>
-                          `${(entry.settlement.poolAddress || "?").slice(0, 8)}/${entry.settlement.tokenMint.slice(0, 8)} ($${entry.valueUsd.toFixed(2)})`,
-                      )
-                      .join(", ")}) — see --json for details`,
-                  ]
-                : []),
-              ...(unpriceableStranded.length > 0
-                ? [
-                    `  Unpriceable: ${unpriceableStranded.length} terminal settlement(s) with no USD price resolved at query time — cannot value, left in wallet (${unpriceableStranded
-                      .map(
-                        (entry) =>
-                          `${(entry.settlement.poolAddress || "?").slice(0, 8)}/${entry.settlement.tokenMint.slice(0, 8)}`,
-                      )
-                      .join(", ")})`,
-                  ]
-                : []),
-              ...(unavailableStranded.length > 0
-                ? [
-                    `  Unavailable: ${unavailableStranded.length} terminal settlement(s) — price/decimals lookup unreachable, value unknown (${unavailableStranded
-                      .map(
-                        (entry) =>
-                          `${(entry.settlement.poolAddress || "?").slice(0, 8)}/${entry.settlement.tokenMint.slice(0, 8)}`,
-                      )
-                      .join(", ")}) — retry later`,
-                  ]
-                : []),
-              `  Safety pause: ${
-                autonomous.safetyPause === null
-                  ? "none"
-                  : autonomous.safetyPause.resolvedAt === null
-                    ? `ACTIVE (${autonomous.safetyPause.reason})`
-                    : `resolved (${autonomous.safetyPause.reason})`
-              }`,
-              ...(latchedBySettlements !== null ? [latchedBySettlements] : []),
-              "",
-              `  Recent decisions: ${recentAudit.length}`,
-              ...recentAudit
-                .slice(0, 5)
-                .map(
-                  (d) =>
-                    `    ${d.action} ${d.poolAddress.slice(0, 16)}... (${d.confidence.toFixed(2)})`,
-                ),
-            ].join("\n"),
-          );
+          yield* printStatusHuman(adapter, ctx);
         }).pipe(Effect.provide(program)),
       );
     } catch (err) {

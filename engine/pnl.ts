@@ -91,6 +91,49 @@ export function computeHodlValueUsd(
  * All values are in token1 (the numeraire) units; price is token1/token0.
  * Returns null when inputs are unusable.
  */
+function hasValidClmmCoreInputs(
+  depositedUsd: number,
+  entryPriceUsd: number,
+  currentPriceUsd: number,
+): boolean {
+  return depositedUsd > 0 && entryPriceUsd > 0 && currentPriceUsd > 0;
+}
+
+// Range boundary prices from ticks (price of token1 in token0 = 1.0001^tick),
+// unless the caller has already converted those bounds into the valuation
+// unit. USD replay must use the latter for pairs with unequal decimals.
+function resolveClmmPriceBounds(input: {
+  readonly lowerBinId: number;
+  readonly upperBinId: number;
+  readonly lowerPriceUsd?: number | undefined;
+  readonly upperPriceUsd?: number | undefined;
+}): { readonly Pa: number; readonly Pb: number } | null {
+  const hasUsdBounds = input.lowerPriceUsd !== undefined || input.upperPriceUsd !== undefined;
+  if (hasUsdBounds) {
+    if (input.lowerPriceUsd === undefined || input.upperPriceUsd === undefined) return null;
+  }
+  const Pa = hasUsdBounds ? input.lowerPriceUsd! : Math.pow(1.0001, input.lowerBinId);
+  const Pb = hasUsdBounds ? input.upperPriceUsd! : Math.pow(1.0001, input.upperBinId);
+  if (!(Pa > 0 && Pb > Pa)) return null;
+  return { Pa, Pb };
+}
+
+// LP value per unit L at price P (token1 units). Below range the position is
+// all token0: x = L(1/sPa − 1/sPb), value = x·P. Above range all token1:
+// y = L(sPb − sPa), value = y (constant — HODL keeps growing past Pb).
+function clmmValuePerL(
+  priceUsd: number,
+  Pa: number,
+  Pb: number,
+  sPa: number,
+  sPb: number,
+  sP: number,
+): number {
+  if (priceUsd <= Pa) return (1 / sPa - 1 / sPb) * priceUsd;
+  if (priceUsd >= Pb) return sPb - sPa;
+  return (1 / sP - 1 / sPb) * priceUsd + (sP - sPa);
+}
+
 export function computeClmmValueUsd(input: {
   readonly depositedUsd: number;
   readonly entryPriceUsd: number;
@@ -101,55 +144,24 @@ export function computeClmmValueUsd(input: {
   readonly lowerPriceUsd?: number | undefined;
   readonly upperPriceUsd?: number | undefined;
 }): number | null {
-  const {
-    depositedUsd,
-    entryPriceUsd,
-    lowerBinId,
-    upperBinId,
-    currentPriceUsd,
-    lowerPriceUsd,
-    upperPriceUsd,
-  } = input;
-  if (!(depositedUsd > 0) || !(entryPriceUsd > 0) || !(currentPriceUsd > 0)) return null;
+  const { depositedUsd, entryPriceUsd, lowerBinId, upperBinId, currentPriceUsd } = input;
+  if (!hasValidClmmCoreInputs(depositedUsd, entryPriceUsd, currentPriceUsd)) return null;
   if (!(lowerBinId < upperBinId)) return null;
-  // Range boundary prices from ticks (price of token1 in token0 = 1.0001^tick),
-  // unless the caller has already converted those bounds into the valuation
-  // unit. USD replay must use the latter for pairs with unequal decimals.
-  const hasUsdBounds = lowerPriceUsd !== undefined || upperPriceUsd !== undefined;
-  if (hasUsdBounds && (lowerPriceUsd === undefined || upperPriceUsd === undefined)) return null;
-  const Pa = hasUsdBounds ? lowerPriceUsd! : Math.pow(1.0001, lowerBinId);
-  const Pb = hasUsdBounds ? upperPriceUsd! : Math.pow(1.0001, upperBinId);
-  if (!(Pa > 0 && Pb > Pa)) return null;
+  const bounds = resolveClmmPriceBounds(input);
+  if (bounds === null) return null;
+  const { Pa, Pb } = bounds;
   const sPa = Math.sqrt(Pa);
   const sPb = Math.sqrt(Pb);
   const sP0 = Math.sqrt(entryPriceUsd);
   const sP1 = Math.sqrt(currentPriceUsd);
-
-  // LP value per unit L at price P (token1 units). Below range the position is
-  // all token0: x = L(1/sPa − 1/sPb), value = x·P. Above range all token1:
-  // y = L(sPb − sPa), value = y (constant — HODL keeps growing past Pb).
-  const belowValuePerL = (1 / sPa - 1 / sPb) * currentPriceUsd;
-  const inRangeValuePerL = (1 / sP1 - 1 / sPb) * currentPriceUsd + (sP1 - sPa);
-  const aboveValuePerL = sPb - sPa;
-
   // Anchor L so the LP value at the entry price equals the deposited cost basis.
-  const valuePerLAtEntry =
-    entryPriceUsd <= Pa
-      ? (1 / sPa - 1 / sPb) * entryPriceUsd
-      : entryPriceUsd >= Pb
-        ? sPb - sPa
-        : (1 / sP0 - 1 / sPb) * entryPriceUsd + (sP0 - sPa);
+  const valuePerLAtEntry = clmmValuePerL(entryPriceUsd, Pa, Pb, sPa, sPb, sP0);
   if (!(valuePerLAtEntry > 0)) return null;
   const L = depositedUsd / valuePerLAtEntry;
-
-  const valuePerL =
-    currentPriceUsd <= Pa
-      ? belowValuePerL
-      : currentPriceUsd >= Pb
-        ? aboveValuePerL
-        : inRangeValuePerL;
+  const valuePerL = clmmValuePerL(currentPriceUsd, Pa, Pb, sPa, sPb, sP1);
   const value = L * valuePerL;
-  return Number.isFinite(value) && value >= 0 ? value : null;
+  if (!Number.isFinite(value) || value < 0) return null;
+  return value;
 }
 
 /** Fees earned annualized against cost basis. Null when age or basis is 0. */

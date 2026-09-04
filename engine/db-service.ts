@@ -154,7 +154,12 @@ function serializeBinArray(binArray: BinArray): string {
 }
 
 function deserializeBinArray(json: string): BinArray {
-  const parsed: unknown = JSON.parse(json);
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(json);
+  } catch {
+    throw new Error("Invalid serialized BinArray: not valid JSON");
+  }
   if (!isRecord(parsed) || !("bins" in parsed) || !Array.isArray(parsed.bins)) {
     throw new Error("Invalid serialized BinArray: bins must be an array");
   }
@@ -759,7 +764,10 @@ export const DbLive = (dbPath?: string) =>
             }
             // Full-range % relative to the window low — unit-invariant (the
             // snapshot price is token_x denominated in token_y).
-            return { rangePct: ((maxPrice - minPrice) / minPrice) * 100, samples: Number(row.samples) };
+            return {
+              rangePct: ((maxPrice - minPrice) / minPrice) * 100,
+              samples: Number(row.samples),
+            };
           }),
 
         getSnapshotPools: () =>
@@ -1656,11 +1664,18 @@ function parseMemoryOutcome(value: SqlRawCell): MemoryEntry["outcome"] {
   return undefined;
 }
 
+function toNullableNumber(value: SqlRawCell): number | null {
+  return value != null ? Number(value) : null;
+}
+function toNullableText(value: SqlRawCell): string | null {
+  return value != null ? readSqlText(value) : null;
+}
+
 function rowToPosition(row: SqlRawRow): PositionRecord {
   return {
     positionId: String(row.position_id),
     poolAddress: String(row.pool_address),
-    positionPubKey: row.position_pubkey ? readSqlText(row.position_pubkey) : null,
+    positionPubKey: toNullableText(row.position_pubkey),
     depositedUsd: Number(row.deposited_usd ?? 0),
     currentValueUsd: Number(row.current_value_usd ?? 0),
     tokenXSymbol: readSqlText(row.token_x_symbol),
@@ -1669,29 +1684,25 @@ function rowToPosition(row: SqlRawRow): PositionRecord {
     lowerBinId: Number(row.lower_bin_id ?? 0),
     upperBinId: Number(row.upper_bin_id ?? 0),
     timestamp: Number(row.timestamp ?? 0),
-    outOfRangeSince: row.out_of_range_since != null ? Number(row.out_of_range_since) : null,
+    outOfRangeSince: toNullableNumber(row.out_of_range_since),
     oorCycleCount: Number(row.oor_cycle_count ?? 0),
     lastFeeClaimAt: Number(row.last_fee_claim_at ?? 0),
-    trailingStopThreshold:
-      row.trailing_stop_threshold != null ? Number(row.trailing_stop_threshold) : null,
-    highestValueUsd: row.highest_value_usd != null ? Number(row.highest_value_usd) : null,
+    trailingStopThreshold: toNullableNumber(row.trailing_stop_threshold),
+    highestValueUsd: toNullableNumber(row.highest_value_usd),
     lastRebalanceAt: Number(row.last_rebalance_at ?? 0),
-    paperExitedAt: row.paper_exited_at != null ? Number(row.paper_exited_at) : null,
-    entrySignalTimestamp:
-      row.entry_signal_timestamp != null ? Number(row.entry_signal_timestamp) : null,
-    entrySignalSnapshotId:
-      row.entry_signal_snapshot_id != null ? Number(row.entry_signal_snapshot_id) : null,
-    entryPriceUsd: row.entry_price_usd != null ? Number(row.entry_price_usd) : null,
-    entryAmountXUsd: row.entry_amount_x_usd != null ? Number(row.entry_amount_x_usd) : null,
-    entryAmountYUsd: row.entry_amount_y_usd != null ? Number(row.entry_amount_y_usd) : null,
+    paperExitedAt: toNullableNumber(row.paper_exited_at),
+    entrySignalTimestamp: toNullableNumber(row.entry_signal_timestamp),
+    entrySignalSnapshotId: toNullableNumber(row.entry_signal_snapshot_id),
+    entryPriceUsd: toNullableNumber(row.entry_price_usd),
+    entryAmountXUsd: toNullableNumber(row.entry_amount_x_usd),
+    entryAmountYUsd: toNullableNumber(row.entry_amount_y_usd),
     cumulativeFeesClaimedUsd: Number(row.cumulative_fees_claimed_usd ?? 0),
     cumulativeRewardsClaimedUsd: Number(row.cumulative_rewards_claimed_usd ?? 0),
-    closedAt: row.closed_at != null ? Number(row.closed_at) : null,
-    realizedPnlUsd: row.realized_pnl_usd != null ? Number(row.realized_pnl_usd) : null,
-    positionMode: row.position_mode != null ? readSqlText(row.position_mode) : null,
-    tpLadderJson: row.tp_ladder_json != null ? readSqlText(row.tp_ladder_json) : null,
-    invalidationStopPrice:
-      row.invalidation_stop_price != null ? Number(row.invalidation_stop_price) : null,
+    closedAt: toNullableNumber(row.closed_at),
+    realizedPnlUsd: toNullableNumber(row.realized_pnl_usd),
+    positionMode: toNullableText(row.position_mode),
+    tpLadderJson: toNullableText(row.tp_ladder_json),
+    invalidationStopPrice: toNullableNumber(row.invalidation_stop_price),
   };
 }
 

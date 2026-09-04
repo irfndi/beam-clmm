@@ -249,6 +249,161 @@ function addFee(
   if (amountUsd !== 0) events.push({ type: "fee", timestamp, pool, amountUsd });
 }
 
+interface ShadowBook {
+  shadowCashUsd: number;
+  shadowDeployedUsd: number;
+  activePositions: number;
+  feeGapCount: number;
+  acceptedEntries: number;
+  entryRequests: number;
+}
+
+function updateOpenPosition(
+  state: PoolState,
+  position: Position,
+  pool: string,
+  snapshot: Snapshot,
+  previousTimestamp: number | null,
+  avgYield: number | null,
+  yieldPct: number,
+  dd: number,
+  args: Args,
+  book: ShadowBook,
+  events: SharedPortfolioEvent[],
+): void {
+  const mark = markToMarket(position, snapshot.currentPrice);
+  position.peakValueUsd = Math.max(position.peakValueUsd, mark);
+  events.push({ type: "mark", timestamp: snapshot.timestamp, pool, valueUsd: mark });
+  const inRange =
+    snapshot.activeBinId >= position.lowerBinId && snapshot.activeBinId <= position.upperBinId;
+  if (inRange && snapshot.tvlUsd > 0) {
+    const intervalMs =
+      previousTimestamp === null ? 30_000 : snapshot.timestamp - previousTimestamp;
+    if (intervalMs > MAX_FEE_GAP_MS) {
+      book.feeGapCount++;
+    } else {
+      const fee =
+        snapshot.fees24hUsd *
+          Math.min(position.depositedUsd / snapshot.tvlUsd, 1) *
+          (intervalMs / DAY_MS);
+      addFee(events, snapshot.timestamp, pool, fee);
+      book.shadowCashUsd += fee;
+    }
+  }
+  const yieldDecayed =
+    avgYield !== null && avgYield > 0 && yieldPct < avgYield * YIELD_DECAY_FRACTION;
+  const lossPct = (mark - position.depositedUsd) / position.depositedUsd;
+  const trailing = (position.peakValueUsd - mark) / position.peakValueUsd;
+  const shouldExit =
+    dd < -DRAWDOWN_EXIT_FRACTION ||
+    yieldDecayed ||
+    lossPct < -STOP_LOSS_PCT ||
+    trailing > TRAILING_STOP_PCT;
+  if (shouldExit) {
+    const exitSlippage = mark * (args.slippageBps / 10_000);
+    events.push({ type: "exit", timestamp: snapshot.timestamp, pool, valueUsd: mark });
+    addFee(events, snapshot.timestamp, pool, -(args.exitCostUsd + exitSlippage));
+    book.shadowCashUsd += mark - args.exitCostUsd - exitSlippage;
+    book.shadowDeployedUsd -= position.depositedUsd;
+    book.activePositions--;
+    state.position = null;
+    state.cooldownUntil = snapshot.timestamp + ROTATION_COOLDOWN_MS;
+  }
+}
+
+function isEntryEligible(avgYield: number | null, yieldPct: number, dd: number, tvlUsd: number): boolean {
+  const yieldDecayed =
+    avgYield !== null && avgYield > 0 && yieldPct < avgYield * YIELD_DECAY_FRACTION;
+  return (
+    tvlUsd >= MIN_TVL_USD &&
+    yieldPct > 0 &&
+    dd > -DRAWDOWN_EXIT_FRACTION &&
+    !yieldDecayed
+  );
+}
+
+function tryOpenPosition(
+  book: ShadowBook,
+  events: SharedPortfolioEvent[],
+  state: PoolState,
+  pool: string,
+  snapshot: Snapshot,
+  entryPriceUsd: number,
+  usdPair: VerifiedUsdPair,
+  args: Args,
+): void {
+  const maxDeployedUsd = args.capital * (args.maxDeployedPct / 100);
+  const size = Math.min(
+    args.maxPoolUsd,
+    snapshot.tvlUsd * (POOL_SHARE_CAP_PCT / 100),
+    book.shadowCashUsd,
+  );
+  const entrySlippage = size * (args.slippageBps / 10_000);
+  const entryCost = args.entryCostUsd + entrySlippage;
+  book.entryRequests++;
+  if (
+    size > 0 &&
+    book.shadowCashUsd >= size + entryCost &&
+    book.shadowDeployedUsd + size <= maxDeployedUsd &&
+    book.activePositions < args.maxConcurrent
+  ) {
+    const entryLegs = computeEntryHodlLegsUsd({
+      depositedUsd: size,
+      entryPriceUsd,
+      lowerBinId: snapshot.activeBinId - HALF_WIDTH_TICKS,
+      upperBinId: snapshot.activeBinId + HALF_WIDTH_TICKS,
+      usdPair,
+    });
+    // Do not mutate the shadow wallet or emit an entry if the
+    // concentrated-range HODL legs cannot be derived.
+    if (entryLegs === null) return;
+    events.push({
+      type: "entry-request",
+      timestamp: snapshot.timestamp,
+      pool,
+      amountUsd: size,
+    });
+    addFee(events, snapshot.timestamp, pool, -entryCost);
+    book.shadowCashUsd -= size + entryCost;
+    book.shadowDeployedUsd += size;
+    book.acceptedEntries++;
+    book.activePositions++;
+    state.position = {
+      entryPriceUsd,
+      lowerBinId: snapshot.activeBinId - HALF_WIDTH_TICKS,
+      upperBinId: snapshot.activeBinId + HALF_WIDTH_TICKS,
+      depositedUsd: size,
+      entryAmountXUsd: entryLegs.movingUsd,
+      entryAmountYUsd: entryLegs.numeraireUsd,
+      peakValueUsd: size,
+      usdPair,
+    };
+  }
+}
+
+function closeOpenPositions(
+  events: SharedPortfolioEvent[],
+  states: ReadonlyMap<string, PoolState>,
+  snapshotsByPool: ReadonlyMap<string, readonly Snapshot[]>,
+  args: Args,
+): void {
+  // Close positions at their last observed mark so final equity is realized.
+  for (const [pool, state] of states) {
+    const snapshots = snapshotsByPool.get(pool)!;
+    const snapshot = snapshots[snapshots.length - 1];
+    if (state.position !== null && snapshot !== undefined) {
+      // Settle at this pool's last observed mark. Using one global synthetic
+      // timestamp would keep stale positions open past their own data boundary
+      // and distort shared-wallet ordering when pools have different coverage.
+      const timestamp = snapshot.timestamp + 1;
+      const mark = markToMarket(state.position, snapshot.currentPrice);
+      events.push({ type: "mark", timestamp, pool, valueUsd: mark });
+      events.push({ type: "exit", timestamp, pool, valueUsd: mark });
+      addFee(events, timestamp, pool, -(args.exitCostUsd + mark * (args.slippageBps / 10_000)));
+    }
+  }
+}
+
 function buildEvents(
   snapshotsByPool: ReadonlyMap<string, readonly Snapshot[]>,
   args: Args,
@@ -269,16 +424,16 @@ function buildEvents(
       return bYield - aYield || a.pool.localeCompare(b.pool);
     });
   const events: SharedPortfolioEvent[] = [];
-  const maxDeployedUsd = args.capital * (args.maxDeployedPct / 100);
   // These values are acceptance shadows only. Costs are represented exactly
   // once in the emitted fee events consumed by simulateSharedPortfolio.
-  let shadowCashUsd = args.capital;
-  let shadowDeployedUsd = 0;
-  let acceptedEntries = 0;
-  let activePositions = 0;
-  let entryRequests = 0;
-  let feeGapCount = 0;
-
+  const book: ShadowBook = {
+    shadowCashUsd: args.capital,
+    shadowDeployedUsd: 0,
+    activePositions: 0,
+    feeGapCount: 0,
+    acceptedEntries: 0,
+    entryRequests: 0,
+  };
   for (const item of timeline) {
     const { pool, snapshot, index } = item;
     const state = states.get(pool) ?? { position: null, cooldownUntil: 0, previousTimestamp: null };
@@ -292,130 +447,41 @@ function buildEvents(
     const dd = normalizedDrawdown(snapshot, snapshotsByPool.get(pool)!, index);
 
     if (state.position !== null) {
-      const position = state.position;
-      const mark = markToMarket(position, snapshot.currentPrice);
-      position.peakValueUsd = Math.max(position.peakValueUsd, mark);
-      events.push({ type: "mark", timestamp: snapshot.timestamp, pool, valueUsd: mark });
-      const inRange =
-        snapshot.activeBinId >= position.lowerBinId && snapshot.activeBinId <= position.upperBinId;
-      if (inRange && snapshot.tvlUsd > 0) {
-        const intervalMs =
-          previousTimestamp === null ? 30_000 : snapshot.timestamp - previousTimestamp;
-        if (intervalMs > MAX_FEE_GAP_MS) {
-          feeGapCount++;
-        } else {
-          const fee =
-            snapshot.fees24hUsd *
-            Math.min(position.depositedUsd / snapshot.tvlUsd, 1) *
-            (intervalMs / DAY_MS);
-          addFee(events, snapshot.timestamp, pool, fee);
-          shadowCashUsd += fee;
-        }
-      }
-      const yieldDecayed =
-        avgYield !== null && avgYield > 0 && yieldPct < avgYield * YIELD_DECAY_FRACTION;
-      const lossPct = (mark - position.depositedUsd) / position.depositedUsd;
-      const trailing = (position.peakValueUsd - mark) / position.peakValueUsd;
-      const shouldExit =
-        dd < -DRAWDOWN_EXIT_FRACTION ||
-        yieldDecayed ||
-        lossPct < -STOP_LOSS_PCT ||
-        trailing > TRAILING_STOP_PCT;
-      if (shouldExit) {
-        const exitSlippage = mark * (args.slippageBps / 10_000);
-        events.push({ type: "exit", timestamp: snapshot.timestamp, pool, valueUsd: mark });
-        addFee(events, snapshot.timestamp, pool, -(args.exitCostUsd + exitSlippage));
-        shadowCashUsd += mark - args.exitCostUsd - exitSlippage;
-        shadowDeployedUsd -= position.depositedUsd;
-        activePositions--;
-        state.position = null;
-        state.cooldownUntil = snapshot.timestamp + ROTATION_COOLDOWN_MS;
-      }
+      updateOpenPosition(
+        state,
+        state.position,
+        pool,
+        snapshot,
+        previousTimestamp,
+        avgYield,
+        yieldPct,
+        dd,
+        args,
+        book,
+        events,
+      );
     }
 
     if (state.position === null && snapshot.timestamp >= state.cooldownUntil) {
-      const yieldDecayed =
-        avgYield !== null && avgYield > 0 && yieldPct < avgYield * YIELD_DECAY_FRACTION;
-      const eligible =
-        snapshot.tvlUsd >= MIN_TVL_USD &&
-        yieldPct > 0 &&
-        dd > -DRAWDOWN_EXIT_FRACTION &&
-        !yieldDecayed;
-      if (eligible) {
-        if (snapshot.usdPair === null) continue;
+      if (!isEntryEligible(avgYield, yieldPct, dd, snapshot.tvlUsd)) {
+        // Ineligible — fall through to timestamp bookkeeping below.
+      } else if (snapshot.usdPair === null) {
+        continue;
+      } else {
         const entryPriceUsd = rawRatioToUsd(snapshot.currentPrice, snapshot.usdPair);
         if (entryPriceUsd === null) continue;
-        const size = Math.min(
-          args.maxPoolUsd,
-          snapshot.tvlUsd * (POOL_SHARE_CAP_PCT / 100),
-          shadowCashUsd,
-        );
-        const entrySlippage = size * (args.slippageBps / 10_000);
-        const entryCost = args.entryCostUsd + entrySlippage;
-        entryRequests++;
-        if (
-          size > 0 &&
-          shadowCashUsd >= size + entryCost &&
-          shadowDeployedUsd + size <= maxDeployedUsd &&
-          activePositions < args.maxConcurrent
-        ) {
-          const entryLegs = computeEntryHodlLegsUsd({
-            depositedUsd: size,
-            entryPriceUsd,
-            lowerBinId: snapshot.activeBinId - HALF_WIDTH_TICKS,
-            upperBinId: snapshot.activeBinId + HALF_WIDTH_TICKS,
-            usdPair: snapshot.usdPair,
-          });
-          // Do not mutate the shadow wallet or emit an entry if the
-          // concentrated-range HODL legs cannot be derived.
-          if (entryLegs !== null) {
-            events.push({
-              type: "entry-request",
-              timestamp: snapshot.timestamp,
-              pool,
-              amountUsd: size,
-            });
-            addFee(events, snapshot.timestamp, pool, -entryCost);
-            shadowCashUsd -= size + entryCost;
-            shadowDeployedUsd += size;
-            acceptedEntries++;
-            activePositions++;
-            state.position = {
-              entryPriceUsd,
-              lowerBinId: snapshot.activeBinId - HALF_WIDTH_TICKS,
-              upperBinId: snapshot.activeBinId + HALF_WIDTH_TICKS,
-              depositedUsd: size,
-              entryAmountXUsd: entryLegs.movingUsd,
-              entryAmountYUsd: entryLegs.numeraireUsd,
-              peakValueUsd: size,
-              usdPair: snapshot.usdPair,
-            };
-          }
-        }
+        tryOpenPosition(book, events, state, pool, snapshot, entryPriceUsd, snapshot.usdPair, args);
       }
     }
     state.previousTimestamp = snapshot.timestamp;
     states.set(pool, state);
   }
   // Close positions at their last observed mark so final equity is realized.
-  for (const [pool, state] of states) {
-    const snapshots = snapshotsByPool.get(pool)!;
-    const snapshot = snapshots[snapshots.length - 1];
-    if (state.position !== null && snapshot !== undefined) {
-      // Settle at this pool's last observed mark. Using one global synthetic
-      // timestamp would keep stale positions open past their own data boundary
-      // and distort shared-wallet ordering when pools have different coverage.
-      const timestamp = snapshot.timestamp + 1;
-      const mark = markToMarket(state.position, snapshot.currentPrice);
-      events.push({ type: "mark", timestamp, pool, valueUsd: mark });
-      events.push({ type: "exit", timestamp, pool, valueUsd: mark });
-      addFee(events, timestamp, pool, -(args.exitCostUsd + mark * (args.slippageBps / 10_000)));
-    }
-  }
+  closeOpenPositions(events, states, snapshotsByPool, args);
   const phase = (event: SharedPortfolioEvent): number =>
     event.type === "entry-request" ? 2 : event.type === "exit" ? 1 : 0;
   events.sort((a, b) => a.timestamp - b.timestamp || phase(a) - phase(b));
-  return { events, entryRequests, acceptedEntries, feeGapCount };
+  return { events, entryRequests: book.entryRequests, acceptedEntries: book.acceptedEntries, feeGapCount: book.feeGapCount };
 }
 
 function main(): void {

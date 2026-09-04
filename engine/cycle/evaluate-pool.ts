@@ -162,266 +162,300 @@ const DEFAULT_SIGNAL_WEIGHTS: SignalWeights = {
   updatedAt: 0,
 };
 
-export function evaluateReplayPool(input: ReplayEvaluationInput): ReplayEvaluation {
-  const { position, poolAddress, metrics } = input;
-  const feeIlRatio = metrics.feeIlRatio;
-  const volumeAuth = metrics.volumeAuthenticity;
-  const challengeScore = input.challengeMode === true ? challengePoolScore(metrics.pool).score : 0;
-  let decision: AgentDecision | null = null;
-  // #153 debounce: the count only advances inside the trailing-stop block
-  // (live tracks per-position breach state in evaluatePool, pre-risk-tail).
-  let trailingBreaches = 0;
-  let stopLossBreaches = 0;
+function replayExitWithTrailing(
+  input: ReplayEvaluationInput,
+  poolAddress: string,
+  trailingBreaches: number,
+  stopLossBreaches: number,
+): { decision: AgentDecision | null; trailingBreaches: number; stopLossBreaches: number } {
+  const position = input.position;
+  if (!position) return { decision: null, trailingBreaches, stopLossBreaches };
+  let tB = trailingBreaches;
+  let sB = stopLossBreaches;
 
-  // ── Phase 1: EXIT evaluation ──────────────────────────────────────────────
-  // Challenge drawdown gate (live first branch): Krystal-measured 24h drawdown
-  // breaches exit this cycle — capital protection on meme harvest pools.
-  if (input.challengeMode === true && position) {
-    const drawdown = input.drawdown24hPct ?? metrics.pool.drawdown24h ?? 0;
-    if (drawdown < 0) {
-      const rotation = challengeRotationSignal(
-        { ...metrics.pool, drawdown24h: drawdown },
-        input.avgYieldPerDayPct ?? null,
-        input.challengeDrawdownExitPct ?? 5,
-      );
-      if (rotation.action !== "hold") {
-        decision = {
+  // Hard stop-loss
+  if (position.depositedUsd > 0) {
+    const lossPct = (position.currentValueUsd - position.depositedUsd) / position.depositedUsd;
+    const breached = lossPct < -input.risk.stopLossPct;
+    sB = breached ? input.stopLossBreaches + 1 : 0;
+    if (breached && sB >= input.trailingStopConfirmCycles) {
+      return {
+        decision: {
           action: "EXIT",
           poolAddress,
-          confidence: rotation.action === "exit" ? 0.95 : 0.85,
-          reasoning: `[challenge-rotation] ${rotation.reason}`,
-        };
-      }
+          confidence: 1,
+          reasoning: `Stop-loss: position loss ${(Math.abs(lossPct) * 100).toFixed(1)}% exceeds ${(input.risk.stopLossPct * 100).toFixed(0)}% (${sB}/${input.trailingStopConfirmCycles} cycles) — capital protection exit`,
+        },
+        trailingBreaches: tB,
+        stopLossBreaches: sB,
+      };
     }
   }
+  // Trailing exit
+  {
+    const estimatedValue = position.currentValueUsd;
+    const highest = position.highestValueUsd;
+    const drawdown = highest > 0 ? (highest - estimatedValue) / highest : 0;
+    const breached = drawdown > input.trailingStopPct;
+    tB = breached ? input.trailingStopBreaches + 1 : 0;
+    if (breached && tB >= input.trailingStopConfirmCycles) {
+      return {
+        decision: {
+          action: "EXIT",
+          poolAddress,
+          confidence: 0.8,
+          reasoning: `Trailing stop: value dropped ${(drawdown * 100).toFixed(1)}% from peak $${highest.toFixed(2)} (${tB}/${input.trailingStopConfirmCycles} cycles)`,
+        },
+        trailingBreaches: tB,
+        stopLossBreaches: sB,
+      };
+    }
+  }
+  return { decision: null, trailingBreaches: tB, stopLossBreaches: sB };
+}
 
-  // Dust cleanup: dead capital below the dust threshold reclaims its slot.
-  if (
-    !decision &&
-    position &&
-    input.dustExitUsd > 0 &&
-    position.currentValueUsd < input.dustExitUsd
-  ) {
-    decision = {
+function replayChallengeExit(
+  input: ReplayEvaluationInput,
+  poolAddress: string,
+  metrics: PoolMetrics,
+): AgentDecision | null {
+  if (input.challengeMode !== true || !input.position) return null;
+  const drawdown = input.drawdown24hPct ?? metrics.pool.drawdown24h ?? 0;
+  if (drawdown >= 0) return null;
+  const rotation = challengeRotationSignal(
+    { ...metrics.pool, drawdown24h: drawdown },
+    input.avgYieldPerDayPct ?? null,
+    input.challengeDrawdownExitPct ?? 5,
+  );
+  if (rotation.action === "hold") return null;
+  return {
+    action: "EXIT",
+    poolAddress,
+    confidence: rotation.action === "exit" ? 0.95 : 0.85,
+    reasoning: `[challenge-rotation] ${rotation.reason}`,
+  };
+}
+function replayGateExit(
+  input: ReplayEvaluationInput,
+  metrics: PoolMetrics,
+  poolAddress: string,
+): AgentDecision | null {
+  const position = input.position;
+  if (!position) return null;
+  if (input.dustExitUsd > 0 && position.currentValueUsd < input.dustExitUsd) {
+    return {
       action: "EXIT",
       poolAddress,
       confidence: 1,
       reasoning: `[dust-cleanup] Position value $${position.currentValueUsd.toFixed(2)} below $${input.dustExitUsd.toFixed(2)} dust threshold — reclaiming slot`,
     };
   }
-
-  // TVL velocity — capital-protection EXIT on a sharp drop (per-position, as
-  // live's EXIT chain runs inside the per-position loop).
-  if (!decision && position && metrics.tvlVelocity < -input.tvlDropExitPct) {
-    decision = {
+  if (metrics.tvlVelocity < -input.tvlDropExitPct) {
+    return {
       action: "EXIT",
       poolAddress,
       confidence: 0.85,
       reasoning: `TVL dropped ${(Math.abs(metrics.tvlVelocity) * 100).toFixed(1)}% — capital protection exit`,
     };
   }
-
-  // Volume authenticity — fabricated/wash volume below threshold.
-  if (
-    !decision &&
-    position &&
-    metrics.volumeAuthenticityKnown &&
-    volumeAuth < input.volumeAuthThreshold
-  ) {
-    decision = {
+  if (metrics.volumeAuthenticityKnown && metrics.volumeAuthenticity < input.volumeAuthThreshold) {
+    return {
       action: "EXIT",
       poolAddress,
       confidence: 0.8,
-      reasoning: `Volume authenticity ${volumeAuth.toFixed(2)} below threshold`,
+      reasoning: `Volume authenticity ${metrics.volumeAuthenticity.toFixed(2)} below threshold`,
     };
   }
-
-  // Fee/IL ratio — fees cannot beat IL (measured ratio only).
-  if (!decision && position && metrics.feeIlRatioKnown && feeIlRatio < 0.5) {
-    decision = {
+  if (metrics.feeIlRatioKnown && metrics.feeIlRatio < 0.5) {
+    return {
       action: "EXIT",
       poolAddress,
       confidence: 0.75,
-      reasoning: `Fee/IL ratio ${feeIlRatio.toFixed(2)} below 0.5`,
+      reasoning: `Fee/IL ratio ${metrics.feeIlRatio.toFixed(2)} below 0.5`,
     };
   }
-
-  // Hard stop-loss (in-range capital floor): entry-based EXIT mirrored from
-  // live — fires regardless of out-of-range state when the mark falls below
-  // entry − risk.stopLossPct. Shares the trailing stop's #153 confirm-cycles
-  // debounce (a single noisy snapshot read cannot churn a position out).
-  if (!decision && position && position.depositedUsd > 0) {
-    const lossPct = (position.currentValueUsd - position.depositedUsd) / position.depositedUsd;
-    const breached = lossPct < -input.risk.stopLossPct;
-    stopLossBreaches = breached ? input.stopLossBreaches + 1 : 0;
-    if (breached && stopLossBreaches >= input.trailingStopConfirmCycles) {
-      decision = {
-        action: "EXIT",
-        poolAddress,
-        confidence: 1,
-        reasoning: `Stop-loss: position loss ${(Math.abs(lossPct) * 100).toFixed(1)}% exceeds ${(input.risk.stopLossPct * 100).toFixed(0)}% (${stopLossBreaches}/${input.trailingStopConfirmCycles} cycles) — capital protection exit`,
-      };
-    }
-  }
-
-  // Trailing exit (profit protection) — the #153 confirm-cycles debounce
-  // matches live: breach must persist across consecutive cycles.
-  if (!decision && position) {
-    const estimatedValue = position.currentValueUsd;
-    const highest = position.highestValueUsd;
-    const drawdown = highest > 0 ? (highest - estimatedValue) / highest : 0;
-    const breached = drawdown > input.trailingStopPct;
-    trailingBreaches = breached ? input.trailingStopBreaches + 1 : 0;
-    if (breached && trailingBreaches >= input.trailingStopConfirmCycles) {
-      decision = {
-        action: "EXIT",
-        poolAddress,
-        confidence: 0.8,
-        reasoning: `Trailing stop: value dropped ${(drawdown * 100).toFixed(1)}% from peak $${highest.toFixed(2)} (${trailingBreaches}/${input.trailingStopConfirmCycles} cycles)`,
-      };
-    }
-  }
-
-  // ── Phase 2: HOLD for a surviving position ────────────────────────────────
-  // Live per-position HOLD (healthy fee/IL + no recent warnings) or the
-  // pool-default HOLD ("No strong signal") otherwise.
-  if (!decision && position) {
-    const healthy = feeIlRatio > input.minFeeIlRatio && input.memoryWarningCount === 0;
-    decision = {
-      action: "HOLD",
-      poolAddress,
-      confidence: healthy ? Math.min(0.6 + feeIlRatio * 0.05, 0.9) : 0.5,
-      reasoning: healthy
-        ? `Fee/IL ${feeIlRatio.toFixed(2)} above threshold. Holding.`
-        : `No strong signal. Fee/IL: ${feeIlRatio.toFixed(2)}`,
-    };
-  }
-
-  // ── ENTER mega-gate (one slot per pool per cycle) ─────────────────────────
-  if (!decision && !position) {
-    const poolPositions = input.openPositions.filter((p) => p.poolAddress === poolAddress);
-    let enterRejected: string | null = null;
-    if (poolPositions.length >= input.risk.maxPositionsPerPool) {
-      enterRejected = `Per-pool position cap reached (${poolPositions.length}/${input.risk.maxPositionsPerPool}) for pool ${poolAddress}`;
-    } else if (
-      input.ilProtectionEnabled === true &&
-      metrics.feeIlRatioKnown &&
-      feeIlRatio < input.minFeeIlRatio
-    ) {
-      // [fee-il-gate] hard ENTER floor — expected fees must beat IL.
-      enterRejected = `[fee-il-gate] Fee/IL ratio ${feeIlRatio.toFixed(2)} below minimum ${input.minFeeIlRatio} — expected fees cannot beat IL`;
-    } else if (
-      (input.enterRoundTripGasUsd ?? 0) > 0 &&
-      metrics.pool.fees24hUsd > 0 &&
-      input.poolTvlUsd > 0 &&
-      metrics.pool.fees24hUsd * (input.proposedSizeUsd / input.poolTvlUsd) * 7 <
-        (input.enterRoundTripGasUsd ?? 0) * (input.enterMin7dFeeOverGas ?? 1)
-    ) {
-      // [fee-gas-gate] profitability floor — mirror of the live gate: a
-      // position must expect to earn its own round-trip gas within a week of
-      // measured fees. Measured-only: 0 fees does not vote either way.
-      const expected7d = metrics.pool.fees24hUsd * (input.proposedSizeUsd / input.poolTvlUsd) * 7;
-      const gasCost = (input.enterRoundTripGasUsd ?? 0) * (input.enterMin7dFeeOverGas ?? 1);
-      enterRejected = `[fee-gas-gate] expected 7d fees $${expected7d.toFixed(3)} < round-trip gas $${gasCost.toFixed(3)} — entry cannot pay for itself`;
-    } else if (
-      !(metrics.feeIlRatioKnown ? feeIlRatio > input.minFeeIlRatio * 1.5 : true) ||
-      !metrics.volumeAuthenticityKnown ||
-      volumeAuth <= 0.8 ||
-      !metrics.binUtilizationKnown ||
-      metrics.binUtilization <= 0.4 ||
-      input.poolTvlUsd <= input.minPoolTvlUsd * 2
-    ) {
-      // ×1.5 candidate conditions — measured-only, mirroring live.
-      enterRejected = "[candidate-gate] pool failed the ×1.5 candidate conditions";
-    } else if (
-      input.challengeMode === true &&
-      (!Number.isFinite(challengeScore) ||
-        !Number.isFinite(input.challengeMinScore ?? 4) ||
-        challengeScore < (input.challengeMinScore ?? 4))
-    ) {
-      enterRejected = `[challenge-score-gate] score ${Number.isFinite(challengeScore) ? challengeScore.toFixed(3) : "unavailable"} < minimum ${input.challengeMinScore ?? 4}`;
-    } else if (
-      input.challengeMode === true &&
-      (input.poolAgeMs === undefined ||
-        !Number.isFinite(input.poolAgeMs) ||
-        input.poolAgeMs < (input.challengeMinPoolAgeMs ?? 6 * 3_600_000))
-    ) {
-      enterRejected = `[challenge-age-gate] reconstructed pool age ${input.poolAgeMs === undefined ? "unavailable" : `${input.poolAgeMs}ms`} < minimum ${input.challengeMinPoolAgeMs ?? 6 * 3_600_000}ms`;
-    } else if (
-      input.challengeMode === true &&
-      (input.challengePeakEquityUsd ?? 0) > 0 &&
-      input.portfolioValueUsd <
-        (input.challengePeakEquityUsd ?? 0) * ((input.challengeHardFloorPct ?? 50) / 100)
-    ) {
-      // Portfolio hard floor (safety audit): no ENTERs below the floor % of
-      // all-time peak equity — a rug sequence must not drain the wallet.
-      enterRejected =
-        `[hard-floor] portfolio $${input.portfolioValueUsd.toFixed(0)} below ` +
-        `${input.challengeHardFloorPct ?? 50}% of peak equity $${(input.challengePeakEquityUsd ?? 0).toFixed(0)}`;
-    } else if (
-      input.challengeMode === true &&
-      (input.lossCooldownUntilMs ?? 0) > 0 &&
-      (input.nowMs ?? Date.now()) < (input.lossCooldownUntilMs ?? 0)
-    ) {
-      // Per-pool loss cooldown (safety audit): a pool that realized a loss is
-      // barred from re-entry until its stale drawdown has refreshed.
-      enterRejected = "[loss-cooldown] pool recently realized a loss — re-entry barred";
-    } else {
-      const entryScore = weightedEntryScore(metrics, input.signalWeights ?? DEFAULT_SIGNAL_WEIGHTS);
-      if (entryScore <= input.weightedEntryScoreThreshold) {
-        enterRejected = `[weighted-score] score ${entryScore.toFixed(3)} <= threshold ${input.weightedEntryScoreThreshold}`;
-      } else {
-        const allocationArgs = {
-          proposedDepositUsd: input.proposedSizeUsd,
-          portfolioValueUsd: input.portfolioValueUsd,
-          openPositions: input.openPositions.map(toRiskPosition),
-          maxPerPoolAllocationPct: input.risk.maxPerPoolAllocationPct,
-          maxOpenPositions: input.maxOpenPositions,
-          poolAddress,
-          maxPositionsPerPool: input.risk.maxPositionsPerPool,
-          poolTvlUsd: input.poolTvlUsd,
-        };
-        if (input.challengePoolShareCapPct !== undefined) {
-          Object.assign(allocationArgs, {
-            challengePoolShareCapPct: input.challengePoolShareCapPct,
-          });
-        }
-        const allocation = evaluatePerPoolAllocation(allocationArgs);
-        if (!allocation.approved) {
-          enterRejected = `[alloc-gate] ${allocation.reason}`;
-        } else {
-          decision = {
-            action: "ENTER",
-            poolAddress,
-            confidence: Math.min(0.5 + feeIlRatio * 0.05, 0.85),
-            reasoning: `Strong pool: Fee/IL ${feeIlRatio.toFixed(2)}, auth ${volumeAuth.toFixed(2)}, TVL $${input.poolTvlUsd.toFixed(0)}`,
-            positionSizeUsd: allocation.adjustedDepositUsd,
-          };
-        }
-      }
-    }
-    // A rejected ENTER is a live no-decision (audited, no raw decision) — the
-    // replay returns a confidence-0 HOLD so no position is opened.
-    if (!decision) {
-      decision = {
-        action: "HOLD",
-        poolAddress,
-        confidence: 0,
-        reasoning: `[enter-gate] ${enterRejected ?? "ENTER slot skipped"}`,
-      };
-    }
-  }
-
-  // Every path above assigns `decision` (a held position always resolves to an
-  // EXIT or HOLD; an empty slot always resolves to ENTER or the gate HOLD).
-  // This fallback is defensive for the typechecker — it never fires.
-  const finalDecision: AgentDecision = decision ?? {
+  return null;
+}
+function replayHoldDecision(
+  input: ReplayEvaluationInput,
+  feeIlRatio: number,
+  poolAddress: string,
+): AgentDecision {
+  const healthy = feeIlRatio > input.minFeeIlRatio && input.memoryWarningCount === 0;
+  return {
     action: "HOLD",
     poolAddress,
-    confidence: 0,
-    reasoning: "[enter-gate] ENTER slot skipped",
+    confidence: healthy ? Math.min(0.6 + feeIlRatio * 0.05, 0.9) : 0.5,
+    reasoning: healthy
+      ? `Fee/IL ${feeIlRatio.toFixed(2)} above threshold. Holding.`
+      : `No strong signal. Fee/IL: ${feeIlRatio.toFixed(2)}`,
   };
-
+}
+function replayEnterAllocation(
+  input: ReplayEvaluationInput,
+  feeIlRatio: number,
+  volumeAuth: number,
+  poolAddress: string,
+): AgentDecision | null {
+  const entryScore = weightedEntryScore(
+    metrics_for_enter(input),
+    input.signalWeights ?? DEFAULT_SIGNAL_WEIGHTS,
+  );
+  if (entryScore <= input.weightedEntryScoreThreshold) return null;
+  const allocationArgs = {
+    proposedDepositUsd: input.proposedSizeUsd,
+    portfolioValueUsd: input.portfolioValueUsd,
+    openPositions: input.openPositions.map(toRiskPosition),
+    maxPerPoolAllocationPct: input.risk.maxPerPoolAllocationPct,
+    maxOpenPositions: input.maxOpenPositions,
+    poolAddress,
+    maxPositionsPerPool: input.risk.maxPositionsPerPool,
+    poolTvlUsd: input.poolTvlUsd,
+  } as Parameters<typeof evaluatePerPoolAllocation>[0];
+  if (input.challengePoolShareCapPct !== undefined) {
+    Object.assign(allocationArgs, { challengePoolShareCapPct: input.challengePoolShareCapPct });
+  }
+  const allocation = evaluatePerPoolAllocation(allocationArgs);
+  if (!allocation.approved) return null;
+  return {
+    action: "ENTER",
+    poolAddress,
+    confidence: Math.min(0.5 + feeIlRatio * 0.05, 0.85),
+    reasoning: `Strong pool: Fee/IL ${feeIlRatio.toFixed(2)}, auth ${volumeAuth.toFixed(2)}, TVL $${input.poolTvlUsd.toFixed(0)}`,
+    positionSizeUsd: allocation.adjustedDepositUsd,
+  };
+}
+function metrics_for_enter(input: ReplayEvaluationInput): PoolMetrics {
+  return input.metrics;
+}
+function isPoolCandidateGateBlocked(
+  input: ReplayEvaluationInput,
+  feeIlRatio: number,
+  volumeAuth: number,
+): boolean {
+  return (
+    !(input.metrics.feeIlRatioKnown ? feeIlRatio > input.minFeeIlRatio * 1.5 : true) ||
+    !input.metrics.volumeAuthenticityKnown ||
+    volumeAuth <= 0.8 ||
+    !input.metrics.binUtilizationKnown ||
+    input.metrics.binUtilization <= 0.4 ||
+    input.poolTvlUsd <= input.minPoolTvlUsd * 2
+  );
+}
+function replayEnterPoolCapGate(input: ReplayEvaluationInput): string | null {
+  const poolPositions = input.openPositions.filter((p) => p.poolAddress === input.poolAddress);
+  if (poolPositions.length >= input.risk.maxPositionsPerPool) {
+    return `Per-pool position cap reached (${poolPositions.length}/${input.risk.maxPositionsPerPool}) for pool ${input.poolAddress}`;
+  }
+  return null;
+}
+function replayFeeIlGate(input: ReplayEvaluationInput, feeIlRatio: number): string | null {
+  if (
+    input.ilProtectionEnabled === true &&
+    input.metrics.feeIlRatioKnown &&
+    feeIlRatio < input.minFeeIlRatio
+  ) {
+    return `[fee-il-gate] Fee/IL ratio ${feeIlRatio.toFixed(2)} below minimum ${input.minFeeIlRatio} — expected fees cannot beat IL`;
+  }
+  return null;
+}
+function replayFeeGasGate(input: ReplayEvaluationInput): string | null {
+  if (
+    (input.enterRoundTripGasUsd ?? 0) > 0 &&
+    input.metrics.pool.fees24hUsd > 0 &&
+    input.poolTvlUsd > 0 &&
+    input.metrics.pool.fees24hUsd * (input.proposedSizeUsd / input.poolTvlUsd) * 7 <
+      (input.enterRoundTripGasUsd ?? 0) * (input.enterMin7dFeeOverGas ?? 1)
+  ) {
+    const expected7d =
+      input.metrics.pool.fees24hUsd * (input.proposedSizeUsd / input.poolTvlUsd) * 7;
+    const gasCost = (input.enterRoundTripGasUsd ?? 0) * (input.enterMin7dFeeOverGas ?? 1);
+    return `[fee-gas-gate] expected 7d fees $${expected7d.toFixed(3)} < round-trip gas $${gasCost.toFixed(3)} — entry cannot pay for itself`;
+  }
+  return null;
+}
+function replayChallengeScoreGate(
+  input: ReplayEvaluationInput,
+  challengeScore: number,
+): string | null {
+  if (input.challengeMode !== true) return null;
+  if (
+    !Number.isFinite(challengeScore) ||
+    !Number.isFinite(input.challengeMinScore ?? 4) ||
+    challengeScore < (input.challengeMinScore ?? 4)
+  ) {
+    return `[challenge-score-gate] score ${Number.isFinite(challengeScore) ? challengeScore.toFixed(3) : "unavailable"} < minimum ${input.challengeMinScore ?? 4}`;
+  }
+  return null;
+}
+function replayChallengeAgeGate(input: ReplayEvaluationInput): string | null {
+  if (input.challengeMode !== true) return null;
+  if (
+    input.poolAgeMs === undefined ||
+    !Number.isFinite(input.poolAgeMs) ||
+    input.poolAgeMs < (input.challengeMinPoolAgeMs ?? 6 * 3_600_000)
+  ) {
+    return `[challenge-age-gate] reconstructed pool age ${input.poolAgeMs === undefined ? "unavailable" : `${input.poolAgeMs}ms`} < minimum ${input.challengeMinPoolAgeMs ?? 6 * 3_600_000}ms`;
+  }
+  return null;
+}
+function replayChallengeHardFloorGate(input: ReplayEvaluationInput): string | null {
+  if (input.challengeMode !== true) return null;
+  if ((input.challengePeakEquityUsd ?? 0) <= 0) return null;
+  if (
+    input.portfolioValueUsd <
+    (input.challengePeakEquityUsd ?? 0) * ((input.challengeHardFloorPct ?? 50) / 100)
+  ) {
+    return (
+      `[hard-floor] portfolio $${input.portfolioValueUsd.toFixed(0)} below ` +
+      `${input.challengeHardFloorPct ?? 50}% of peak equity $${(input.challengePeakEquityUsd ?? 0).toFixed(0)}`
+    );
+  }
+  return null;
+}
+function replayLossCooldownGate(input: ReplayEvaluationInput): string | null {
+  if (input.challengeMode !== true) return null;
+  if ((input.lossCooldownUntilMs ?? 0) <= 0) return null;
+  if ((input.nowMs ?? Date.now()) >= (input.lossCooldownUntilMs ?? 0)) return null;
+  return "[loss-cooldown] pool recently realized a loss — re-entry barred";
+}
+function replayEnterGateRejectionReason(
+  input: ReplayEvaluationInput,
+  feeIlRatio: number,
+  volumeAuth: number,
+  challengeScore: number,
+): string | null {
+  const weightedGate = (() => {
+    const entryScore = weightedEntryScore(
+      metrics_for_enter(input),
+      input.signalWeights ?? DEFAULT_SIGNAL_WEIGHTS,
+    );
+    if (entryScore <= input.weightedEntryScoreThreshold) {
+      return `[weighted-score] score ${entryScore.toFixed(3)} <= threshold ${input.weightedEntryScoreThreshold}`;
+    }
+    return null;
+  })();
+  return (
+    replayEnterPoolCapGate(input) ??
+    replayFeeIlGate(input, feeIlRatio) ??
+    replayFeeGasGate(input) ??
+    (isPoolCandidateGateBlocked(input, feeIlRatio, volumeAuth)
+      ? "[candidate-gate] pool failed the ×1.5 candidate conditions"
+      : null) ??
+    replayChallengeScoreGate(input, challengeScore) ??
+    replayChallengeAgeGate(input) ??
+    replayChallengeHardFloorGate(input) ??
+    replayLossCooldownGate(input) ??
+    weightedGate
+  );
+}
+function replayRiskTail(
+  input: ReplayEvaluationInput,
+  poolAddress: string,
+  finalDecision: AgentDecision,
+  trailingBreaches: number,
+  stopLossBreaches: number,
+): ReplayEvaluation {
   const openPositions = input.openPositions.map(toRiskPosition);
   const context: RiskContext = {
     openPositions,
@@ -443,4 +477,77 @@ export function evaluateReplayPool(input: ReplayEvaluationInput): ReplayEvaluati
     trailingStopBreachCount: trailingBreaches,
     stopLossBreachCount: stopLossBreaches,
   };
+}
+export function evaluateReplayPool(input: ReplayEvaluationInput): ReplayEvaluation {
+  const { position, poolAddress, metrics } = input;
+  const feeIlRatio = metrics.feeIlRatio;
+  const volumeAuth = metrics.volumeAuthenticity;
+  const challengeScore = input.challengeMode === true ? challengePoolScore(metrics.pool).score : 0;
+  let decision: AgentDecision | null = null;
+  // #153 debounce: the count only advances inside the trailing-stop block
+  // (live tracks per-position breach state in evaluatePool, pre-risk-tail).
+  let trailingBreaches = 0;
+  let stopLossBreaches = 0;
+
+  decision =
+    replayChallengeExit(input, poolAddress, metrics) ??
+    replayGateExit(input, metrics, poolAddress) ??
+    null;
+  if (!decision) {
+    const stopTrail = replayExitWithTrailing(
+      input,
+      poolAddress,
+      trailingBreaches,
+      stopLossBreaches,
+    );
+    if (stopTrail.decision) decision = stopTrail.decision;
+    trailingBreaches = stopTrail.trailingBreaches;
+    stopLossBreaches = stopTrail.stopLossBreaches;
+  }
+
+  // ── Phase 2: HOLD for a surviving position ────────────────────────────────
+  if (!decision && position) decision = replayHoldDecision(input, feeIlRatio, poolAddress);
+
+  // ── ENTER mega-gate (one slot per pool per cycle) ─────────────────────────
+  if (!decision && !position) {
+    const gateRejection = replayEnterGateRejectionReason(
+      input,
+      feeIlRatio,
+      volumeAuth,
+      challengeScore,
+    );
+    if (gateRejection !== null) {
+      decision = {
+        action: "HOLD",
+        poolAddress,
+        confidence: 0,
+        reasoning: `[enter-gate] ${gateRejection}`,
+      };
+    } else {
+      const entered = replayEnterAllocation(input, feeIlRatio, volumeAuth, poolAddress);
+      if (entered) {
+        decision = entered;
+      } else {
+        // Allocation gate inside replayEnterAllocation failed late (e.g. per-pool allocation cap)
+        decision = {
+          action: "HOLD",
+          poolAddress,
+          confidence: 0,
+          reasoning: "[enter-gate] [alloc-gate] allocation failed",
+        };
+      }
+    }
+  }
+
+  // Every path above assigns `decision` (a held position always resolves to an
+  // EXIT or HOLD; an empty slot always resolves to ENTER or the gate HOLD).
+  // This fallback is defensive for the typechecker — it never fires.
+  const finalDecision: AgentDecision = decision ?? {
+    action: "HOLD",
+    poolAddress,
+    confidence: 0,
+    reasoning: "[enter-gate] ENTER slot skipped",
+  };
+
+  return replayRiskTail(input, poolAddress, finalDecision, trailingBreaches, stopLossBreaches);
 }

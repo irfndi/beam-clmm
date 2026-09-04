@@ -279,53 +279,60 @@ function pruneOhlcvState(nowMs: number): void {
  * - during a failure or backoff window, the STALE last-good series is reused
  *   (debug) — only a pool with NO history is treated as unknown (warn).
  */
-export async function getGeckoPoolOhlcv(
-  poolAddress: string,
-  options: {
-    readonly limit?: number;
-    readonly baseUrl?: string;
-    readonly timeoutMs?: number;
-    readonly cacheTtlMs?: number;
-    readonly fetchImpl?: FetchLike;
-  } = {},
-): Promise<GeckoOhlcvSignals | null> {
-  const fetchImpl = options.fetchImpl ?? fetch;
-  const timeoutMs = options.timeoutMs ?? REQUEST_TIMEOUT_MS;
-  const base = (options.baseUrl ?? process.env.GECKO_TERMINAL_API_URL ?? DEFAULT_BASE_URL)
+function resolveGeckoEffectiveBase(baseUrl: string | undefined): string {
+  const base = (baseUrl ?? process.env.GECKO_TERMINAL_API_URL ?? DEFAULT_BASE_URL)
     .trim()
     .replace(/\/+$/, "");
-  const effectiveBase = base.length > 0 ? base : DEFAULT_BASE_URL;
-  const limit = options.limit ?? DEFAULT_OHLCV_LIMIT;
-  const slug = process.env.GECKO_NETWORK_SLUG ?? DEFAULT_GECKO_SLUG;
-  const url = `${effectiveBase}/networks/${slug}/pools/${poolAddress}/ohlcv/day?limit=${limit}`;
-  pruneOhlcvState(Date.now());
+  return base.length > 0 ? base : DEFAULT_BASE_URL;
+}
 
-  const cached = lastGoodCache.get(poolAddress);
-  if (cached && Date.now() - cached.fetchedAt < (options.cacheTtlMs ?? CACHE_TTL_MS)) {
+function buildGeckoUrl(effectiveBase: string, poolAddress: string, limit: number): string {
+  const slug = process.env.GECKO_NETWORK_SLUG ?? DEFAULT_GECKO_SLUG;
+  return `${effectiveBase}/networks/${slug}/pools/${poolAddress}/ohlcv/day?limit=${limit}`;
+}
+
+function getFreshCachedSignals(
+  cached: { readonly signals: GeckoOhlcvSignals; readonly fetchedAt: number } | undefined,
+  cacheTtlMs: number | undefined,
+): GeckoOhlcvSignals | null {
+  if (cached && Date.now() - cached.fetchedAt < (cacheTtlMs ?? CACHE_TTL_MS)) {
     return cached.signals;
   }
+  return null;
+}
 
-  const pendingBackoff = backoff.get(poolAddress);
-  if (pendingBackoff && Date.now() < pendingBackoff.nextAttemptAt) {
-    return cached?.signals ?? null;
-  }
+function isBackoffActive(poolAddress: string): boolean {
+  const pending = backoff.get(poolAddress);
+  return pending !== undefined && Date.now() < pending.nextAttemptAt;
+}
 
-  const serveFailure = (): GeckoOhlcvSignals | null => {
-    const failures = (backoff.get(poolAddress)?.failures ?? 0) + 1;
-    backoff.set(poolAddress, {
-      nextAttemptAt: Date.now() + Math.min(BACKOFF_BASE_MS * 2 ** (failures - 1), BACKOFF_MAX_MS),
-      failures,
+function serveGeckoFailure(
+  poolAddress: string,
+  cached: { readonly signals: GeckoOhlcvSignals; readonly fetchedAt: number } | undefined | null,
+): GeckoOhlcvSignals | null {
+  const failures = (backoff.get(poolAddress)?.failures ?? 0) + 1;
+  backoff.set(poolAddress, {
+    nextAttemptAt: Date.now() + Math.min(BACKOFF_BASE_MS * 2 ** (failures - 1), BACKOFF_MAX_MS),
+    failures,
+  });
+  if (cached) {
+    logger.debug("GeckoTerminal OHLCV fetch failed — reusing last-good series", {
+      pool: poolAddress,
+      ageMs: Date.now() - cached.fetchedAt,
     });
-    if (cached) {
-      logger.debug("GeckoTerminal OHLCV fetch failed — reusing last-good series", {
-        pool: poolAddress,
-        ageMs: Date.now() - cached.fetchedAt,
-      });
-      return cached.signals;
-    }
-    return null;
-  };
+    return cached.signals;
+  }
+  return null;
+}
 
+async function fetchGeckoWithResilience(
+  url: string,
+  fetchImpl: FetchLike,
+  timeoutMs: number,
+  poolAddress: string,
+  cached: { readonly signals: GeckoOhlcvSignals; readonly fetchedAt: number } | undefined,
+): Promise<GeckoOhlcvSignals | null> {
+  const serveFailure = (): GeckoOhlcvSignals | null => serveGeckoFailure(poolAddress, cached);
   try {
     const res = await fetchImpl(url, { signal: AbortSignal.timeout(timeoutMs) });
     if (!res.ok) {
@@ -354,4 +361,29 @@ export async function getGeckoPoolOhlcv(
     });
     return serveFailure();
   }
+}
+
+export async function getGeckoPoolOhlcv(
+  poolAddress: string,
+  options: {
+    readonly limit?: number;
+    readonly baseUrl?: string;
+    readonly timeoutMs?: number;
+    readonly cacheTtlMs?: number;
+    readonly fetchImpl?: FetchLike;
+  } = {},
+): Promise<GeckoOhlcvSignals | null> {
+  const fetchImpl = options.fetchImpl ?? fetch;
+  const timeoutMs = options.timeoutMs ?? REQUEST_TIMEOUT_MS;
+  const effectiveBase = resolveGeckoEffectiveBase(options.baseUrl);
+  const limit = options.limit ?? DEFAULT_OHLCV_LIMIT;
+  const url = buildGeckoUrl(effectiveBase, poolAddress, limit);
+  pruneOhlcvState(Date.now());
+
+  const cached = lastGoodCache.get(poolAddress);
+  const fresh = getFreshCachedSignals(cached, options.cacheTtlMs);
+  if (fresh) return fresh;
+  if (isBackoffActive(poolAddress)) return cached?.signals ?? null;
+
+  return fetchGeckoWithResilience(url, fetchImpl, timeoutMs, poolAddress, cached);
 }

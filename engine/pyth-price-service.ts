@@ -103,51 +103,76 @@ function readFiniteNumber(value: unknown): number | null {
  * `maxStalenessMs`, `malformed` for any structural/numeric problem. `nowMs` is
  * injectable so staleness is unit-testable without fake timers.
  */
+function extractPythPriceFields(
+  raw: unknown,
+): {
+  readonly entry: Record<string, unknown>;
+  readonly price: Record<string, unknown>;
+  readonly rawPrice: string;
+} | null {
+  if (!isObject(raw)) return null;
+  const parsed = raw["parsed"];
+  if (!Array.isArray(parsed)) return null;
+  if (parsed.length === 0) return null;
+  const entry: unknown = parsed[0];
+  if (!isObject(entry)) return null;
+  const price = entry["price"];
+  if (!isObject(price)) return null;
+  const rawPrice = price["price"];
+  if (typeof rawPrice !== "string") return null;
+  return { entry, price, rawPrice };
+}
+
+// expo is mathematically a base-10 exponent: USD = intPrice × 10^expo. Pyth
+// crypto feeds use -8; any non-integer or positive value is a schema break.
+function parsePythExpo(price: Record<string, unknown>): number | null {
+  const expo: unknown = price["expo"];
+  if (typeof expo !== "number") return null;
+  if (!Number.isInteger(expo)) return null;
+  if (expo > 0) return null;
+  return expo;
+}
+
+function parsePythScaledPrice(rawPrice: string, expo: number): number | null {
+  const priceNum = Number(rawPrice);
+  const scaled = priceNum * 10 ** expo;
+  if (!Number.isFinite(scaled)) return null;
+  if (scaled <= 0) return null;
+  return scaled;
+}
+
+function parsePythPublishTimeMs(price: Record<string, unknown>): number | null {
+  const publishTimeSec = readFiniteNumber(price["publish_time"]);
+  if (publishTimeSec === null) return null;
+  if (publishTimeSec <= 0) return null;
+  return publishTimeSec * 1000;
+}
+
+function parsePythFeedId(entry: Record<string, unknown>): string | null {
+  const id: unknown = entry["id"];
+  if (typeof id !== "string") return null;
+  if (id.length === 0) return null;
+  return id;
+}
+
 export function parsePythPriceUpdate(
   raw: unknown,
   maxStalenessMs: number,
   nowMs: number = Date.now(),
 ): PythParseResult {
-  if (!isObject(raw)) return { kind: "malformed" };
-  const parsed = raw["parsed"];
-  if (!Array.isArray(parsed) || parsed.length === 0) return { kind: "malformed" };
-  const entry: unknown = parsed[0];
-  if (!isObject(entry)) return { kind: "malformed" };
-  const price = entry["price"];
-  if (!isObject(price)) return { kind: "malformed" };
-
-  const rawPrice = price["price"];
-  if (typeof rawPrice !== "string") return { kind: "malformed" };
-
-  // expo is mathematically a base-10 exponent: USD = intPrice × 10^expo. Pyth
-  // crypto feeds use -8; any non-integer or positive value is a schema break.
-  const expo: unknown = price["expo"];
-  if (typeof expo !== "number" || !Number.isInteger(expo) || expo > 0) {
-    return { kind: "malformed" };
-  }
-
-  const priceNum = Number(rawPrice);
-  const scaled = priceNum * 10 ** expo;
-  if (!Number.isFinite(scaled) || scaled <= 0) return { kind: "malformed" };
-
-  const publishTimeSec = readFiniteNumber(price["publish_time"]);
-  if (publishTimeSec === null || publishTimeSec <= 0) return { kind: "malformed" };
-  const publishTimeMs = publishTimeSec * 1000;
-
-  if (nowMs - publishTimeMs > maxStalenessMs) {
-    return { kind: "stale", publishTimeMs };
-  }
-
-  const id: unknown = entry["id"];
-  if (typeof id !== "string" || id.length === 0) return { kind: "malformed" };
-  return {
-    kind: "ok",
-    point: {
-      priceUsd: scaled,
-      publishTimeMs,
-      feedId: id,
-    },
-  };
+  const fields = extractPythPriceFields(raw);
+  if (fields === null) return { kind: "malformed" };
+  const { entry, price, rawPrice } = fields;
+  const expo = parsePythExpo(price);
+  if (expo === null) return { kind: "malformed" };
+  const scaled = parsePythScaledPrice(rawPrice, expo);
+  if (scaled === null) return { kind: "malformed" };
+  const publishTimeMs = parsePythPublishTimeMs(price);
+  if (publishTimeMs === null) return { kind: "malformed" };
+  if (nowMs - publishTimeMs > maxStalenessMs) return { kind: "stale", publishTimeMs };
+  const feedId = parsePythFeedId(entry);
+  if (feedId === null) return { kind: "malformed" };
+  return { kind: "ok", point: { priceUsd: scaled, publishTimeMs, feedId } };
 }
 
 // ─── TTL cache (~30s; one Hermes request per feed per window) ────────────────
@@ -186,6 +211,31 @@ export function clearPythCacheForTest(): void {
  * endpoint (env `PYTH_BASE_URL` is already resolved by the caller, else the
  * default). Successful decodes are cached per-feed for `cacheTtlMs`.
  */
+function resolvePythBaseUrl(baseUrl: string | undefined): string {
+  const base = (baseUrl ?? DEFAULT_BASE_URL).trim().replace(/\/+$/, "");
+  if (base.length > 0) return base;
+  return DEFAULT_BASE_URL;
+}
+
+function getCachedPythPrice(cacheKey: string, ttlMs: number, now: number): number | null {
+  const cached = priceCache.get(cacheKey);
+  if (cached === undefined) return null;
+  if (now - cached.fetchedAtMs >= ttlMs) return null;
+  return cached.priceUsd;
+}
+
+function buildPythUrl(effectiveBase: string, feedId: string): string {
+  return `${effectiveBase}/v2/updates/price/latest?ids[]=${encodeURIComponent(feedId)}&parsed=true`;
+}
+
+function buildPythHeaders(apiKey: string | undefined): Record<string, string> {
+  const headers: Record<string, string> = {};
+  if (apiKey === undefined) return headers;
+  if (apiKey.length === 0) return headers;
+  headers["Authorization"] = `Bearer ${apiKey}`;
+  return headers;
+}
+
 export async function fetchPythPriceUsd(
   feedId: string,
   options: {
@@ -201,22 +251,13 @@ export async function fetchPythPriceUsd(
   const timeoutMs = options.timeoutMs ?? REQUEST_TIMEOUT_MS;
   const maxStalenessMs = options.maxStalenessMs ?? DEFAULT_MAX_STALENESS_MS;
   const ttlMs = options.cacheTtlMs ?? cacheTtlMs;
-  const base = (options.baseUrl ?? DEFAULT_BASE_URL).trim().replace(/\/+$/, "");
-  const effectiveBase = base.length > 0 ? base : DEFAULT_BASE_URL;
-
+  const effectiveBase = resolvePythBaseUrl(options.baseUrl);
   const cacheKey = feedId.trim().toLowerCase();
   const now = Date.now();
-  const cached = priceCache.get(cacheKey);
-  if (cached !== undefined && now - cached.fetchedAtMs < ttlMs) {
-    return cached.priceUsd;
-  }
-
-  const url = `${effectiveBase}/v2/updates/price/latest?ids[]=${encodeURIComponent(feedId)}&parsed=true`;
-  const headers: Record<string, string> = {};
-  const apiKey = options.apiKey?.trim();
-  if (apiKey !== undefined && apiKey.length > 0) {
-    headers["Authorization"] = `Bearer ${apiKey}`;
-  }
+  const cachedPrice = getCachedPythPrice(cacheKey, ttlMs, now);
+  if (cachedPrice !== null) return cachedPrice;
+  const url = buildPythUrl(effectiveBase, feedId);
+  const headers = buildPythHeaders(options.apiKey?.trim());
 
   try {
     const res = await fetchImpl(url, {

@@ -166,249 +166,249 @@ function createRpcMock(opts: MockOpts = {}): RpcMock {
     });
   }
 
-  async function handle(body: {
-    id: number;
-    method: string;
-    params: unknown[];
-  }): Promise<Response> {
-    const { id, method, params } = body;
-    if (method !== "eth_getTransactionReceipt") {
-      console.error(`[mock:req] ${method} ${JSON.stringify(params).slice(0, 160)}`);
-    }
-    if (method === "eth_chainId") return ok(n(4663), id);
-    if (method === "eth_getBalance") return ok(n(opts.nativeBalance ?? 0n), id);
-    if (method === "eth_getTransactionCount") return ok("0x0", id);
-    if (method === "eth_estimateGas") return ok("0x30d40", id); // 200,000
-    if (method === "eth_getBlockByNumber") {
-      return ok({ number: "0x1", baseFeePerGas: n(26_028_000) }, id);
-    }
-    if (method === "eth_sendTransaction") {
+  type RpcBody = { id: number; method: string; params: unknown[] };
+  type EthCallCtx = { to: string; data: Hex; selector: string; id: number };
+
+  function handleSendTransaction(body: RpcBody): Response {
+    // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
+    const p = body.params[0] as { to: string; data?: string; value?: string };
+    sentTxs.push({
+      to: addr(p.to),
       // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
-      const p = params[0] as { to: string; data?: string; value?: string };
-      sentTxs.push({
-        to: addr(p.to),
-        // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
-        data: (p.data ?? "0x") as Hex,
-        // oxlint-disable-next-line anti-slop/no-conditional-empty-object-spread -- SAFETY: this test uses a controlled protocol fixture and establishes the expected shape at this boundary.
-        ...(p.value !== undefined
-          ? { value: p.value }
-          : {}) /* oxlint-disable-line anti-slop/no-conditional-empty-object-spread */,
-      });
-      return ok(`0x${sentTxs.length.toString(16).padStart(64, "0")}`, id);
-    }
-    if (method === "eth_sendRawTransaction") {
-      // viem's walletClient signs locally and sends the EIP-2718 envelope;
-      // parseTransaction handles the type byte + RLP for us.
+      data: (p.data ?? "0x") as Hex,
+      // oxlint-disable-next-line anti-slop/no-conditional-empty-object-spread -- SAFETY: this test uses a controlled protocol fixture and establishes the expected shape at this boundary.
+      ...(p.value !== undefined
+        ? { value: p.value }
+        : {}) /* oxlint-disable-line anti-slop/no-conditional-empty-object-spread */,
+    });
+    return ok(`0x${sentTxs.length.toString(16).padStart(64, "0")}`, body.id);
+  }
+
+  function handleSendRawTransaction(body: RpcBody): Response {
+    // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
+    const raw = body.params[0] as Hex;
+    // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
+    const parsed = parseTransaction(raw) as { to?: Hex; value?: bigint; data?: Hex };
+    const to = addr(parsed.to ?? "0x");
+    // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
+    const data = (parsed.data ?? "0x") as Hex;
+    rpcLog.push({ method: "eth_sendRawTransaction", to, data });
+    sentTxs.push({
+      to,
+      data,
+      // oxlint-disable-next-line anti-slop/no-conditional-empty-object-spread -- SAFETY: this test uses a controlled protocol fixture and establishes the expected shape at this boundary.
+      ...(parsed.value !== undefined
+        ? { value: `0x${parsed.value.toString(16)}` }
+        : {}) /* oxlint-disable-line anti-slop/no-conditional-empty-object-spread */,
+    });
+    return ok(`0x${sentTxs.length.toString(16).padStart(64, "0")}`, body.id);
+  }
+
+  function handleGetTransactionReceipt(body: RpcBody): Response {
+    // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
+    const hash = body.params[0] as string;
+    const logs = opts.mintTokenId
+      ? [
+          {
+            address: V3_NPM.toLowerCase(),
+            topics: [
+              transferTopic,
+              `0x${"0".repeat(64)}`,
+              `0x${WALLET.slice(2).padStart(64, "0")}`,
+              `0x${opts.mintTokenId.toString(16).padStart(64, "0")}`,
+            ],
+            data: "0x",
+          },
+        ]
+      : [];
+    return ok(
+      {
+        status: "0x1",
+        transactionHash: hash,
+        transactionIndex: "0x0",
+        blockHash: `0x${"1".repeat(64)}`,
+        blockNumber: "0x1",
+        from: WALLET,
+        to: "0x0",
+        logs,
+        gasUsed: "0x5208",
+        cumulativeGasUsed: "0x5208",
+        effectiveGasPrice: "0x1",
+        logsBloom: `0x${"0".repeat(512)}`,
+        type: "0x2",
+        contractAddress: null,
+      },
+      body.id,
+    );
+  }
+
+  const selectorHandlers: Record<string, (ctx: EthCallCtx) => Response> = {
+    [sel.balanceOf]: (ctx) => {
       // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
-      const raw = params[0] as Hex;
-      // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
-      const parsed = parseTransaction(raw) as { to?: Hex; value?: bigint; data?: Hex };
-      const to = addr(parsed.to ?? "0x");
-      // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
-      const data = (parsed.data ?? "0x") as Hex;
-      rpcLog.push({ method: "eth_sendRawTransaction", to, data });
-      sentTxs.push({
-        to,
-        data,
-        // oxlint-disable-next-line anti-slop/no-conditional-empty-object-spread -- SAFETY: this test uses a controlled protocol fixture and establishes the expected shape at this boundary.
-        ...(parsed.value !== undefined
-          ? { value: `0x${parsed.value.toString(16)}` }
-          : {}) /* oxlint-disable-line anti-slop/no-conditional-empty-object-spread */,
-      });
-      return ok(`0x${sentTxs.length.toString(16).padStart(64, "0")}`, id);
-    }
-    if (method === "eth_getTransactionReceipt") {
-      // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
-      const hash = params[0] as string;
-      const logs = opts.mintTokenId
-        ? [
-            {
-              address: V3_NPM.toLowerCase(),
-              topics: [
-                transferTopic,
-                `0x${"0".repeat(64)}`,
-                `0x${WALLET.slice(2).padStart(64, "0")}`,
-                `0x${opts.mintTokenId.toString(16).padStart(64, "0")}`,
-              ],
-              data: "0x",
-            },
-          ]
-        : [];
-      return ok(
-        {
-          status: "0x1",
-          transactionHash: hash,
-          transactionIndex: "0x0",
-          blockHash: `0x${"1".repeat(64)}`,
-          blockNumber: "0x1",
-          from: WALLET,
-          to: "0x0",
-          logs,
-          gasUsed: "0x5208",
-          cumulativeGasUsed: "0x5208",
-          effectiveGasPrice: "0x1",
-          logsBloom: `0x${"0".repeat(512)}`,
-          type: "0x2",
-          contractAddress: null,
-        },
-        id,
+      const [holder] = decodeAbiParameters(
+        [{ type: "address" }],
+        ctx.data.slice(8) as `0x${string}`,
       );
-    }
-    if (method === "eth_call") {
-      // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
-      const req = params[0] as { to: string; data?: string };
-      const to = addr(req.to);
-      // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
-      const data = (req.data ?? "0x") as Hex;
-      const selector = data.slice(0, 10).toLowerCase();
-      rpcLog.push({ method: "eth_call", to, data });
-      // Multicall3 aggregate3 — the adapter batches pool/factory reads through
-      // it; dispatch each subcall through this same handler and re-encode.
-      if (to === addr(MULTICALL3) && selector === `0x${aggregate3Selector}`) {
-        const decoded = decodeAbiParameters(
+      const base = balances[`${ctx.to}:${addr(holder)}`] ?? 0n;
+      const npmBalance = ctx.to === addr(V3_NPM) ? BigInt(opts.v3PositionCount ?? 0) : base;
+      return ok(encodeAbiParameters([{ type: "uint256" }], [npmBalance]), ctx.id);
+    },
+    [sel.decimals]: (ctx) =>
+      ok(encodeAbiParameters([{ type: "uint8" }], [ctx.to === addr(WETH) ? 18 : 6]), ctx.id),
+    [sel.allowance]: (ctx) => ok(encodeAbiParameters([{ type: "uint256" }], [MAX_UINT256]), ctx.id),
+    [sel.getPool]: (ctx) => {
+      const [a, b, fee] = decodeAbiParameters(
+        [{ type: "address" }, { type: "address" }, { type: "uint24" }],
+        ctx.data.slice(8) as `0x${string}`,
+      );
+      const pair = [addr(a), addr(b)].sort();
+      const wethUsdg = [addr(WETH), addr(USDG)].sort();
+      const pool = fee === 3000 && pair[0] === wethUsdg[0] && pair[1] === wethUsdg[1] ? POOL : ZERO;
+      return ok(encodeAbiParameters([{ type: "address" }], [pool]), ctx.id);
+    },
+    [sel.token0]: (ctx) => ok(encodeAbiParameters([{ type: "address" }], [WETH]), ctx.id),
+    [sel.token1]: (ctx) => ok(encodeAbiParameters([{ type: "address" }], [USDG]), ctx.id),
+    [sel.fee]: (ctx) => ok(encodeAbiParameters([{ type: "uint24" }], [3000]), ctx.id),
+    [sel.tickSpacing]: (ctx) => ok(encodeAbiParameters([{ type: "int24" }], [60]), ctx.id),
+    [sel.slot0]: (ctx) =>
+      ok(
+        encodeAbiParameters(
           [
-            {
-              type: "tuple[]",
-              components: [
-                { name: "target", type: "address" },
-                { name: "allowFailure", type: "bool" },
-                { name: "callData", type: "bytes" },
-              ],
-            },
+            { type: "uint160" },
+            { type: "int24" },
+            { type: "uint16" },
+            { type: "uint16" },
+            { type: "uint16" },
+            { type: "uint8" },
+            { type: "bool" },
           ],
-          data.slice(8) as `0x${string}`,
-        );
-        const subcalls = (decoded[0] ?? []) as ReadonlyArray<{
-          target: string;
-          allowFailure: boolean;
-          callData: Hex;
-        }>;
-        const results: Array<[boolean, Hex]> = [];
-        for (const sub of subcalls) {
-          const response = await handle({
-            id,
-            method: "eth_call",
-            params: [{ to: sub.target, data: sub.callData }],
-          });
-          const json = (await response.json()) as { result?: string; error?: unknown };
-          const success = json.error === undefined && json.result !== undefined;
-          if (!success && !sub.allowFailure) {
-            return err(revertBody("multicall subcall reverted"), id);
-          }
-          results.push([success, (json.result ?? "0x") as Hex]);
-        }
-        return ok(
-          encodeAbiParameters(
-            [{ type: "tuple[]", components: [{ type: "bool" }, { type: "bytes" }] }],
-            [results],
-          ),
-          id,
-        );
+          [SQRT_PRICE_X96, TICK, 0, 0, 0, 0, true],
+        ),
+        ctx.id,
+      ),
+    [sel.liquidity]: (ctx) =>
+      ok(encodeAbiParameters([{ type: "uint128" }], [opts.liquidity ?? LIQUIDITY]), ctx.id),
+    [sel.positions]: (ctx) => {
+      const [owed0, owed1] = opts.tokensOwed ?? [0n, 0n];
+      return ok(
+        encodeAbiParameters(
+          [
+            { type: "uint96" },
+            { type: "address" },
+            { type: "address" },
+            { type: "address" },
+            { type: "uint24" },
+            { type: "int24" },
+            { type: "int24" },
+            { type: "uint128" },
+            { type: "uint256" },
+            { type: "uint256" },
+            { type: "uint128" },
+            { type: "uint128" },
+          ],
+          [0n, WALLET, WETH, USDG, 3000, -201240, -200220, LIQUIDITY, 0n, 0n, owed0, owed1],
+        ),
+        ctx.id,
+      );
+    },
+    [sel.tokenOfOwnerByIndex]: (ctx) => {
+      // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
+      const [, index] = decodeAbiParameters(
+        [{ type: "address" }, { type: "uint256" }],
+        ctx.data.slice(8) as `0x${string}`,
+      );
+      return ok(encodeAbiParameters([{ type: "uint256" }], [1000n + index]), ctx.id);
+    },
+    [sel.exactInputSingleV2]: (ctx) => {
+      if (opts.revertSwap) return err(revertBody("insufficient liquidity for swap"), ctx.id);
+      return ok(encodeAbiParameters([{ type: "uint256" }], [opts.swapOut ?? 0n]), ctx.id);
+    },
+    [sel.exactInputSingleCanonical]: (ctx) => {
+      if (opts.revertSwap) return err(revertBody("insufficient liquidity for swap"), ctx.id);
+      return ok(encodeAbiParameters([{ type: "uint256" }], [opts.swapOut ?? 0n]), ctx.id);
+    },
+  };
+
+  async function handleAggregate3(id: number, data: Hex): Promise<Response> {
+    const decoded = decodeAbiParameters(
+      [
+        {
+          type: "tuple[]",
+          components: [
+            { name: "target", type: "address" },
+            { name: "allowFailure", type: "bool" },
+            { name: "callData", type: "bytes" },
+          ],
+        },
+      ],
+      data.slice(8) as `0x${string}`,
+    );
+    const subcalls = (decoded[0] ?? []) as ReadonlyArray<{
+      target: string;
+      allowFailure: boolean;
+      callData: Hex;
+    }>;
+    const results: Array<[boolean, Hex]> = [];
+    for (const sub of subcalls) {
+      const response = await handle({
+        id,
+        method: "eth_call",
+        params: [{ to: sub.target, data: sub.callData }],
+      });
+      const json = (await response.json()) as { result?: string; error?: unknown };
+      const success = json.error === undefined && json.result !== undefined;
+      if (!success && !sub.allowFailure) {
+        return err(revertBody("multicall subcall reverted"), id);
       }
-      // v3 NPM exit multicall (decreaseLiquidity+collect+burn)
-      if (to === addr(V3_NPM) && selector === `0x${multicallSelector}` && opts.revertExit) {
-        console.error(`[mock:revertExit] firing to=${to.slice(0, 10)} sel=${selector}`);
-        return err(revertBody(opts.revertExit), id);
-      }
-      if (
-        (selector === sel.exactInputSingleV2 || selector === sel.exactInputSingleCanonical) &&
-        opts.revertSwap
-      ) {
-        return err(revertBody("insufficient liquidity for swap"), id);
-      }
-      if (selector === sel.exactInputSingleV2 || selector === sel.exactInputSingleCanonical) {
-        return ok(encodeAbiParameters([{ type: "uint256" }], [opts.swapOut ?? 0n]), id);
-      }
-      if (selector === sel.balanceOf) {
-        // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
-        const [holder] = decodeAbiParameters([{ type: "address" }], data.slice(8) as `0x${string}`);
-        const base = balances[`${to}:${addr(holder)}`] ?? 0n;
-        // The v3 NPM reports the mock position count so enumeration tests can
-        // scale N without new fixtures.
-        const npmBalance = to === addr(V3_NPM) ? BigInt(opts.v3PositionCount ?? 0) : base;
-        return ok(encodeAbiParameters([{ type: "uint256" }], [npmBalance]), id);
-      }
-      if (selector === sel.decimals) {
-        return ok(encodeAbiParameters([{ type: "uint8" }], [to === addr(WETH) ? 18 : 6]), id);
-      }
-      if (selector === sel.allowance) {
-        return ok(encodeAbiParameters([{ type: "uint256" }], [MAX_UINT256]), id);
-      }
-      if (selector === sel.getPool) {
-        const [a, b, fee] = decodeAbiParameters(
-          [{ type: "address" }, { type: "address" }, { type: "uint24" }],
-          // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
-          data.slice(8) as `0x${string}`,
-        );
-        const pair = [addr(a), addr(b)].sort();
-        const wethUsdg = [addr(WETH), addr(USDG)].sort();
-        const pool =
-          fee === 3000 && pair[0] === wethUsdg[0] && pair[1] === wethUsdg[1] ? POOL : ZERO;
-        return ok(encodeAbiParameters([{ type: "address" }], [pool]), id);
-      }
-      if (selector === sel.token0)
-        return ok(encodeAbiParameters([{ type: "address" }], [WETH]), id);
-      if (selector === sel.token1)
-        return ok(encodeAbiParameters([{ type: "address" }], [USDG]), id);
-      if (selector === sel.fee) return ok(encodeAbiParameters([{ type: "uint24" }], [3000]), id);
-      if (selector === sel.tickSpacing)
-        return ok(encodeAbiParameters([{ type: "int24" }], [60]), id);
-      if (selector === sel.slot0) {
-        return ok(
-          encodeAbiParameters(
-            [
-              { type: "uint160" },
-              { type: "int24" },
-              { type: "uint16" },
-              { type: "uint16" },
-              { type: "uint16" },
-              { type: "uint8" },
-              { type: "bool" },
-            ],
-            [SQRT_PRICE_X96, TICK, 0, 0, 0, 0, true],
-          ),
-          id,
-        );
-      }
-      if (selector === sel.liquidity) {
-        return ok(encodeAbiParameters([{ type: "uint128" }], [opts.liquidity ?? LIQUIDITY]), id);
-      }
-      if (selector === sel.positions) {
-        const [owed0, owed1] = opts.tokensOwed ?? [0n, 0n];
-        return ok(
-          encodeAbiParameters(
-            [
-              { type: "uint96" },
-              { type: "address" },
-              { type: "address" },
-              { type: "address" },
-              { type: "uint24" },
-              { type: "int24" },
-              { type: "int24" },
-              { type: "uint128" },
-              { type: "uint256" },
-              { type: "uint256" },
-              { type: "uint128" },
-              { type: "uint128" },
-            ],
-            [0n, WALLET, WETH, USDG, 3000, -201240, -200220, LIQUIDITY, 0n, 0n, owed0, owed1],
-          ),
-          id,
-        );
-      }
-      if (selector === sel.tokenOfOwnerByIndex) {
-        // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
-        const [, index] = decodeAbiParameters(
-          [{ type: "address" }, { type: "uint256" }],
-          data.slice(8) as `0x${string}`,
-        );
-        return ok(
-          encodeAbiParameters([{ type: "uint256" }], [1000n + index]),
-          id,
-        );
-      }
-      return ok("0x", id);
+      results.push([success, (json.result ?? "0x") as Hex]);
     }
+    return ok(
+      encodeAbiParameters(
+        [{ type: "tuple[]", components: [{ type: "bool" }, { type: "bytes" }] }],
+        [results],
+      ),
+      id,
+    );
+  }
+
+  async function handleEthCall(body: RpcBody): Promise<Response> {
+    // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
+    const req = body.params[0] as { to: string; data?: string };
+    const to = addr(req.to);
+    // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
+    const data = (req.data ?? "0x") as Hex;
+    const selector = data.slice(0, 10).toLowerCase();
+    rpcLog.push({ method: "eth_call", to, data });
+    if (to === addr(MULTICALL3) && selector === `0x${aggregate3Selector}`) {
+      return handleAggregate3(body.id, data);
+    }
+    if (to === addr(V3_NPM) && selector === `0x${multicallSelector}` && opts.revertExit) {
+      console.error(`[mock:revertExit] firing to=${to.slice(0, 10)} sel=${selector}`);
+      return err(revertBody(opts.revertExit), body.id);
+    }
+    const h = selectorHandlers[selector];
+    if (h) return h({ to, data, selector, id: body.id });
+    return ok("0x", body.id);
+  }
+
+  async function handle(body: RpcBody): Promise<Response> {
+    const { id, method } = body;
+    if (method !== "eth_getTransactionReceipt") {
+      console.error(`[mock:req] ${method} ${JSON.stringify(body.params).slice(0, 160)}`);
+    }
+    const methodHandlers: Record<string, (b: RpcBody) => Promise<Response> | Response> = {
+      eth_chainId: (b) => ok(n(4663), b.id),
+      eth_getBalance: (b) => ok(n(opts.nativeBalance ?? 0n), b.id),
+      eth_getTransactionCount: (b) => ok("0x0", b.id),
+      eth_estimateGas: (b) => ok("0x30d40", b.id),
+      eth_getBlockByNumber: (b) => ok({ number: "0x1", baseFeePerGas: n(26_028_000) }, b.id),
+      eth_sendTransaction: handleSendTransaction,
+      eth_sendRawTransaction: handleSendRawTransaction,
+      eth_getTransactionReceipt: handleGetTransactionReceipt,
+      eth_call: handleEthCall,
+    };
+    const h = methodHandlers[method];
+    if (h) return await h(body);
     return ok("0x", id);
   }
 
@@ -804,9 +804,7 @@ describe("RPC round-trip budgets", () => {
     expect(m.roundTrips()).toBe(afterFirst);
 
     // A successful broadcast (the ENTER's wrap/mint) invalidates the cache.
-    await Effect.runPromise(
-      svc.enterPosition(POOL, 0, 0, 1000).pipe(Effect.ignore),
-    );
+    await Effect.runPromise(svc.enterPosition(POOL, 0, 0, 1000).pipe(Effect.ignore));
     const afterBroadcast = m.roundTrips();
     expect(m.sentTxs.length).toBeGreaterThan(0); // broadcast really landed
     await Effect.runPromise(svc.getAllWalletPositions(WALLET));
@@ -843,7 +841,9 @@ describe("RPC round-trip budgets", () => {
     }
 
     const more = [...pools, "...1", "...2", "...3"].map((p, i) =>
-      i < 3 ? p : `0xa9188730fe85be88ad499d7d52b099e800fb03${(6 + i).toString(16).padStart(2, "0")}`,
+      i < 3
+        ? p
+        : `0xa9188730fe85be88ad499d7d52b099e800fb03${(6 + i).toString(16).padStart(2, "0")}`,
     );
     const many = installMock({});
     const svcMany = await adapterFor();

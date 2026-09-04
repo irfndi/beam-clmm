@@ -306,7 +306,9 @@ function resolveInstallRoot(): string {
       logger.debug(`Detected source install via wrapper: ${candidate}`);
       return candidate;
     }
-  } catch {}
+  } catch {
+    logger.debug("Wrapper install-root probe failed; trying entry script");
+  }
 
   try {
     const main = globalThis.Bun?.main ?? process.argv[1] ?? "";
@@ -318,7 +320,9 @@ function resolveInstallRoot(): string {
         return mainCandidate;
       }
     }
-  } catch {}
+  } catch {
+    logger.debug("Entry-script install-root probe failed; using bundle install dir");
+  }
 
   const installDir = resolveInstallDir();
   logger.debug(`Falling back to bundle install dir: ${installDir}`);
@@ -638,6 +642,95 @@ async function updateFromBundle(
   }
 }
 
+type ReleaseChannel = "stable" | "beta" | "dev" | "canary";
+
+function isReleaseChannel(value: string): value is ReleaseChannel {
+  return (["stable", "beta", "dev", "canary"] as ReadonlyArray<string>).includes(value);
+}
+
+function resolveUpdateChannel(options: {
+  readonly channel: unknown;
+  readonly canary: unknown;
+}): ReleaseChannel {
+  const channelValue = String(options.channel);
+  if (options.canary && channelValue !== "stable") {
+    throw new UpdateAbort("--canary cannot be combined with --channel");
+  }
+  if (!isReleaseChannel(channelValue)) {
+    throw new UpdateAbort(
+      `Invalid release channel '${channelValue}'. Use stable, beta, dev, or canary.`,
+    );
+  }
+  return options.canary ? "canary" : channelValue;
+}
+
+function resolveReleaseToInstall(release: ReleaseInfo | null, current: string): ReleaseInfo | null {
+  if (!release) {
+    console.log("✓ Already up to date");
+    return null;
+  }
+  const latest = release.version;
+  if (!isValidVersion(latest)) {
+    throw new UpdateAbort(`Invalid version format: ${latest}`);
+  }
+  if (compareVersions(latest, current) <= 0) {
+    console.log("✓ Already up to date");
+    return null;
+  }
+  console.log(`Update available: ${current} → ${latest}`);
+  if (release.channel === "canary") {
+    const commitSuffix = release.commit ? ` (commit ${release.commit.slice(0, 8)})` : "";
+    console.log(`Canary build: ${release.version}${commitSuffix}`);
+  }
+  console.log(`Source: ${release.source === "r2" ? "Cloudflare R2" : "GitHub Releases"}`);
+  if (release.bundleUrl) {
+    console.log(`Download: ${release.bundleUrl}`);
+  }
+  return release;
+}
+
+function reportRestartRequired(): void {
+  // Issue #184: `beam update` replaces the bundle on disk, but the
+  // running agent keeps executing the OLD build in memory — there is no
+  // restart logic, and the success output used to give no hint that the
+  // fix is not live yet (an operator watching a broken release believed
+  // the update fixed it while the old code kept running for hours).
+  // Detect the running agent (dev lockfile or process scan) and surface
+  // a prominent restart-required notice; exit non-zero (2, distinct from
+  // update-failure's 1) so scripts/cron can tell "updated, restart
+  // needed" apart from "update failed".
+  const lock = readLockfile();
+  const runningEngine = findRunningEngineProcess();
+  // Prefer the process-scan result: it verifies the command line, so it
+  // can never name a stale-lock PID that the OS reused for an unrelated
+  // process (the lockfile is only liveness-checked). The lockfile is the
+  // fallback for `beam dev` runs the scan misses.
+  const runningPid =
+    runningEngine?.pid ?? (lock !== null && isProcessAlive(lock.pid) ? lock.pid : null) ?? null;
+  if (runningPid === null) return;
+  console.log("");
+  console.log(
+    `RESTART REQUIRED — the running Beam agent (PID ${runningPid}) is still executing the OLD build.`,
+  );
+  console.log("  The new version is installed, verified, and will go live on the next restart.");
+  console.log("  Restart it with:");
+  console.log("    systemctl --user restart beam-agent.service   (systemd user service)");
+  console.log(`    kill ${runningPid} && beam dev                 (manual/foreground run)`);
+  process.exitCode = 2;
+}
+
+function resetVersionTimestamp(): void {
+  // Reset version install timestamp for force-update tracking
+  try {
+    const beamDir = join(homedir(), ".config", "beam");
+    if (!existsSync(beamDir)) mkdirSync(beamDir, { recursive: true, mode: 0o700 });
+    const timestampFile = join(beamDir, "version-installed-at");
+    writeFileSync(timestampFile, String(Date.now()), { mode: 0o600 });
+  } catch {
+    // non-fatal: timestamp reset failure doesn't block update
+  }
+}
+
 export const updateCommand = new Command("update")
   .description("Check for and apply updates")
   .option("--check-only", "Only check for updates, don't apply")
@@ -652,52 +745,17 @@ export const updateCommand = new Command("update")
     let workDir: string | null = null;
     try {
       const repo = "irfndi/beam-clmm";
-      const channelValue = String(options.channel);
-      if (options.canary && channelValue !== "stable") {
-        throw new UpdateAbort("--canary cannot be combined with --channel");
-      }
-      if (
-        channelValue !== "stable" &&
-        channelValue !== "beta" &&
-        channelValue !== "dev" &&
-        channelValue !== "canary"
-      ) {
-        throw new UpdateAbort(
-          `Invalid release channel '${channelValue}'. Use stable, beta, dev, or canary.`,
-        );
-      }
-      const channel = options.canary ? "canary" : channelValue;
+      const channel = resolveUpdateChannel(options);
       // SAFETY: source selection requires r2Url; validation occurs in fetchRelease before this branch.
       const r2Url = options.r2Url as string;
 
       const release = await Effect.runPromise(fetchLatestRelease(repo, channel, r2Url));
 
-      if (!release) {
-        console.log("✓ Already up to date");
+      const install = resolveReleaseToInstall(release, current);
+      if (!install) {
         return;
       }
-
-      const latest = release.version;
-
-      if (!isValidVersion(latest)) {
-        throw new UpdateAbort(`Invalid version format: ${latest}`);
-      }
-
-      if (compareVersions(latest, current) <= 0) {
-        console.log("✓ Already up to date");
-        return;
-      }
-
-      console.log(`Update available: ${current} → ${latest}`);
-      if (release.channel === "canary") {
-        const commitSuffix = release.commit ? ` (commit ${release.commit.slice(0, 8)})` : "";
-        console.log(`Canary build: ${release.version}${commitSuffix}`);
-      }
-      console.log(`Source: ${release.source === "r2" ? "Cloudflare R2" : "GitHub Releases"}`);
-      if (release.bundleUrl) {
-        console.log(`Download: ${release.bundleUrl}`);
-      }
-
+      const latest = install.version;
       if (options.checkOnly) {
         return;
       }
@@ -708,55 +766,17 @@ export const updateCommand = new Command("update")
       const fromSource = isSourceInstall(installRoot);
       if (fromSource) {
         // SAFETY: Commander supplies skipSmokeTest as the declared boolean option.
-        await updateFromSource(release, installRoot, workDir, options.skipSmokeTest as boolean);
+        await updateFromSource(install, installRoot, workDir, options.skipSmokeTest as boolean);
       } else {
         // SAFETY: Commander supplies skipSmokeTest as the declared boolean option.
-        await updateFromBundle(release, workDir, options.skipSmokeTest as boolean);
+        await updateFromBundle(install, workDir, options.skipSmokeTest as boolean);
       }
 
-      logger.info(`Updated to ${latest} from ${release.source}`);
+      logger.info(`Updated to ${latest} from ${install.source}`);
       console.log(`✓ Updated to ${latest}`);
 
-      // Issue #184: `beam update` replaces the bundle on disk, but the
-      // running agent keeps executing the OLD build in memory — there is no
-      // restart logic, and the success output used to give no hint that the
-      // fix is not live yet (an operator watching a broken release believed
-      // the update fixed it while the old code kept running for hours).
-      // Detect the running agent (dev lockfile or process scan) and surface
-      // a prominent restart-required notice; exit non-zero (2, distinct from
-      // update-failure's 1) so scripts/cron can tell "updated, restart
-      // needed" apart from "update failed".
-      const lock = readLockfile();
-      const runningEngine = findRunningEngineProcess();
-      // Prefer the process-scan result: it verifies the command line, so it
-      // can never name a stale-lock PID that the OS reused for an unrelated
-      // process (the lockfile is only liveness-checked). The lockfile is the
-      // fallback for `beam dev` runs the scan misses.
-      const runningPid =
-        runningEngine?.pid ?? (lock !== null && isProcessAlive(lock.pid) ? lock.pid : null) ?? null;
-      if (runningPid !== null) {
-        console.log("");
-        console.log(
-          `RESTART REQUIRED — the running Beam agent (PID ${runningPid}) is still executing the OLD build.`,
-        );
-        console.log(
-          "  The new version is installed, verified, and will go live on the next restart.",
-        );
-        console.log("  Restart it with:");
-        console.log("    systemctl --user restart beam-agent.service   (systemd user service)");
-        console.log(`    kill ${runningPid} && beam dev                 (manual/foreground run)`);
-        process.exitCode = 2;
-      }
-
-      // Reset version install timestamp for force-update tracking
-      try {
-        const beamDir = join(homedir(), ".config", "beam");
-        if (!existsSync(beamDir)) mkdirSync(beamDir, { recursive: true, mode: 0o700 });
-        const timestampFile = join(beamDir, "version-installed-at");
-        writeFileSync(timestampFile, String(Date.now()), { mode: 0o600 });
-      } catch {
-        // non-fatal: timestamp reset failure doesn't block update
-      }
+      reportRestartRequired();
+      resetVersionTimestamp();
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       const exitCode = err instanceof UpdateAbort ? err.exitCode : 1;

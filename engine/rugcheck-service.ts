@@ -95,6 +95,45 @@ function readFiniteNumber(value: unknown): number | null {
   return null;
 }
 
+function readAuthority(token: Record<string, unknown> | null, key: string): string | null {
+  if (token === null) return null;
+  const v = token[key];
+  return typeof v === "string" && v.length > 0 ? v : null;
+}
+function parseRugCheckRisks(raw: Record<string, unknown>): RugCheckRisk[] {
+  const risks: RugCheckRisk[] = [];
+  if (!Array.isArray(raw["risks"])) return risks;
+  for (const risk of raw["risks"]) {
+    if (!isObject(risk)) continue;
+    risks.push({
+      name: typeof risk["name"] === "string" ? risk["name"] : "unknown risk",
+      value: typeof risk["value"] === "string" ? risk["value"] : null,
+      description: typeof risk["description"] === "string" ? risk["description"] : null,
+      level: typeof risk["level"] === "string" ? risk["level"] : null,
+    });
+  }
+  return risks;
+}
+
+function parseRugCheckTopHolders(rawTopHolders: unknown): RugCheckTopHolder[] {
+  const topHolders: RugCheckTopHolder[] = [];
+  if (!Array.isArray(rawTopHolders)) return topHolders;
+  for (const holder of rawTopHolders) {
+    if (!isObject(holder)) continue;
+    const address = typeof holder["address"] === "string" ? holder["address"] : "";
+    if (address.length === 0) continue;
+    const pct = readFiniteNumber(holder["pct"]);
+    if (pct === null) continue;
+    topHolders.push({
+      address,
+      owner: typeof holder["owner"] === "string" ? holder["owner"] : null,
+      pct,
+      insider: typeof holder["insider"] === "boolean" ? holder["insider"] : null,
+    });
+  }
+  return topHolders;
+}
+
 /**
  * Parse a raw RugCheck report payload. Returns null when the payload is not a
  * usable report object. Individual fields degrade to null / empty lists — the
@@ -108,36 +147,9 @@ export function parseRugCheckReport(raw: unknown): RugCheckReport | null {
   const token = isObject(raw["token"]) ? raw["token"] : null;
   const tokenMeta = isObject(raw["tokenMeta"]) ? raw["tokenMeta"] : null;
 
-  const risks: RugCheckRisk[] = [];
-  if (Array.isArray(raw["risks"])) {
-    for (const risk of raw["risks"]) {
-      if (!isObject(risk)) continue;
-      risks.push({
-        name: typeof risk["name"] === "string" ? risk["name"] : "unknown risk",
-        value: typeof risk["value"] === "string" ? risk["value"] : null,
-        description: typeof risk["description"] === "string" ? risk["description"] : null,
-        level: typeof risk["level"] === "string" ? risk["level"] : null,
-      });
-    }
-  }
-
+  const risks = parseRugCheckRisks(raw);
   const rawTopHolders = raw["topHolders"];
-  const topHolders: RugCheckTopHolder[] = [];
-  if (Array.isArray(rawTopHolders)) {
-    for (const holder of rawTopHolders) {
-      if (!isObject(holder)) continue;
-      const address = typeof holder["address"] === "string" ? holder["address"] : "";
-      if (address.length === 0) continue;
-      const pct = readFiniteNumber(holder["pct"]);
-      if (pct === null) continue;
-      topHolders.push({
-        address,
-        owner: typeof holder["owner"] === "string" ? holder["owner"] : null,
-        pct,
-        insider: typeof holder["insider"] === "boolean" ? holder["insider"] : null,
-      });
-    }
-  }
+  const topHolders = parseRugCheckTopHolders(rawTopHolders);
   const top10HolderPct =
     topHolders.length > 0 ? topHolders.slice(0, 10).reduce((sum, h) => sum + h.pct, 0) : null;
 
@@ -145,18 +157,8 @@ export function parseRugCheckReport(raw: unknown): RugCheckReport | null {
     mint,
     scoreNormalised: readFiniteNumber(raw["score_normalised"]),
     rugged: raw["rugged"] === true,
-    mintAuthority:
-      token !== null &&
-      typeof token["mintAuthority"] === "string" &&
-      token["mintAuthority"].length > 0
-        ? token["mintAuthority"]
-        : null,
-    freezeAuthority:
-      token !== null &&
-      typeof token["freezeAuthority"] === "string" &&
-      token["freezeAuthority"].length > 0
-        ? token["freezeAuthority"]
-        : null,
+    mintAuthority: readAuthority(token, "mintAuthority"),
+    freezeAuthority: readAuthority(token, "freezeAuthority"),
     tokenMetaMutable:
       tokenMeta !== null && typeof tokenMeta["mutable"] === "boolean" ? tokenMeta["mutable"] : null,
     totalHolders: readFiniteNumber(raw["totalHolders"]),

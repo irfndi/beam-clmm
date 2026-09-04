@@ -39,6 +39,53 @@ const MIN_BASELINE = 8;
  * snapshots arrive at irregular per-pool cadences and raw-timestamp pairing
  * would correlate sampling noise instead of prices.
  */
+
+function hourlyPricesOnGrid(
+  sorted: ReadonlyArray<{ timestamp: number; price: number }>,
+  gridStart: number,
+  nowMs: number,
+): number[] {
+  const prices: number[] = [];
+  for (let t = gridStart; t <= nowMs; t += 3_600_000) {
+    let last: number | null = null;
+    for (let i = sorted.length - 1; i >= 0; i--) {
+      if (sorted[i]!.timestamp <= t && sorted[i]!.price > 0) {
+        last = sorted[i]!.price;
+        break;
+      }
+    }
+    if (last !== null) prices.push(last);
+  }
+  return prices;
+}
+function logReturns(prices: ReadonlyArray<number>): number[] {
+  const rets: number[] = [];
+  for (let i = 1; i < prices.length; i++) rets.push(Math.log(prices[i]! / prices[i - 1]!));
+  return rets;
+}
+function meanPairwiseCorrelation(
+  aligned: ReadonlyArray<ReadonlyArray<number>>,
+  means: ReadonlyArray<number>,
+  stds: ReadonlyArray<number>,
+  minLength: number,
+): { sum: number; pairs: number } {
+  let sum = 0;
+  let pairs = 0;
+  for (let i = 0; i < aligned.length; i++) {
+    for (let j = i + 1; j < aligned.length; j++) {
+      const si = stds[i]!;
+      const sj = stds[j]!;
+      if (si <= 0 || sj <= 0) continue;
+      let cov = 0;
+      for (let k = 0; k < minLength; k++)
+        cov += (aligned[i]![k]! - means[i]!) * (aligned[j]![k]! - means[j]!);
+      sum += cov / (minLength * si * sj);
+      pairs++;
+    }
+  }
+  return { sum, pairs };
+}
+
 export function assessMarketStress(
   seriesByPool: ReadonlyMap<string, ReadonlyArray<{ timestamp: number; price: number }>>,
   nowMs: number,
@@ -47,27 +94,11 @@ export function assessMarketStress(
   const gridStart = nowMs - windowHours * 3_600_000;
   const returnsByPool = new Map<string, number[]>();
   for (const [pool, snaps] of seriesByPool) {
-    // Sort + dedupe guard (snapshots are unique per (pool, ts) but be safe).
     const sorted = [...snaps].sort((a, b) => a.timestamp - b.timestamp);
-    const prices: number[] = [];
-    for (let t = gridStart; t <= nowMs; t += 3_600_000) {
-      let last: number | null = null;
-      for (let i = sorted.length - 1; i >= 0; i--) {
-        if (sorted[i]!.timestamp <= t && sorted[i]!.price > 0) {
-          last = sorted[i]!.price;
-          break;
-        }
-      }
-      if (last !== null) prices.push(last);
-    }
+    const prices = hourlyPricesOnGrid(sorted, gridStart, nowMs);
     if (prices.length < MIN_SAMPLES_PER_POOL + 1) continue;
-    const rets: number[] = [];
-    for (let i = 1; i < prices.length; i++) {
-      rets.push(Math.log(prices[i]! / prices[i - 1]!));
-    }
-    if (rets.length >= MIN_SAMPLES_PER_POOL) {
-      returnsByPool.set(pool, rets);
-    }
+    const rets = logReturns(prices);
+    if (rets.length >= MIN_SAMPLES_PER_POOL) returnsByPool.set(pool, rets);
   }
   if (returnsByPool.size < MIN_POOLS) {
     return { meanCorrelation: null, zScore: null, poolCount: returnsByPool.size, sampleCount: 0 };
@@ -86,21 +117,7 @@ export function assessMarketStress(
     for (let k = 0; k < r.length; k++) acc += (r[k]! - means[i]!) ** 2;
     return Math.sqrt(acc / r.length);
   });
-  let sum = 0;
-  let pairs = 0;
-  for (let i = 0; i < n; i++) {
-    for (let j = i + 1; j < n; j++) {
-      const si = stds[i]!;
-      const sj = stds[j]!;
-      if (si <= 0 || sj <= 0) continue; // flat series carry no correlation info
-      let cov = 0;
-      for (let k = 0; k < minLength; k++) {
-        cov += (aligned[i]![k]! - means[i]!) * (aligned[j]![k]! - means[j]!);
-      }
-      sum += cov / (minLength * si * sj);
-      pairs++;
-    }
-  }
+  const { sum, pairs } = meanPairwiseCorrelation(aligned, means, stds, minLength);
   if (pairs === 0) {
     return { meanCorrelation: null, zScore: null, poolCount: n, sampleCount: 0 };
   }

@@ -173,55 +173,49 @@ function usd(v: number): number {
   return Number.isFinite(v) && v > 0 ? v : 0;
 }
 
-async function backfillPool(db: string, pool: string): Promise<void> {
-  // Sequential (GeckoTerminal rate-limits parallel bursts); DexPaprika in parallel.
-  const ohlcv = await fetchGeckoOhlcv(pool).catch((e) => {
-    log.warn("ohlcv failed", { pool, err: String(e instanceof Error ? e.message : e) });
-    return [];
-  });
-  const [info, dp] = await Promise.all([fetchGeckoPoolInfo(pool), fetchDexPaprikaDetail(pool)]);
-
-  if (ohlcv.length === 0) {
-    log.info(`  no OHLCV for ${pool.slice(0, 18)} — skipped`);
-    return;
-  }
-
+function resolveBinStep(pool: string): number {
   // bin_step: v3 = on-chain tickSpacing (probed live); v4 pools have no
   // on-chain enumeration (poolKeys returns zero tuples), so default to the
   // engine's 400 stand-in used in the live DB for these exact pools.
-  const binStep = pool.length === 42 ? 1 : 400;
+  return pool.length === 42 ? 1 : 400;
+}
+
+function resolveFeeRate(info: GeckoPoolInfo | null, dp: { fee: number | null } | null): number {
   // Fee rate: Gecko pool_fee_percentage (e.g. 0.01 = 0.01% = 0.0001), else
   // DexPaprika `fee` (fraction, 0.0005=0.05%), else 0.0001 default for the
   // ETH/USDG pool family.
-  let feeRate = 0.0001;
-  if (info?.feePct != null && info.feePct > 0) feeRate = info.feePct / 100;
-  else if (dp?.fee != null && dp.fee > 0) feeRate = dp.fee;
+  if (info?.feePct != null && info.feePct > 0) return info.feePct / 100;
+  if (dp?.fee != null && dp.fee > 0) return dp.fee;
+  return 0.0001;
+}
 
-  const tvlUsd = usd(info?.reserveInUsd ?? 0);
-  const vol24 = usd(info?.volume24hUsd ?? 0);
-  const tokenX = dp?.symbols?.[0] || info?.baseSymbol || "X";
-  const tokenY = dp?.symbols?.[1] || info?.quoteSymbol || "Y";
-
+function resolvePriceScale(ohlcv: readonly Bar[], dp: { lastPriceUsd: number | null } | null): number {
   // Gecko can mis-scale a pool's OHLCV to a stablecoin peg (~1.0) even when
   // the pool trades at ~1890 (seen on the v3 WETH/USDG pool). The RELATIVE
   // daily moves and real daily volume are still genuine; only the absolute
   // price level is off. When the latest Gecko close is orders of magnitude
   // away from DexPaprika's real last_price_usd, rescale the whole series so
   // the latest bar matches the real price while preserving relative moves.
-  let priceScale = 1;
   const latest = ohlcv[ohlcv.length - 1]?.close;
   if (dp?.lastPriceUsd != null && latest != null && latest > 0 && dp.lastPriceUsd > 0) {
     const ratio = dp.lastPriceUsd / latest;
-    if (ratio > 10 || ratio < 0.1) priceScale = ratio;
+    if (ratio > 10 || ratio < 0.1) return ratio;
   }
-  if (priceScale !== 1)
-    log.info(`  rescaling OHLCV by ${priceScale.toFixed(3)}x (gecko peg → real price)`);
+  return 1;
+}
 
-  log.info(
-    `  ${pool.slice(0, 18)}: ${ohlcv.length} candles, tvl=$${tvlUsd.toFixed(0)}, fee=${feeRate}, ` +
-      `binStep=${binStep}, ${tokenX}/${tokenY}`,
-  );
-
+function buildBackfillSnapshots(input: {
+  readonly ohlcv: readonly Bar[];
+  readonly priceScale: number;
+  readonly feeRate: number;
+  readonly tvlUsd: number;
+  readonly vol24: number;
+  readonly binStep: number;
+  readonly tokenX: string;
+  readonly tokenY: string;
+  readonly pool: string;
+}): PoolSnapshot[] {
+  const { ohlcv, priceScale, feeRate, tvlUsd, vol24, binStep, tokenX, tokenY, pool } = input;
   const snaps: PoolSnapshot[] = [];
   for (const bar of ohlcv) {
     const price = bar.close * priceScale;
@@ -265,6 +259,37 @@ async function backfillPool(db: string, pool: string): Promise<void> {
       statsSource: "geckoterminal",
     });
   }
+  return snaps;
+}
+
+async function backfillPool(db: string, pool: string): Promise<void> {
+  // Sequential (GeckoTerminal rate-limits parallel bursts); DexPaprika in parallel.
+  const ohlcv = await fetchGeckoOhlcv(pool).catch((e) => {
+    log.warn("ohlcv failed", { pool, err: String(e instanceof Error ? e.message : e) });
+    return [];
+  });
+  const [info, dp] = await Promise.all([fetchGeckoPoolInfo(pool), fetchDexPaprikaDetail(pool)]);
+
+  if (ohlcv.length === 0) {
+    log.info(`  no OHLCV for ${pool.slice(0, 18)} — skipped`);
+    return;
+  }
+
+  const binStep = resolveBinStep(pool);
+  const feeRate = resolveFeeRate(info, dp);
+  const tvlUsd = usd(info?.reserveInUsd ?? 0);
+  const vol24 = usd(info?.volume24hUsd ?? 0);
+  const tokenX = dp?.symbols?.[0] || info?.baseSymbol || "X";
+  const tokenY = dp?.symbols?.[1] || info?.quoteSymbol || "Y";
+  const priceScale = resolvePriceScale(ohlcv, dp);
+  if (priceScale !== 1) log.info(`  rescaling OHLCV by ${priceScale.toFixed(3)}x (gecko peg → real price)`);
+
+  log.info(
+    `  ${pool.slice(0, 18)}: ${ohlcv.length} candles, tvl=$${tvlUsd.toFixed(0)}, fee=${feeRate}, ` +
+      `binStep=${binStep}, ${tokenX}/${tokenY}`,
+  );
+
+  const snaps = buildBackfillSnapshots({ ohlcv, priceScale, feeRate, tvlUsd, vol24, binStep, tokenX, tokenY, pool });
 
   const effect = Effect.gen(function* () {
     const svc = yield* DbService;

@@ -45,7 +45,7 @@ import {
 
 async function run<T, E, R>(
   effect: Effect.Effect<T, E, R>,
-  layer: Layer.Layer<R, never, never>,
+  layer: Layer.Layer<R, E, never>,
 ): Promise<T> {
   // v4 layer building is async (memoized provides) — runSync is no longer valid.
   return Effect.runPromise(Effect.provide(effect, layer));

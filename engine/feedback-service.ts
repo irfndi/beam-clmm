@@ -143,7 +143,12 @@ function readBeamApiKey(): Effect.Effect<string | null, never> {
       const credentialsFile =
         process.env.BEAM_CREDENTIALS_FILE ?? join(getBeamUserConfigDir(), "credentials.json");
       if (!existsSync(credentialsFile)) return null;
-      const value: unknown = JSON.parse(readFileSync(credentialsFile, "utf-8"));
+      let value: unknown;
+      try {
+        value = JSON.parse(readFileSync(credentialsFile, "utf-8"));
+      } catch {
+        return null;
+      }
       if (typeof value !== "object" || value === null || !("apiKey" in value)) return null;
       return typeof value.apiKey === "string" && value.apiKey.length > 0 ? value.apiKey : null;
     },
@@ -206,6 +211,124 @@ function parseFeedbackSeverity(value: string): FeedbackSeverity {
   }
 }
 
+function optOutGate(optOut: boolean): FeedbackResult | null {
+  if (optOut) return { kind: "opt_out" as const };
+  return null;
+}
+
+function apiKeyGate(apiKey: string | null): FeedbackResult | null {
+  if (!apiKey) {
+    return {
+      kind: "error" as const,
+      error: "Beam account required. Run 'beam register' first.",
+    } satisfies FeedbackResult;
+  }
+  return null;
+}
+
+function duplicateGate(local: FeedbackEntry | null): FeedbackResult | null {
+  if (local) {
+    const ageMs = Date.now() - local.reportedAt;
+    if (ageMs < FEEDBACK_LIMITS.duplicateCooldownMs) {
+      logger.info(`Skipping duplicate feedback (cooldown ${Math.round(ageMs / 1000)}s)`);
+      return { kind: "local_only" as const, localId: local.id };
+    }
+  }
+  return null;
+}
+
+function hourLimitGate(
+  allRecent: ReadonlyArray<{ readonly reportedAt: number }>,
+  now: number,
+): FeedbackResult | null {
+  const count = allRecent.filter((f) => f.reportedAt > now - 60 * 60 * 1000).length;
+  if (count >= FEEDBACK_LIMITS.perHour) {
+    return {
+      kind: "rate_limited" as const,
+      reason: `Exceeded ${FEEDBACK_LIMITS.perHour} per hour`,
+    };
+  }
+  return null;
+}
+
+function dayLimitGate(
+  allRecent: ReadonlyArray<{ readonly reportedAt: number }>,
+  now: number,
+): FeedbackResult | null {
+  const count = allRecent.filter((f) => f.reportedAt > now - 24 * 60 * 60 * 1000).length;
+  if (count >= FEEDBACK_LIMITS.perDay) {
+    return {
+      kind: "rate_limited" as const,
+      reason: `Exceeded ${FEEDBACK_LIMITS.perDay} per day`,
+    };
+  }
+  return null;
+}
+
+function intervalGate(
+  allRecent: ReadonlyArray<{ readonly reportedAt: number }>,
+  now: number,
+): FeedbackResult | null {
+  if (allRecent.length > 0) {
+    const lastSubmission = Math.max(...allRecent.map((f) => f.reportedAt));
+    if (now - lastSubmission < FEEDBACK_LIMITS.minIntervalMs) {
+      return {
+        kind: "rate_limited" as const,
+        reason: `Minimum interval is ${FEEDBACK_LIMITS.minIntervalMs / 1000}s`,
+      };
+    }
+  }
+  return null;
+}
+
+function rateLimitGate(
+  allRecent: ReadonlyArray<{ readonly reportedAt: number }>,
+  now: number,
+): FeedbackResult | null {
+  return (
+    hourLimitGate(allRecent, now) ?? dayLimitGate(allRecent, now) ?? intervalGate(allRecent, now)
+  );
+}
+
+function authFailureGate(
+  cloudResult:
+    | { readonly authFailure: true }
+    | { readonly id: string; readonly duplicate: boolean }
+    | null,
+): FeedbackResult | null {
+  if (cloudResult && "authFailure" in cloudResult) {
+    return {
+      kind: "error" as const,
+      error: "Beam cloud rejected the stored credentials. Run 'beam login' again.",
+    } satisfies FeedbackResult;
+  }
+  return null;
+}
+
+function buildFeedbackEntry(
+  id: string,
+  agentId: string,
+  feedback: AgentFeedback,
+  context: FeedbackContext,
+  reportedAt: number,
+  hash: string,
+): FeedbackEntry {
+  return {
+    id,
+    agentId,
+    category: feedback.category,
+    severity: feedback.severity,
+    summary: feedback.summary,
+    details: feedback.details ?? null,
+    relatedFiles: feedback.relatedFiles ?? [],
+    contextJson: JSON.stringify(context),
+    githubIssueNumber: null,
+    githubIssueUrl: null,
+    reportedAt,
+    hash,
+  };
+}
+
 export const FeedbackLive = Layer.effect(
   FeedbackService,
   Effect.gen(function* () {
@@ -216,9 +339,8 @@ export const FeedbackLive = Layer.effect(
 
     const submit = (rawFeedback: AgentFeedback): Effect.Effect<FeedbackResult, never> =>
       Effect.gen(function* () {
-        if (state.optOut) {
-          return { kind: "opt_out" as const };
-        }
+        const earlyOptOut = optOutGate(state.optOut);
+        if (earlyOptOut) return earlyOptOut;
         const context: FeedbackContext = rawFeedback.context ?? buildContext();
         const feedback: AgentFeedback = {
           ...rawFeedback,
@@ -226,53 +348,18 @@ export const FeedbackLive = Layer.effect(
         };
         const hash = hashFeedback(feedback.summary, feedback.details, feedback.category);
         const apiKey = yield* readBeamApiKey();
-        if (!apiKey) {
-          return {
-            kind: "error" as const,
-            error: "Beam account required. Run 'beam register' first.",
-          } satisfies FeedbackResult;
-        }
+        const apiKeyRejection = apiKeyGate(apiKey);
+        if (apiKeyRejection) return apiKeyRejection;
 
         const localRow = yield* db.getFeedbackByHash(hash, agentId);
         const local = localRow ? toFeedbackEntry(localRow) : null;
-        if (local) {
-          const ageMs = Date.now() - local.reportedAt;
-          if (ageMs < FEEDBACK_LIMITS.duplicateCooldownMs) {
-            logger.info(`Skipping duplicate feedback (cooldown ${Math.round(ageMs / 1000)}s)`);
-            return {
-              kind: "local_only" as const,
-              localId: local.id,
-            };
-          }
-        }
+        const dupRejection = duplicateGate(local);
+        if (dupRejection) return dupRejection;
 
         const allRecent = yield* db.listFeedbackForAgent(agentId);
         const now = Date.now();
-        const rateHourCount = allRecent.filter((f) => f.reportedAt > now - 60 * 60 * 1000).length;
-        if (rateHourCount >= FEEDBACK_LIMITS.perHour) {
-          return {
-            kind: "rate_limited" as const,
-            reason: `Exceeded ${FEEDBACK_LIMITS.perHour} per hour`,
-          };
-        }
-        const rateDayCount = allRecent.filter(
-          (f) => f.reportedAt > now - 24 * 60 * 60 * 1000,
-        ).length;
-        if (rateDayCount >= FEEDBACK_LIMITS.perDay) {
-          return {
-            kind: "rate_limited" as const,
-            reason: `Exceeded ${FEEDBACK_LIMITS.perDay} per day`,
-          };
-        }
-        if (allRecent.length > 0) {
-          const lastSubmission = Math.max(...allRecent.map((f) => f.reportedAt));
-          if (now - lastSubmission < FEEDBACK_LIMITS.minIntervalMs) {
-            return {
-              kind: "rate_limited" as const,
-              reason: `Minimum interval is ${FEEDBACK_LIMITS.minIntervalMs / 1000}s`,
-            };
-          }
-        }
+        const rateRejection = rateLimitGate(allRecent, now);
+        if (rateRejection) return rateRejection;
 
         const cloudUrl = process.env.BEAM_API_URL
           ? `${process.env.BEAM_API_URL}/v1/feedback`
@@ -293,51 +380,28 @@ export const FeedbackLive = Layer.effect(
             hash,
             reportedAt,
           },
-          apiKey,
+          apiKey as string,
         );
 
-        if (cloudResult && "authFailure" in cloudResult) {
-          return {
-            kind: "error" as const,
-            error: "Beam cloud rejected the stored credentials. Run 'beam login' again.",
-          } satisfies FeedbackResult;
-        }
+        const authRejection = authFailureGate(cloudResult);
+        if (authRejection) return authRejection;
 
-        if (cloudResult) {
-          const entry: FeedbackEntry = {
-            id: cloudResult.id,
+        if (cloudResult && "id" in cloudResult) {
+          const entry = buildFeedbackEntry(
+            cloudResult.id,
             agentId,
-            category: feedback.category,
-            severity: feedback.severity,
-            summary: feedback.summary,
-            details: feedback.details ?? null,
-            relatedFiles: feedback.relatedFiles ?? [],
-            contextJson: JSON.stringify(context),
-            githubIssueNumber: null,
-            githubIssueUrl: null,
+            feedback,
+            context,
             reportedAt,
             hash,
-          };
+          );
           yield* db.saveFeedback(entry);
           logger.info(`Submitted feedback to Beam cloud: ${feedback.summary}`);
           return { kind: "cloud" as const, id: cloudResult.id, duplicate: cloudResult.duplicate };
         }
 
         const localId = `local-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-        const entry: FeedbackEntry = {
-          id: localId,
-          agentId,
-          category: feedback.category,
-          severity: feedback.severity,
-          summary: feedback.summary,
-          details: feedback.details ?? null,
-          relatedFiles: feedback.relatedFiles ?? [],
-          contextJson: JSON.stringify(context),
-          githubIssueNumber: null,
-          githubIssueUrl: null,
-          reportedAt,
-          hash,
-        };
+        const entry = buildFeedbackEntry(localId, agentId, feedback, context, reportedAt, hash);
         yield* db.saveFeedback(entry);
         logger.warn(`Cloud feedback unavailable; feedback stored locally: ${feedback.summary}`);
         return { kind: "local_only" as const, localId };

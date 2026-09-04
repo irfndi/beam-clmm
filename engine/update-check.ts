@@ -23,20 +23,29 @@ function getVersionInstalledAtFromFile(): number | null {
   }
 }
 
+function gateUpdateTimeAndFlags(
+  db: DbApi,
+  config: AppConfig,
+  now: number,
+): Effect.Effect<boolean, never> {
+  return Effect.gen(function* () {
+    const lastCheckRaw = yield* db.getMetadata("lastUpdateCheckAt");
+    const lastCheckAt = lastCheckRaw ? Number(lastCheckRaw) : 0;
+    if (now - lastCheckAt < config.updateCheckIntervalMs) return false;
+    if (!config.autoUpdate && !config.forceUpdateEnabled) {
+      yield* db.setMetadata("lastUpdateCheckAt", String(now));
+      return false;
+    }
+    return true;
+  }).pipe(Effect.catch(() => Effect.succeed(false)));
+}
+
 export function checkForAutoUpdate(config: AppConfig, db: DbApi): Effect.Effect<void, never> {
   return Effect.gen(function* () {
     const now = Date.now();
 
-    const lastCheckRaw = yield* db.getMetadata("lastUpdateCheckAt");
-    const lastCheckAt = lastCheckRaw ? Number(lastCheckRaw) : 0;
-    if (now - lastCheckAt < config.updateCheckIntervalMs) {
-      return;
-    }
-
-    if (!config.autoUpdate && !config.forceUpdateEnabled) {
-      yield* db.setMetadata("lastUpdateCheckAt", String(now));
-      return;
-    }
+    const shouldContinue = yield* gateUpdateTimeAndFlags(db, config, now);
+    if (!shouldContinue) return;
 
     let versionInstalledAt = yield* db.getMetadata("versionInstalledAt");
     const fileTimestamp = getVersionInstalledAtFromFile();

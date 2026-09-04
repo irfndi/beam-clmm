@@ -118,52 +118,115 @@ export function findRunningEngineProcess(
   return null;
 }
 
-export function acquireLock(
-  lockfilePath = LOCKFILE_PATH,
-): { readonly acquired: true } | { readonly acquired: false; readonly pid: number } {
-  ensureLockfileDir(path.dirname(lockfilePath));
+type AcquireResult =
+  | { readonly acquired: true }
+  | { readonly acquired: false; readonly pid: number };
+type TryCreateResult =
+  | { readonly acquired: true }
+  | { readonly acquired: false; readonly existing: LockfileData | null };
 
-  const tryAtomicCreate = ():
-    | { readonly acquired: true }
-    | { readonly acquired: false; readonly existing: LockfileData | null } => {
+function tryAtomicCreateLock(lockfilePath: string): TryCreateResult {
+  try {
+    const data: LockfileData = { pid: process.pid, timestamp: Date.now() };
+    const fd = fs.openSync(lockfilePath, "wx", 0o600);
     try {
-      const data: LockfileData = { pid: process.pid, timestamp: Date.now() };
-      const fd = fs.openSync(lockfilePath, "wx", 0o600);
-      try {
-        fs.writeFileSync(fd, JSON.stringify(data));
-      } finally {
-        fs.closeSync(fd);
-      }
-      return { acquired: true };
-    } catch (err) {
-      if (err instanceof Error && "code" in err && err.code === "EEXIST") {
-        const existing = readLockfile(lockfilePath);
-        return { acquired: false, existing };
-      }
-      throw err;
+      fs.writeFileSync(fd, JSON.stringify(data));
+    } finally {
+      fs.closeSync(fd);
     }
-  };
-
-  const first = tryAtomicCreate();
-  if (first.acquired) return first;
-
-  let existing = first.existing;
-  if (!existing) {
-    const retry = tryAtomicCreate();
-    if (retry.acquired) return retry;
-    existing = retry.existing;
+    return { acquired: true };
+  } catch (err) {
+    if (err instanceof Error && "code" in err && err.code === "EEXIST") {
+      const existing = readLockfile(lockfilePath);
+      return { acquired: false, existing };
+    }
+    throw err;
   }
+}
 
-  if (existing && isProcessAlive(existing.pid)) {
+function resolveExistingWithRetry(
+  firstExisting: LockfileData | null,
+  lockfilePath: string,
+): AcquireResult | { readonly existing: LockfileData | null } {
+  if (firstExisting !== null) return { existing: firstExisting };
+  const retry = tryAtomicCreateLock(lockfilePath);
+  if (retry.acquired) return retry;
+  return { existing: retry.existing };
+}
+
+function checkLiveLock(existing: LockfileData | null): AcquireResult | null {
+  if (existing !== null && isProcessAlive(existing.pid)) {
     return { acquired: false, pid: existing.pid };
   }
+  return null;
+}
 
-  if (!existing) {
+function checkUnparseableLock(existing: LockfileData | null): AcquireResult | null {
+  if (existing === null) {
     // Lockfile exists but couldn't be parsed after two attempts.
     // Another process may be mid-write. Fail closed — don't unlink.
     return { acquired: false, pid: 0 };
   }
+  return null;
+}
 
+function tryRenameStaleLock(lockfilePath: string, backupPath: string): AcquireResult | null {
+  try {
+    fs.renameSync(lockfilePath, backupPath);
+    return null;
+  } catch (err) {
+    if (!(err instanceof Error && "code" in err && err.code === "ENOENT")) {
+      throw err;
+    }
+    // The lock vanished between our read and rename — another launcher is
+    // replacing it. Only an exclusive create can win now.
+    const created = tryAtomicCreateLock(lockfilePath);
+    return created.acquired
+      ? { acquired: true }
+      : { acquired: false, pid: created.existing?.pid ?? 0 };
+  }
+}
+
+function restoreMismatchedLock(backupPath: string, lockfilePath: string): void {
+  try {
+    fs.linkSync(backupPath, lockfilePath);
+    try {
+      fs.unlinkSync(backupPath);
+    } catch {
+      // Best-effort cleanup of the restored lock.
+    }
+  } catch (restoreErr) {
+    if (!(restoreErr instanceof Error && "code" in restoreErr && restoreErr.code === "EEXIST")) {
+      throw restoreErr;
+    }
+  }
+}
+
+function handleMovedLockMismatch(
+  backupPath: string,
+  existing: LockfileData,
+  lockfilePath: string,
+): AcquireResult | null {
+  const moved = readLockfile(backupPath);
+  if (moved === null || moved.pid !== existing.pid || moved.timestamp !== existing.timestamp) {
+    // The moved file is not the stale lock we read — a concurrent launcher
+    // re-acquired it (or the file was mid-write). Restore it with a hard
+    // link (never clobbers a lock that appeared in the meantime) and fail
+    // with the owner we displaced, falling back to the current owner.
+    restoreMismatchedLock(backupPath, lockfilePath);
+    const current = readLockfile(lockfilePath);
+    return { acquired: false, pid: current?.pid ?? moved?.pid ?? 0 };
+  }
+  return null;
+}
+
+function finalizeStaleLockCreation(lockfilePath: string): AcquireResult {
+  const second = tryAtomicCreateLock(lockfilePath);
+  if (second.acquired) return { acquired: true };
+  return { acquired: false, pid: second.existing?.pid ?? 0 };
+}
+
+function replaceStaleLock(lockfilePath: string, existing: LockfileData): AcquireResult {
   // `existing` is a valid stale lock (dead PID) — replace it atomically. The
   // old unlink-then-create flow had a TOCTOU window: a concurrent launcher
   // could re-acquire the lock between our unlink and our exclusive create, and
@@ -173,50 +236,12 @@ export function acquireLock(
   // without a check-then-act race; the exclusive create can then only fail if
   // another launcher already owns the lock.
   const backupPath = `${lockfilePath}.${process.pid}.${Date.now()}.tmp`;
+  const renameResult = tryRenameStaleLock(lockfilePath, backupPath);
+  if (renameResult !== null) return renameResult;
   try {
-    fs.renameSync(lockfilePath, backupPath);
-  } catch (err) {
-    if (!(err instanceof Error && "code" in err && err.code === "ENOENT")) {
-      throw err;
-    }
-    // The lock vanished between our read and rename — another launcher is
-    // replacing it. Only an exclusive create can win now.
-    const created = tryAtomicCreate();
-    return created.acquired
-      ? { acquired: true }
-      : { acquired: false, pid: created.existing?.pid ?? 0 };
-  }
-
-  try {
-    const moved = readLockfile(backupPath);
-    if (moved === null || moved.pid !== existing.pid || moved.timestamp !== existing.timestamp) {
-      // The moved file is not the stale lock we read — a concurrent launcher
-      // re-acquired it (or the file was mid-write). Restore it with a hard
-      // link (never clobbers a lock that appeared in the meantime) and fail
-      // with the owner we displaced, falling back to the current owner.
-      try {
-        fs.linkSync(backupPath, lockfilePath);
-        try {
-          fs.unlinkSync(backupPath);
-        } catch {
-          // Best-effort cleanup of the restored lock.
-        }
-      } catch (restoreErr) {
-        if (
-          !(restoreErr instanceof Error && "code" in restoreErr && restoreErr.code === "EEXIST")
-        ) {
-          throw restoreErr;
-        }
-      }
-      const current = readLockfile(lockfilePath);
-      return { acquired: false, pid: current?.pid ?? moved?.pid ?? 0 };
-    }
-
-    const second = tryAtomicCreate();
-    if (second.acquired) {
-      return { acquired: true };
-    }
-    return { acquired: false, pid: second.existing?.pid ?? 0 };
+    const mismatch = handleMovedLockMismatch(backupPath, existing, lockfilePath);
+    if (mismatch !== null) return mismatch;
+    return finalizeStaleLockCreation(lockfilePath);
   } finally {
     try {
       fs.unlinkSync(backupPath);
@@ -224,6 +249,22 @@ export function acquireLock(
       // Best-effort cleanup of the moved stale lock.
     }
   }
+}
+
+export function acquireLock(
+  lockfilePath = LOCKFILE_PATH,
+): { readonly acquired: true } | { readonly acquired: false; readonly pid: number } {
+  ensureLockfileDir(path.dirname(lockfilePath));
+  const first = tryAtomicCreateLock(lockfilePath);
+  if (first.acquired) return first;
+  const resolved = resolveExistingWithRetry(first.existing, lockfilePath);
+  if ("acquired" in resolved) return resolved;
+  const existing = resolved.existing;
+  return (
+    checkLiveLock(existing) ??
+    checkUnparseableLock(existing) ??
+    replaceStaleLock(lockfilePath, existing as LockfileData)
+  );
 }
 
 export function releaseLock(lockfilePath = LOCKFILE_PATH): void {

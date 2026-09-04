@@ -693,6 +693,114 @@ function validatedBigIntWei(name: string, fallback: bigint) {
   );
 }
 
+function configError(message: string, path: string, detail: string): ConfigError {
+  return new ConfigError({ message, issues: [{ path, message: detail }] });
+}
+
+function resolveAutonomousTokenMode(raw: string): Effect.Effect<AutonomousTokenMode> {
+  const values = ["off", "shadow", "canary", "live"] as const;
+  const mode = values.find((value) => value === raw);
+  return mode !== undefined
+    ? Effect.succeed(mode)
+    : Effect.die(
+        configError(
+          "AUTONOMOUS_TOKEN_MODE must be one of: off, shadow, canary, live",
+          "AUTONOMOUS_TOKEN_MODE",
+          `Unknown mode: ${raw}`,
+        ),
+      );
+}
+
+function validateSettlementAsset(raw: string): Effect.Effect<SettlementAsset> {
+  return raw === "ETH"
+    ? Effect.succeed(raw)
+    : Effect.die(
+        configError(
+          "SETTLEMENT_ASSET must be ETH",
+          "SETTLEMENT_ASSET",
+          `Unsupported asset: ${raw}`,
+        ),
+      );
+}
+
+function validateIntegerConfig(raw: string): Effect.Effect<void> {
+  return raw && !Number.isInteger(Number(raw))
+    ? Effect.die(
+        configError(
+          "MAX_SWAP_SLIPPAGE_BPS must be an integer",
+          "MAX_SWAP_SLIPPAGE_BPS",
+          `Expected integer, got ${raw}`,
+        ),
+      )
+    : Effect.void;
+}
+
+function validateAgentInstanceId(raw: string): Effect.Effect<string> {
+  const value = raw.trim();
+  return value.length > 0
+    ? Effect.succeed(value)
+    : Effect.die(
+        configError(
+          "AGENT_INSTANCE_ID must not be blank",
+          "AGENT_INSTANCE_ID",
+          "Agent instance ID is required",
+        ),
+      );
+}
+
+function liveConfigIssues(
+  paperTrading: boolean,
+  entryV4Enabled: boolean,
+  exitRouteProofRequired: boolean,
+  paperValidationEnforce: boolean,
+): ReadonlyArray<string> {
+  if (paperTrading) return [];
+  return [
+    ...(entryV4Enabled && !LIVE_ENTRY_V4_ENABLED_CHAIN
+      ? ["LIVE_ENTRY_V4_ENABLED=true is unsupported on the active chain"]
+      : []),
+    ...(!exitRouteProofRequired ? ["EXIT_ROUTE_PROOF_REQUIRED must be true"] : []),
+    ...(!paperValidationEnforce ? ["PAPER_VALIDATION_ENFORCE must be true"] : []),
+  ];
+}
+
+
+function resolveFeeDensityBounds(
+  oorCooldownMs: number,
+  minRaw: number,
+  highRaw: number,
+  lowRaw: number,
+): { minMs: number; highPct: number; lowPct: number } {
+  const minInverted = minRaw >= oorCooldownMs;
+  if (minInverted) {
+    logger.warn(
+      "FEE_DENSITY_COOLDOWN_MIN_MS must be below OOR_COOLDOWN_MS; clamping the floor just under the static value",
+      {
+        feeDensityCooldownMinMs: minRaw,
+        oorCooldownMs,
+        fallback: Math.min(minRaw, Math.max(oorCooldownMs - 1, 0)),
+      },
+    );
+  }
+  const minMs = minInverted ? Math.min(minRaw, Math.max(oorCooldownMs - 1, 0)) : minRaw;
+  const highDefault = 0.005;
+  const lowDefault = 0.0005;
+  const bandInverted = lowRaw >= highRaw;
+  if (bandInverted) {
+    logger.warn("FEE_DENSITY_LOW_PCT must be below FEE_DENSITY_HIGH_PCT; using defaults for both", {
+      feeDensityHighPct: highRaw,
+      feeDensityLowPct: lowRaw,
+      fallback: { feeDensityHighPct: highDefault, feeDensityLowPct: lowDefault },
+    });
+  }
+  return {
+    minMs,
+    highPct: bandInverted ? highDefault : highRaw,
+    lowPct: bandInverted ? lowDefault : lowRaw,
+  };
+}
+
+
 const loadConfig = Effect.gen(function* () {
   const isTest = process.env.NODE_ENV === "test" || process.env.VITEST === "true";
 
@@ -790,39 +898,11 @@ const loadConfig = Effect.gen(function* () {
   const autonomousTokenModeRaw = yield* Config.string("AUTONOMOUS_TOKEN_MODE").pipe(
     Effect.orElseSucceed(() => AUTONOMOUS_TOKEN_CONFIG_DEFAULTS.autonomousTokenMode),
   );
-  let autonomousTokenMode: AutonomousTokenMode;
-  switch (autonomousTokenModeRaw) {
-    case "off":
-    case "shadow":
-    case "canary":
-    case "live":
-      autonomousTokenMode = autonomousTokenModeRaw;
-      break;
-    default:
-      return yield* Effect.die(
-        new ConfigError({
-          message: "AUTONOMOUS_TOKEN_MODE must be one of: off, shadow, canary, live",
-          issues: [
-            {
-              path: "AUTONOMOUS_TOKEN_MODE",
-              message: `Unknown mode: ${autonomousTokenModeRaw}`,
-            },
-          ],
-        }),
-      );
-  }
+  const autonomousTokenMode = yield* resolveAutonomousTokenMode(autonomousTokenModeRaw);
   const settlementAssetRaw = yield* Config.string("SETTLEMENT_ASSET").pipe(
     Effect.orElseSucceed(() => AUTONOMOUS_TOKEN_CONFIG_DEFAULTS.settlementAsset),
   );
-  if (settlementAssetRaw !== "ETH") {
-    return yield* Effect.die(
-      new ConfigError({
-        message: "SETTLEMENT_ASSET must be ETH",
-        issues: [{ path: "SETTLEMENT_ASSET", message: `Unsupported asset: ${settlementAssetRaw}` }],
-      }),
-    );
-  }
-  const settlementAsset: SettlementAsset = settlementAssetRaw;
+  const settlementAsset = yield* validateSettlementAsset(settlementAssetRaw);
   const candidateMinHealthyScans = Math.floor(
     yield* validatedNumber(
       "CANDIDATE_MIN_HEALTHY_SCANS",
@@ -855,19 +935,7 @@ const loadConfig = Effect.gen(function* () {
   const maxSwapSlippageBpsRaw = yield* Config.string("MAX_SWAP_SLIPPAGE_BPS").pipe(
     Effect.orElseSucceed(() => ""),
   );
-  if (maxSwapSlippageBpsRaw && !Number.isInteger(Number(maxSwapSlippageBpsRaw))) {
-    return yield* Effect.die(
-      new ConfigError({
-        message: "MAX_SWAP_SLIPPAGE_BPS must be an integer",
-        issues: [
-          {
-            path: "MAX_SWAP_SLIPPAGE_BPS",
-            message: `Expected integer, got ${maxSwapSlippageBpsRaw}`,
-          },
-        ],
-      }),
-    );
-  }
+  yield* validateIntegerConfig(maxSwapSlippageBpsRaw);
   const configuredMaxSwapSlippageBps = yield* validatedNumber(
     "MAX_SWAP_SLIPPAGE_BPS",
     0,
@@ -907,15 +975,7 @@ const loadConfig = Effect.gen(function* () {
   const agentInstanceIdRaw = yield* Config.string("AGENT_INSTANCE_ID").pipe(
     Effect.orElseSucceed(() => AUTONOMOUS_TOKEN_CONFIG_DEFAULTS.agentInstanceId),
   );
-  const agentInstanceId = agentInstanceIdRaw.trim();
-  if (agentInstanceId.length === 0) {
-    return yield* Effect.die(
-      new ConfigError({
-        message: "AGENT_INSTANCE_ID must not be blank",
-        issues: [{ path: "AGENT_INSTANCE_ID", message: "Agent instance ID is required" }],
-      }),
-    );
-  }
+  const agentInstanceId = yield* validateAgentInstanceId(agentInstanceIdRaw);
   // CRITICAL (safety audit): the default 10-min scan cadence makes every
   // crash-exit gate lag 10-20+ min (trailing stop needs 2 consecutive
   // breaching cycles). Challenge mode defaults to 15s so the drawdown /
@@ -1227,25 +1287,19 @@ const loadConfig = Effect.gen(function* () {
   // the environment. In particular, Robinhood's v4 position manager is
   // known not to accept live v4 mints, so an explicit true must never turn
   // into a real-money attempt there.
-  if (!paperTrading) {
-    const liveSafetyIssues: string[] = [];
-    if (entryV4Enabled && !LIVE_ENTRY_V4_ENABLED_CHAIN) {
-      liveSafetyIssues.push("LIVE_ENTRY_V4_ENABLED=true is unsupported on the active chain");
-    }
-    if (!exitRouteProofRequired) {
-      liveSafetyIssues.push("EXIT_ROUTE_PROOF_REQUIRED must be true");
-    }
-    if (!paperValidationEnforce) {
-      liveSafetyIssues.push("PAPER_VALIDATION_ENFORCE must be true");
-    }
-    if (liveSafetyIssues.length > 0) {
-      return yield* Effect.die(
-        new ConfigError({
-          message: `Unsafe live configuration: ${liveSafetyIssues.join("; ")}`,
-          issues: liveSafetyIssues.map((message) => ({ path: "live-safety", message })),
-        }),
-      );
-    }
+  const liveSafetyIssues = liveConfigIssues(
+    paperTrading,
+    entryV4Enabled,
+    exitRouteProofRequired,
+    paperValidationEnforce,
+  );
+  if (liveSafetyIssues.length > 0) {
+    return yield* Effect.die(
+      new ConfigError({
+        message: `Unsafe live configuration: ${liveSafetyIssues.join("; ")}`,
+        issues: liveSafetyIssues.map((message) => ({ path: "live-safety", message })),
+      }),
+    );
   }
 
   // ─── F7: Pool cooldown after failed exits ───────────────────────────────────
@@ -1276,20 +1330,6 @@ const loadConfig = Effect.gen(function* () {
   // itself is left untouched; when the static duration is 0 the floor is
   // pinned at 0 (cooldown.ts's guard then returns the static duration for
   // every density in that degenerate case).
-  const feeDensityCooldownMinMsInverted = feeDensityCooldownMinMsRaw >= oorCooldownMs;
-  if (feeDensityCooldownMinMsInverted) {
-    logger.warn(
-      "FEE_DENSITY_COOLDOWN_MIN_MS must be below OOR_COOLDOWN_MS; clamping the floor just under the static value",
-      {
-        feeDensityCooldownMinMs: feeDensityCooldownMinMsRaw,
-        oorCooldownMs,
-        fallback: Math.min(feeDensityCooldownMinMsRaw, Math.max(oorCooldownMs - 1, 0)),
-      },
-    );
-  }
-  const feeDensityCooldownMinMs = feeDensityCooldownMinMsInverted
-    ? Math.min(feeDensityCooldownMinMsRaw, Math.max(oorCooldownMs - 1, 0))
-    : feeDensityCooldownMinMsRaw;
   const DEFAULT_FEE_DENSITY_HIGH_PCT = 0.005;
   const DEFAULT_FEE_DENSITY_LOW_PCT = 0.0005;
   const feeDensityHighPctRaw = yield* validatedNumber(
@@ -1302,26 +1342,15 @@ const loadConfig = Effect.gen(function* () {
     0,
     DEFAULT_FEE_DENSITY_LOW_PCT,
   );
-  // An inverted (or collapsed) band breaks the interpolation; fall back to
-  // defaults for BOTH so the pair stays sane (same warn channel as
-  // validatedNumber). This also catches high == 0, since low >= 0.
-  const feeDensityBandInverted = feeDensityLowPctRaw >= feeDensityHighPctRaw;
-  if (feeDensityBandInverted) {
-    logger.warn("FEE_DENSITY_LOW_PCT must be below FEE_DENSITY_HIGH_PCT; using defaults for both", {
-      feeDensityHighPct: feeDensityHighPctRaw,
-      feeDensityLowPct: feeDensityLowPctRaw,
-      fallback: {
-        feeDensityHighPct: DEFAULT_FEE_DENSITY_HIGH_PCT,
-        feeDensityLowPct: DEFAULT_FEE_DENSITY_LOW_PCT,
-      },
-    });
-  }
-  const feeDensityHighPct = feeDensityBandInverted
-    ? DEFAULT_FEE_DENSITY_HIGH_PCT
-    : feeDensityHighPctRaw;
-  const feeDensityLowPct = feeDensityBandInverted
-    ? DEFAULT_FEE_DENSITY_LOW_PCT
-    : feeDensityLowPctRaw;
+  const feeDensityBounds = resolveFeeDensityBounds(
+    oorCooldownMs,
+    feeDensityCooldownMinMsRaw,
+    feeDensityHighPctRaw,
+    feeDensityLowPctRaw,
+  );
+  const feeDensityCooldownMinMs = feeDensityBounds.minMs;
+  const feeDensityHighPct = feeDensityBounds.highPct;
+  const feeDensityLowPct = feeDensityBounds.lowPct;
 
   // ─── Agentic mode / agent runtime overlay ────────────────────────────
   const agentiveMode = yield* Config.boolean("AGENTIC_MODE").pipe(

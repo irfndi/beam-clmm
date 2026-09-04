@@ -1,4 +1,4 @@
-// oxlint-disable anti-slop/no-unknown-parameters, anti-slop/no-unsafe-dictionary-type, anti-slop/no-runtime-typeof -- JSON parser predicates are the I/O boundary for Jupiter responses.
+// oxlint-disable anti-slop/no-unknown-parameters, anti-slop/no-unsafe-dictionary-type, anti-slop/no-unsafe-dictionary-unknown, anti-slop/no-runtime-typeof -- JSON parser predicates are the I/O boundary for Jupiter responses.
 import { createLogger } from "./logger.js";
 
 /**
@@ -111,7 +111,7 @@ export async function fetchTokenRisks(
 ): Promise<Map<string, TokenRiskSignal>> {
   const fetchImpl = options.fetchImpl ?? fetch;
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-  const headers: Record<string, string> = {};
+  const headers: { "x-api-key"?: string } = {};
   // ONLY send the key when a non-empty value is configured — an empty
   // `x-api-key` header can be treated as an invalid key and 401; its absence
   // is the supported keyless path.
@@ -203,6 +203,28 @@ function setCacheEntry(mint: string, entry: CacheEntry): void {
  * false`) returns an empty map without touching the network. Signals are never
  * fabricated. Logs ONE warning per failing consult, not per mint.
  */
+
+function splitCacheWarmAndFetch(
+  mints: ReadonlyArray<string>,
+  now: number,
+  ttlMs: number,
+): { result: Map<string, TokenRiskSignal>; toFetch: string[] } {
+  const result = new Map<string, TokenRiskSignal>();
+  const toFetch: string[] = [];
+  for (const mint of mints) {
+    const entry = cache.get(mint);
+    if (entry === undefined) {
+      toFetch.push(mint);
+    } else if (now - entry.fetchedAt >= ttlMs) {
+      if (entry.signal !== UNKNOWN_TOKEN_RISK_SIGNAL) result.set(mint, entry.signal);
+      toFetch.push(mint);
+    } else if (entry.signal !== UNKNOWN_TOKEN_RISK_SIGNAL) {
+      result.set(mint, entry.signal);
+    }
+  }
+  return { result, toFetch };
+}
+
 export async function consultTokenRisks(
   mints: ReadonlyArray<string>,
   config: TokenRiskConfigLike,
@@ -212,24 +234,7 @@ export async function consultTokenRisks(
   const ttlMs = (config.jupiterTokenRiskCacheTtlMin ?? DEFAULT_CACHE_TTL_MIN) * 60_000;
   const now = Date.now();
 
-  const result = new Map<string, TokenRiskSignal>();
-  const toFetch: string[] = [];
-  for (const mint of mints) {
-    const entry = cache.get(mint);
-    if (entry === undefined) {
-      toFetch.push(mint);
-    } else if (now - entry.fetchedAt >= ttlMs) {
-      // Expired: re-fetch. A stale REAL signal is served as resilience in case
-      // the refresh fails; a stale negative entry stays omitted.
-      if (entry.signal !== UNKNOWN_TOKEN_RISK_SIGNAL) result.set(mint, entry.signal);
-      toFetch.push(mint);
-    } else if (entry.signal !== UNKNOWN_TOKEN_RISK_SIGNAL) {
-      // Fresh real signal: serve from cache, no network call. A fresh negative
-      // entry is cached only to stop re-query spam — it is intentionally NOT
-      // served, so a revoked verification stops exempting the pool.
-      result.set(mint, entry.signal);
-    }
-  }
+  const { result, toFetch } = splitCacheWarmAndFetch(mints, now, ttlMs);
 
   if (toFetch.length > 0) {
     // Build the request options without ever assigning `undefined` to an

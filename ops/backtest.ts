@@ -17,7 +17,7 @@ import { createLogger } from "../engine/logger.js";
 import { DLMMStrategy } from "../engine/strategy-service.js";
 import { DbLive } from "../engine/db-service.js";
 import { DbService } from "../engine/services.js";
-import type { BacktestResult, BinArray, PoolSnapshot, PoolState } from "../engine/types.js";
+import type { BacktestResult, BinArray, PoolMetrics, PoolSnapshot, PoolState } from "../engine/types.js";
 import { evaluateReplayPool } from "../engine/cycle/evaluate-pool.js";
 
 const log = createLogger("Backtest");
@@ -60,6 +60,109 @@ export function inferReplayPoolAgeMs(
     : observedAge;
 }
 
+function handleDaysFlag(next: string | undefined, out: CliArgs): number {
+  if (!next) return 0;
+  const parsed = Number(next);
+  if (!Number.isFinite(parsed) || parsed <= 0 || parsed > 3650) {
+    throw new Error(`Invalid --days value: ${next}. Must be a finite number between 1 and 3650.`);
+  }
+  out.days = parsed;
+  return 1;
+}
+
+function handleMinTvlFlag(next: string | undefined, out: CliArgs): number {
+  if (!next) return 0;
+  const parsed = Number(next);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    throw new Error(`Invalid --min-tvl value: ${next}. Must be a non-negative number.`);
+  }
+  out.minPoolTvlUsd = parsed;
+  out.minPoolTvlExplicit = true;
+  return 1;
+}
+
+function handleChallengeFlag(_next: string | undefined, out: CliArgs): number {
+  out.challengeMode = true;
+  if (!out.minPoolTvlExplicit) out.minPoolTvlUsd = 1_000;
+  return 0;
+}
+
+function handleChallengeMinScoreFlag(next: string | undefined, out: CliArgs): number {
+  if (!next) return 0;
+  const parsed = Number(next);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    throw new Error(`Invalid --challenge-min-score value: ${next}. Must be a non-negative number.`);
+  }
+  out.challengeMinScore = parsed;
+  return 1;
+}
+
+function handleGasUsdFlag(next: string | undefined, out: CliArgs): number {
+  if (!next) return 0;
+  const parsed = Number(next);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    throw new Error(`Invalid --gas-usd value: ${next}. Must be a non-negative number.`);
+  }
+  out.roundTripGasUsd = parsed;
+  return 1;
+}
+
+function handleMin7dFeeOverGasFlag(next: string | undefined, out: CliArgs): number {
+  if (!next) return 0;
+  const parsed = Number(next);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    throw new Error(`Invalid --min-7d-fee-over-gas value: ${next}. Must be a non-negative number.`);
+  }
+  out.min7dFeeOverGas = parsed;
+  return 1;
+}
+
+function handlePoolsFlag(next: string | undefined, out: CliArgs): number {
+  if (!next) return 0;
+  out.pools = next
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  return 1;
+}
+
+function handleConfidenceThresholdFlag(next: string | undefined, out: CliArgs): number {
+  if (!next) return 0;
+  const parsed = Number(next);
+  if (!Number.isFinite(parsed) || parsed < 0 || parsed > 1) {
+    throw new Error(`Invalid --confidence-threshold value: ${next}. Must be between 0 and 1.`);
+  }
+  out.confidenceThreshold = parsed;
+  return 1;
+}
+
+function handleSourceFlag(next: string | undefined, out: CliArgs): number {
+  if (next === "synthetic" || next === "replay") {
+    out.source = next;
+    return 1;
+  }
+  return 0;
+}
+
+function handleDbFlag(next: string | undefined, out: CliArgs): number {
+  if (!next) return 0;
+  out.dbPath = next;
+  return 1;
+}
+
+const CLI_FLAG_HANDLERS: Readonly<Record<string, (next: string | undefined, out: CliArgs) => number>> = {
+  "--days": handleDaysFlag,
+  "--min-tvl": handleMinTvlFlag,
+  "--challenge": handleChallengeFlag,
+  "--challenge-min-score": handleChallengeMinScoreFlag,
+  "--gas-usd": handleGasUsdFlag,
+  "--min-7d-fee-over-gas": handleMin7dFeeOverGasFlag,
+  "--pools": handlePoolsFlag,
+  "--confidence-threshold": handleConfidenceThresholdFlag,
+  "--source": handleSourceFlag,
+  "--db": handleDbFlag,
+};
+
 function parseArgs(argv: ReadonlyArray<string>): CliArgs {
   const out: CliArgs = {
     days: 7,
@@ -75,75 +178,10 @@ function parseArgs(argv: ReadonlyArray<string>): CliArgs {
     confidenceThreshold: 0.65,
   };
   for (let i = 0; i < argv.length; i++) {
-    const a = argv[i];
+    const a = argv[i]!;
     const next = argv[i + 1];
-    if (a === "--days" && next) {
-      const parsed = Number(next);
-      if (!Number.isFinite(parsed) || parsed <= 0 || parsed > 3650) {
-        throw new Error(
-          `Invalid --days value: ${next}. Must be a finite number between 1 and 3650.`,
-        );
-      }
-      out.days = parsed;
-      i++;
-    } else if (a === "--min-tvl" && next) {
-      const parsed = Number(next);
-      if (!Number.isFinite(parsed) || parsed < 0) {
-        throw new Error(`Invalid --min-tvl value: ${next}. Must be a non-negative number.`);
-      }
-      out.minPoolTvlUsd = parsed;
-      out.minPoolTvlExplicit = true;
-      i++;
-    } else if (a === "--challenge") {
-      out.challengeMode = true;
-      if (!out.minPoolTvlExplicit) out.minPoolTvlUsd = 1_000;
-    } else if (a === "--challenge-min-score" && next) {
-      const parsed = Number(next);
-      if (!Number.isFinite(parsed) || parsed < 0) {
-        throw new Error(
-          `Invalid --challenge-min-score value: ${next}. Must be a non-negative number.`,
-        );
-      }
-      out.challengeMinScore = parsed;
-      i++;
-    } else if (a === "--gas-usd" && next) {
-      const parsed = Number(next);
-      if (!Number.isFinite(parsed) || parsed < 0) {
-        throw new Error(`Invalid --gas-usd value: ${next}. Must be a non-negative number.`);
-      }
-      out.roundTripGasUsd = parsed;
-      i++;
-    } else if (a === "--min-7d-fee-over-gas" && next) {
-      const parsed = Number(next);
-      if (!Number.isFinite(parsed) || parsed < 0) {
-        throw new Error(
-          `Invalid --min-7d-fee-over-gas value: ${next}. Must be a non-negative number.`,
-        );
-      }
-      out.min7dFeeOverGas = parsed;
-      i++;
-    } else if (a === "--pools" && next) {
-      out.pools = next
-        .split(",")
-        .map((s) => s.trim())
-        .filter(Boolean);
-      i++;
-    } else if (a === "--confidence-threshold" && next) {
-      const parsed = Number(next);
-      if (!Number.isFinite(parsed) || parsed < 0 || parsed > 1) {
-        throw new Error(
-          `Invalid --confidence-threshold value: ${next}. Must be between 0 and 1.`,
-        );
-      }
-      out.confidenceThreshold = parsed;
-      i++;
-    } else if (a === "--source" && (next === "synthetic" || next === "replay")) {
-      out.source = next;
-      i++;
-    } else if (a === "--db" && next) {
-      out.dbPath = next;
-      i++;
-    }
+    const handler = CLI_FLAG_HANDLERS[a];
+    if (handler) i += handler(next, out);
   }
   return out;
 }
@@ -283,6 +321,53 @@ interface BacktestConfig {
   confidenceThreshold?: number;
 }
 
+function recordTickReturn(
+  strategyReturns: Array<{ value: number; intervalMs: number }>,
+  previousEquityUsd: number,
+  equity: number,
+  intervalMs: number,
+): number {
+  if (intervalMs > 0 && previousEquityUsd > 0) {
+    strategyReturns.push({
+      value: (equity - previousEquityUsd) / previousEquityUsd,
+      intervalMs,
+    });
+  }
+  return equity;
+}
+
+function tallyReplayDecision(
+  decisionTally: Map<string, number>,
+  replay: Pick<ReturnType<typeof evaluateReplayPool>, "decision" | "riskApproved" | "riskReason" | "adjustedSizeUsd">,
+): void {
+  if (process.env.DEBUG_BT !== "1") return;
+  const key =
+    replay.decision.action === "HOLD"
+      ? (replay.decision.reasoning ?? "HOLD").replace(/\d+\.\d+/g, "N").slice(0, 70)
+      : replay.riskApproved
+        ? `ENTER-approved size=${Math.round(replay.adjustedSizeUsd)}`
+        : `ENTER-risk-blocked: ${(replay.riskReason ?? "").replace(/\d+\.\d+/g, "N").slice(0, 55)}`;
+  decisionTally.set(key, (decisionTally.get(key) ?? 0) + 1);
+}
+
+function summarizeReturns(
+  samples: ReadonlyArray<{ value: number; intervalMs: number }>,
+): { mean: number; variance: number; averageIntervalMs: number } {
+  if (samples.length === 0) return { mean: 0, variance: 0, averageIntervalMs: 10 * 60 * 1000 };
+  const mean = samples.reduce((sum, sample) => sum + sample.value, 0) / samples.length;
+  const variance =
+    samples.reduce((sum, sample) => sum + Math.pow(sample.value - mean, 2), 0) / samples.length;
+  const averageIntervalMs =
+    samples.reduce((sum, sample) => sum + sample.intervalMs, 0) / samples.length;
+  return { mean, variance, averageIntervalMs };
+}
+
+function logDecisionTally(decisionTally: ReadonlyMap<string, number>): void {
+  if (process.env.DEBUG_BT !== "1") return;
+  const tally = [...decisionTally.entries()].sort((a, b) => b[1] - a[1]);
+  log.info(`  decision tally: ${JSON.stringify(tally)}`);
+}
+
 export function runBacktestFromTicks(
   ticks: ReadonlyArray<HistoryTick>,
   cfg: BacktestConfig,
@@ -343,16 +428,80 @@ export function runBacktestFromTicks(
     return cashUsd + (hasPosition ? positionValueUsd : 0);
   }
 
-  for (let i = 0; i < ticks.length; i++) {
-    const tick = ticks[i]!;
-    const intervalMs = i > 0 ? Math.max(0, tick.pool.timestamp - ticks[i - 1]!.pool.timestamp) : 0;
-    const metrics = strategy.computeMetrics(tick.pool, tick.binArray, previousTvl);
-    // Match computeMetrics' wiring so this standalone auth score stays consistent
-    // with metrics.volumeAuthenticity: fees are measured only under the Data API.
-    const auth = strategy.checkVolumeAuthenticity(
-      tick.pool,
-      replayUsesMeasuredVolume(tick.pool.statsSource),
-    );
+  function applyReplayDecision(
+    tick: HistoryTick,
+    i: number,
+    replay: Pick<ReturnType<typeof evaluateReplayPool>, "decision" | "adjustedSizeUsd">,
+  ): void {
+    if (replay.decision.action === "ENTER") {
+      if (!hasPosition) {
+        const size = Math.min(replay.adjustedSizeUsd, cashUsd);
+        if (size > 0) {
+          hasPosition = true;
+          positionSizeUsd = size;
+          positionValueUsd = size;
+          positionPeakUsd = size;
+          cashUsd -= size;
+          currentLowerBinId = tick.pool.activeBinId - cfg.halfWidth * ticksPerBin;
+          currentUpperBinId = tick.pool.activeBinId + cfg.halfWidth * ticksPerBin;
+          lastRebalanceTick = i;
+          trailingStopBreaches = 0;
+          stopLossBreaches = 0;
+        }
+      }
+    } else if (replay.decision.action === "EXIT") {
+      if (hasPosition) cashUsd += positionValueUsd;
+      hasPosition = false;
+      positionSizeUsd = 0;
+      positionValueUsd = 0;
+      positionPeakUsd = 0;
+      trailingStopBreaches = 0;
+      stopLossBreaches = 0;
+    } else if (hasPosition) {
+      positionPeakUsd = Math.max(positionPeakUsd, positionValueUsd);
+    }
+  }
+
+  function maybeRebalance(tick: HistoryTick, i: number, portfolioValue: number, intervalMs: number): void {
+    const positionCenter = (currentLowerBinId + currentUpperBinId) / 2;
+    const positionHalfWidth = (currentUpperBinId - currentLowerBinId) / 2 || 1;
+    const binDrift = hasPosition
+      ? Math.abs(tick.pool.activeBinId - positionCenter) / positionHalfWidth
+      : 0;
+    const ticksSinceRebalance = i - lastRebalanceTick;
+    const canRebalance =
+      hasPosition && rebalances < cfg.maxRebalances && ticksSinceRebalance >= cfg.minHoldTicks;
+    if (canRebalance && binDrift > cfg.driftThreshold) {
+      const ilCost = portfolioValue * 0.001 * binDrift;
+      const swapCost = portfolioValue * 0.0005;
+      const totalCost = ilCost + swapCost;
+      const expectedIntervalMs = intervalMs > 0 ? intervalMs : 10 * 60 * 1000;
+      const expectedFeesAhead =
+        estimatedFeesForDuration(tick, expectedIntervalMs * cfg.minHoldTicks) * 0.7;
+      const netBenefit = expectedFeesAhead - totalCost;
+      if (netBenefit > cfg.minNetBenefitUsd) {
+        rebalances++;
+        totalIl += totalCost;
+        cashUsd = Math.max(0, cashUsd - totalCost);
+        currentLowerBinId = tick.pool.activeBinId - cfg.halfWidth * ticksPerBin;
+        currentUpperBinId = tick.pool.activeBinId + cfg.halfWidth * ticksPerBin;
+        lastRebalanceTick = i;
+        let feesInNextWindow = 0;
+        for (let j = i + 1; j < Math.min(i + cfg.minHoldTicks, ticks.length); j++) {
+          const nextTick = ticks[j]!;
+          const nextInRange =
+            nextTick.pool.activeBinId >= currentLowerBinId &&
+            nextTick.pool.activeBinId <= currentUpperBinId;
+          const priorTick = j > 0 ? ticks[j - 1]! : tick;
+          const nextIntervalMs = nextTick.pool.timestamp - priorTick.pool.timestamp;
+          if (nextInRange) feesInNextWindow += estimatedFeesForDuration(nextTick, nextIntervalMs);
+        }
+        if (feesInNextWindow > totalCost) wins++;
+      }
+    }
+  }
+
+  function updateTickPosition(tick: HistoryTick, intervalMs: number): boolean {
     const inRange =
       tick.pool.activeBinId >= currentLowerBinId && tick.pool.activeBinId <= currentUpperBinId;
     positionValueUsd = hasPosition ? (inRange ? positionSizeUsd : positionSizeUsd * 0.8) : 0;
@@ -360,32 +509,15 @@ export function runBacktestFromTicks(
     totalFees += feesThisTick;
     cashUsd += feesThisTick;
     if (hasPosition) positionPeakUsd = Math.max(positionPeakUsd, positionValueUsd);
+    return inRange;
+  }
 
-    const preFilterPassed = strategy.passesPreFilter(
-      tick.pool,
-      auth.score,
-      metrics.binUtilization,
-      cfg.minPoolTvlUsd ?? 50_000,
-      0.7,
-      0.3,
-    );
-    // A pre-filter may prevent a new entry, but it must not suppress exits for
-    // an existing position. Capital-protection decisions remain evaluable.
-    if (!preFilterPassed && !hasPosition) {
-      previousTvl = tick.pool.tvlUsd;
-      const equity = equityUsd();
-      if (intervalMs > 0 && previousEquityUsd > 0) {
-        strategyReturns.push({
-          value: (equity - previousEquityUsd) / previousEquityUsd,
-          intervalMs,
-        });
-      }
-      previousEquityUsd = equity;
-      continue;
-    }
-
-    const portfolioValue = equityUsd();
-
+  function runReplayEvaluation(
+    tick: HistoryTick,
+    metrics: PoolMetrics,
+    portfolioValue: number,
+    inRange: boolean,
+  ): ReturnType<typeof evaluateReplayPool> {
     const replayPosition = hasPosition
       ? {
           poolAddress: tick.pool.address,
@@ -398,7 +530,7 @@ export function runBacktestFromTicks(
         }
       : undefined;
     challengePeakEquityUsd = Math.max(challengePeakEquityUsd, portfolioValue);
-    const replay = evaluateReplayPool({
+    return evaluateReplayPool({
       poolAddress: tick.pool.address,
       activeBinId: tick.pool.activeBinId,
       metrics,
@@ -441,130 +573,64 @@ export function runBacktestFromTicks(
       trailingStopBreaches,
       stopLossBreaches,
     });
+  }
+
+  for (let i = 0; i < ticks.length; i++) {
+    const tick = ticks[i]!;
+    const intervalMs = i > 0 ? Math.max(0, tick.pool.timestamp - ticks[i - 1]!.pool.timestamp) : 0;
+    const metrics = strategy.computeMetrics(tick.pool, tick.binArray, previousTvl);
+    // Match computeMetrics' wiring so this standalone auth score stays consistent
+    // with metrics.volumeAuthenticity: fees are measured only under the Data API.
+    const auth = strategy.checkVolumeAuthenticity(
+      tick.pool,
+      replayUsesMeasuredVolume(tick.pool.statsSource),
+    );
+    const inRange = updateTickPosition(tick, intervalMs);
+
+    const preFilterPassed = strategy.passesPreFilter(
+      tick.pool,
+      auth.score,
+      metrics.binUtilization,
+      cfg.minPoolTvlUsd ?? 50_000,
+      0.7,
+      0.3,
+    );
+    // A pre-filter may prevent a new entry, but it must not suppress exits for
+    // an existing position. Capital-protection decisions remain evaluable.
+    if (!preFilterPassed && !hasPosition) {
+      previousTvl = tick.pool.tvlUsd;
+      previousEquityUsd = recordTickReturn(strategyReturns, previousEquityUsd, equityUsd(), intervalMs);
+      continue;
+    }
+
+    const portfolioValue = equityUsd();
+
+    const replay = runReplayEvaluation(tick, metrics, portfolioValue, inRange);
     // Advance the #153 breach counter BEFORE the risk gate: live counts
     // breaches in evaluatePool, so a risk-rejected HOLD tick must still
     // accumulate toward the confirm-cycles EXIT.
     trailingStopBreaches = replay.trailingStopBreachCount;
     stopLossBreaches = replay.stopLossBreachCount;
-    if (process.env.DEBUG_BT === "1") {
-      const key =
-        replay.decision.action === "HOLD"
-          ? (replay.decision.reasoning ?? "HOLD").replace(/\d+\.\d+/g, "N").slice(0, 70)
-          : replay.riskApproved
-            ? `ENTER-approved size=${Math.round(replay.adjustedSizeUsd)}`
-            : `ENTER-risk-blocked: ${(replay.riskReason ?? "").replace(/\d+\.\d+/g, "N").slice(0, 55)}`;
-      decisionTally.set(key, (decisionTally.get(key) ?? 0) + 1);
-    }
+    tallyReplayDecision(decisionTally, replay);
     if (!replay.riskApproved) {
       previousTvl = tick.pool.tvlUsd;
-      const equity = equityUsd();
-      if (intervalMs > 0 && previousEquityUsd > 0) {
-        strategyReturns.push({
-          value: (equity - previousEquityUsd) / previousEquityUsd,
-          intervalMs,
-        });
-      }
-      previousEquityUsd = equity;
+      previousEquityUsd = recordTickReturn(strategyReturns, previousEquityUsd, equityUsd(), intervalMs);
       continue;
     }
-    if (replay.decision.action === "ENTER") {
-      if (!hasPosition) {
-        const size = Math.min(replay.adjustedSizeUsd, cashUsd);
-        if (size > 0) {
-          hasPosition = true;
-          positionSizeUsd = size;
-          positionValueUsd = size;
-          positionPeakUsd = size;
-          cashUsd -= size;
-          currentLowerBinId = tick.pool.activeBinId - cfg.halfWidth * ticksPerBin;
-          currentUpperBinId = tick.pool.activeBinId + cfg.halfWidth * ticksPerBin;
-          lastRebalanceTick = i;
-          trailingStopBreaches = 0;
-          stopLossBreaches = 0;
-        }
-      }
-    } else if (replay.decision.action === "EXIT") {
-      if (hasPosition) cashUsd += positionValueUsd;
-      hasPosition = false;
-      positionSizeUsd = 0;
-      positionValueUsd = 0;
-      positionPeakUsd = 0;
-      trailingStopBreaches = 0;
-      stopLossBreaches = 0;
-    } else if (hasPosition) {
-      positionPeakUsd = Math.max(positionPeakUsd, positionValueUsd);
-    }
-
-    const positionCenter = (currentLowerBinId + currentUpperBinId) / 2;
-    const positionHalfWidth = (currentUpperBinId - currentLowerBinId) / 2 || 1;
-    const binDrift = hasPosition
-      ? Math.abs(tick.pool.activeBinId - positionCenter) / positionHalfWidth
-      : 0;
-
-    const ticksSinceRebalance = i - lastRebalanceTick;
-    const canRebalance =
-      hasPosition && rebalances < cfg.maxRebalances && ticksSinceRebalance >= cfg.minHoldTicks;
-
-    if (canRebalance && binDrift > cfg.driftThreshold) {
-      const ilCost = portfolioValue * 0.001 * binDrift;
-      const swapCost = portfolioValue * 0.0005;
-      const totalCost = ilCost + swapCost;
-      const expectedIntervalMs = intervalMs > 0 ? intervalMs : 10 * 60 * 1000;
-      const expectedFeesAhead =
-        estimatedFeesForDuration(tick, expectedIntervalMs * cfg.minHoldTicks) * 0.7;
-      const netBenefit = expectedFeesAhead - totalCost;
-
-      if (netBenefit > cfg.minNetBenefitUsd) {
-        rebalances++;
-        totalIl += totalCost;
-        cashUsd = Math.max(0, cashUsd - totalCost);
-        currentLowerBinId = tick.pool.activeBinId - cfg.halfWidth * ticksPerBin;
-        currentUpperBinId = tick.pool.activeBinId + cfg.halfWidth * ticksPerBin;
-        lastRebalanceTick = i;
-        let feesInNextWindow = 0;
-        for (let j = i + 1; j < Math.min(i + cfg.minHoldTicks, ticks.length); j++) {
-          const nextTick = ticks[j]!;
-          const nextInRange =
-            nextTick.pool.activeBinId >= currentLowerBinId &&
-            nextTick.pool.activeBinId <= currentUpperBinId;
-          const priorTick = j > 0 ? ticks[j - 1]! : tick;
-          const nextIntervalMs = nextTick.pool.timestamp - priorTick.pool.timestamp;
-          if (nextInRange) feesInNextWindow += estimatedFeesForDuration(nextTick, nextIntervalMs);
-        }
-        if (feesInNextWindow > totalCost) wins++;
-      }
-    }
+    applyReplayDecision(tick, i, replay);
+    maybeRebalance(tick, i, portfolioValue, intervalMs);
 
     previousTvl = tick.pool.tvlUsd;
-    const equity = equityUsd();
-    if (intervalMs > 0 && previousEquityUsd > 0) {
-      strategyReturns.push({ value: (equity - previousEquityUsd) / previousEquityUsd, intervalMs });
-    }
-    previousEquityUsd = equity;
+    previousEquityUsd = recordTickReturn(strategyReturns, previousEquityUsd, equityUsd(), intervalMs);
   }
 
   if (hasPosition) cashUsd += positionValueUsd;
   const finalValueUsd = cashUsd;
-  const mean =
-    strategyReturns.length > 0
-      ? strategyReturns.reduce((sum, sample) => sum + sample.value, 0) / strategyReturns.length
-      : 0;
-  const variance =
-    strategyReturns.length > 0
-      ? strategyReturns.reduce((sum, sample) => sum + Math.pow(sample.value - mean, 2), 0) /
-        strategyReturns.length
-      : 0;
-  const averageIntervalMs =
-    strategyReturns.length > 0
-      ? strategyReturns.reduce((sum, sample) => sum + sample.intervalMs, 0) / strategyReturns.length
-      : 10 * 60 * 1000;
+  const { mean, variance, averageIntervalMs } = summarizeReturns(strategyReturns);
   const ticksPerYear = (365 * 24 * 60 * 60 * 1000) / Math.max(averageIntervalMs, 1);
   const sharpe = variance > 0 ? (mean / Math.sqrt(variance)) * Math.sqrt(ticksPerYear) : 0;
 
-  if (process.env.DEBUG_BT === "1") {
-    const tally = [...decisionTally.entries()].sort((a, b) => b[1] - a[1]);
-    log.info(`  decision tally: ${JSON.stringify(tally)}`);
-  }
+  logDecisionTally(decisionTally);
 
   return {
     poolAddress: ticks[0]!.pool.address,

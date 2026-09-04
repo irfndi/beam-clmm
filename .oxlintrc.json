@@ -14,8 +14,23 @@
     "typescript/no-base-to-string": "error",
     "typescript/no-floating-promises": "error",
     "typescript/unbound-method": "error",
-    "typescript/restrict-template-expressions": "error"
+    "typescript/restrict-template-expressions": "error",
+    "complexity": ["error", 15]
   },
+  "overrides": [
+    {
+      "files": ["**/*.test.ts", "**/bench/**"],
+      "rules": {
+        "complexity": ["warn", 30]
+      }
+    },
+    {
+      "files": ["**/ops/**", "**/scripts/**", "**/cli/**"],
+      "rules": {
+        "complexity": ["warn", 20]
+      }
+    }
+  ],
   "env": {
     "builtin": true
   }

@@ -41,47 +41,77 @@ function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
+function copySignalValues(raw: unknown): ReadonlyArray<unknown> {
+  if (Array.isArray(raw)) return raw;
+  if (isObject(raw) && Array.isArray(raw["signals"])) return raw["signals"];
+  return [];
+}
+
+function parseCopyWallet(value: Record<string, unknown>): string | null {
+  const wallet = value["wallet"];
+  if (typeof wallet !== "string") return null;
+  if (!WALLET_PATTERN.test(wallet)) return null;
+  return wallet;
+}
+
+function parseCopyPoolAddress(value: Record<string, unknown>): string | null {
+  const poolAddress = value["poolAddress"];
+  if (typeof poolAddress !== "string") return null;
+  if (poolAddress.length === 0) return null;
+  return poolAddress;
+}
+
+function parseCopyAction(value: Record<string, unknown>): CopySignalObservation["action"] | null {
+  const action = value["action"];
+  if (action === "ENTER" || action === "HOLD" || action === "REBALANCE") return action;
+  return null;
+}
+
+function parseCopyConfidence(value: Record<string, unknown>): number | null {
+  const confidence = value["confidence"];
+  if (typeof confidence !== "number") return null;
+  if (!Number.isFinite(confidence)) return null;
+  if (confidence < 0 || confidence > 1) return null;
+  return confidence;
+}
+
+function parseCopyObservedAt(value: Record<string, unknown>): number | null {
+  const observedAt = value["observedAt"];
+  if (typeof observedAt !== "number") return null;
+  if (!Number.isFinite(observedAt)) return null;
+  return observedAt;
+}
+
+function parseSingleCopySignal(value: unknown): CopySignalObservation | null {
+  if (!isObject(value)) return null;
+  const wallet = parseCopyWallet(value);
+  if (wallet === null) return null;
+  const poolAddress = parseCopyPoolAddress(value);
+  if (poolAddress === null) return null;
+  const action = parseCopyAction(value);
+  if (action === null) return null;
+  const confidence = parseCopyConfidence(value);
+  if (confidence === null) return null;
+  const observedAt = parseCopyObservedAt(value);
+  if (observedAt === null) return null;
+  const baseObservation = {
+    wallet,
+    poolAddress,
+    action,
+    confidence,
+    observedAt,
+  } satisfies CopySignalObservation;
+  const signature = value["signature"];
+  if (typeof signature === "string") return { ...baseObservation, signature };
+  return baseObservation;
+}
+
 export function parseCopySignalPayload(raw: unknown): ReadonlyArray<CopySignalObservation> {
-  const values = Array.isArray(raw)
-    ? raw
-    : isObject(raw) && Array.isArray(raw["signals"])
-      ? raw["signals"]
-      : [];
+  const values = copySignalValues(raw);
   const observations: CopySignalObservation[] = [];
   for (const value of values) {
-    if (!isObject(value)) continue;
-    const wallet = value["wallet"];
-    const poolAddress = value["poolAddress"];
-    const action = value["action"];
-    const confidence = value["confidence"];
-    const observedAt = value["observedAt"];
-    if (
-      typeof wallet !== "string" ||
-      !WALLET_PATTERN.test(wallet) ||
-      typeof poolAddress !== "string" ||
-      poolAddress.length === 0 ||
-      (action !== "ENTER" && action !== "HOLD" && action !== "REBALANCE") ||
-      typeof confidence !== "number" ||
-      !Number.isFinite(confidence) ||
-      confidence < 0 ||
-      confidence > 1 ||
-      typeof observedAt !== "number" ||
-      !Number.isFinite(observedAt)
-    )
-      continue;
-    const baseObservation = {
-      wallet,
-      poolAddress,
-      action,
-      confidence,
-      observedAt,
-    } satisfies CopySignalObservation;
-    const signature = value["signature"];
-    if (typeof signature === "string") {
-      observations.push({ ...baseObservation, signature });
-    } else {
-      observations.push(baseObservation);
-    }
+    const obs = parseSingleCopySignal(value);
+    if (obs) observations.push(obs);
   }
   return observations;
 }

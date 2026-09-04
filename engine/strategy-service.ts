@@ -650,6 +650,32 @@ export function shouldHoldForRecovery(recoveryProbability: number, holdThreshold
 
 // ─── Darwinian signal weighting ─────────────────────────────────────────────
 
+function nudgeForQuartile(
+  quartile: number,
+  lift: number,
+  decayFactor: number,
+  boostFactor: number,
+): number {
+  if (quartile === 0) return decayFactor;
+  if (quartile === 3) return boostFactor;
+  return 1 + lift * 0.05;
+}
+function updateWeightForSignal(
+  updated: SignalWeights,
+  signal: keyof Omit<OutcomeRecord, "pnlUsd" | "outcomeRecordedAt">,
+  recent: ReadonlyArray<OutcomeRecord>,
+  weightFloor: number,
+  weightCeiling: number,
+  decayFactor: number,
+  boostFactor: number,
+): SignalWeights {
+  const lift = computeSignalLift(recent, signal);
+  const quartile = computeQuartile(recent, signal);
+  const nudge = nudgeForQuartile(quartile, lift, decayFactor, boostFactor);
+  const newWeight = clampWeight(updated[signal] * nudge, weightFloor, weightCeiling);
+  return { ...updated, [signal]: newWeight };
+}
+
 export function computeSignalWeights(
   outcomes: ReadonlyArray<OutcomeRecord>,
   current: SignalWeights,
@@ -685,21 +711,15 @@ export function computeSignalWeights(
   let updated = { ...current, updatedAt: Date.now() };
 
   for (const signal of signals) {
-    const lift = computeSignalLift(recent, signal);
-    const quartile = computeQuartile(recent, signal);
-
-    let nudge = 1;
-    if (quartile === 0) {
-      nudge = decayFactor;
-    } else if (quartile === 3) {
-      nudge = boostFactor;
-    } else {
-      nudge = 1 + lift * 0.05;
-    }
-
-    const currentWeight = updated[signal];
-    const newWeight = clampWeight(currentWeight * nudge, weightFloor, weightCeiling);
-    updated = { ...updated, [signal]: newWeight };
+    updated = updateWeightForSignal(
+      updated,
+      signal,
+      recent,
+      weightFloor,
+      weightCeiling,
+      decayFactor,
+      boostFactor,
+    );
   }
 
   return updated;

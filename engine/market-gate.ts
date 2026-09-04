@@ -85,6 +85,69 @@ export function marketLegPasses(
   return leg.holders === undefined || leg.holders >= minHolders;
 }
 
+function gateAndRankMarketGateMetrics(
+  pool: DiscoveredPool,
+  config: MarketGateConfig,
+): { feeAprPct: number; volumeTurnover: number } | { reason: string } {
+  if (!Number.isFinite(pool.tvlUsd) || pool.tvlUsd < config.minTvlUsd) {
+    return { reason: `tvl ${pool.tvlUsd} < ${config.minTvlUsd}` };
+  }
+  if (!Number.isFinite(pool.fees24hUsd) || pool.fees24hUsd <= 0) {
+    return { reason: "no 24h fees" };
+  }
+  const feeAprPct = (pool.fees24hUsd * 365 * 100) / pool.tvlUsd;
+  if (feeAprPct < config.minFeeApr)
+    return { reason: `fee APR ${feeAprPct.toFixed(1)}% < ${config.minFeeApr}%` };
+  if (!Number.isFinite(pool.volume24hUsd) || pool.volume24hUsd <= 0)
+    return { reason: "no 24h volume" };
+  const volumeTurnover = pool.volume24hUsd / pool.tvlUsd;
+  if (volumeTurnover < config.minVolumeTurnover) {
+    return { reason: `volume turnover ${volumeTurnover.toFixed(2)} < ${config.minVolumeTurnover}` };
+  }
+  if (volumeTurnover > config.maxVolumeTurnover) {
+    return {
+      reason: `volume turnover ${volumeTurnover.toFixed(1)} > ${config.maxVolumeTurnover} (wash)`,
+    };
+  }
+  if (!Number.isInteger(pool.binStep) || pool.binStep < config.minBinStep) {
+    return { reason: `binStep ${pool.binStep} < ${config.minBinStep} (ultra-fine churn)` };
+  }
+  if (pool.binStep > config.maxBinStep)
+    return { reason: `binStep ${pool.binStep} > ${config.maxBinStep}` };
+  return { feeAprPct, volumeTurnover };
+}
+
+function gateAndRankMarketTokenSafety(
+  pool: DiscoveredPool,
+  config: MarketGateConfig,
+): string | null {
+  const xPasses = marketLegPasses(
+    {
+      isStableOrSol: isStableOrSol(pool.tokenX, config.stablecoinMints),
+      verified: pool.tokenXVerified,
+      freezeDisabled: pool.tokenXFreezeDisabled,
+      holders: pool.tokenXHolders,
+    },
+    config.minHolders,
+  );
+  if (!xPasses) {
+    return `leg ${pool.tokenXSymbol ?? pool.tokenX} fails token safety (verified=${pool.tokenXVerified}, freezeDisabled=${pool.tokenXFreezeDisabled}, holders=${pool.tokenXHolders})`;
+  }
+  const yPasses = marketLegPasses(
+    {
+      isStableOrSol: isStableOrSol(pool.tokenY, config.stablecoinMints),
+      verified: pool.tokenYVerified,
+      freezeDisabled: pool.tokenYFreezeDisabled,
+      holders: pool.tokenYHolders,
+    },
+    config.minHolders,
+  );
+  if (!yPasses) {
+    return `leg ${pool.tokenYSymbol ?? pool.tokenY} fails token safety (verified=${pool.tokenYVerified}, freezeDisabled=${pool.tokenYFreezeDisabled}, holders=${pool.tokenYHolders})`;
+  }
+  return null;
+}
+
 /** Gates and ranks one universe snapshot. Pure; callers feed it the adapter's
  *  `discoverPoolsTopPages` output. */
 export function gateAndRankMarketPools(
@@ -98,71 +161,17 @@ export function gateAndRankMarketPools(
     const reject = (reason: string): void => {
       rejected.push({ address: pool.address, reason });
     };
-
-    if (!Number.isFinite(pool.tvlUsd) || pool.tvlUsd < config.minTvlUsd) {
-      reject(`tvl ${pool.tvlUsd} < ${config.minTvlUsd}`);
+    const gate = gateAndRankMarketGateMetrics(pool, config);
+    if ("reason" in gate) {
+      reject(gate.reason);
       continue;
     }
-    if (!Number.isFinite(pool.fees24hUsd) || pool.fees24hUsd <= 0) {
-      reject("no 24h fees");
+    const tokenSafetyReason = gateAndRankMarketTokenSafety(pool, config);
+    if (tokenSafetyReason) {
+      reject(tokenSafetyReason);
       continue;
     }
-    const feeAprPct = (pool.fees24hUsd * 365 * 100) / pool.tvlUsd;
-    if (feeAprPct < config.minFeeApr) {
-      reject(`fee APR ${feeAprPct.toFixed(1)}% < ${config.minFeeApr}%`);
-      continue;
-    }
-    if (!Number.isFinite(pool.volume24hUsd) || pool.volume24hUsd <= 0) {
-      reject("no 24h volume");
-      continue;
-    }
-    const volumeTurnover = pool.volume24hUsd / pool.tvlUsd;
-    if (volumeTurnover < config.minVolumeTurnover) {
-      reject(`volume turnover ${volumeTurnover.toFixed(2)} < ${config.minVolumeTurnover}`);
-      continue;
-    }
-    if (volumeTurnover > config.maxVolumeTurnover) {
-      reject(`volume turnover ${volumeTurnover.toFixed(1)} > ${config.maxVolumeTurnover} (wash)`);
-      continue;
-    }
-    if (!Number.isInteger(pool.binStep) || pool.binStep < config.minBinStep) {
-      reject(`binStep ${pool.binStep} < ${config.minBinStep} (ultra-fine churn)`);
-      continue;
-    }
-    if (pool.binStep > config.maxBinStep) {
-      reject(`binStep ${pool.binStep} > ${config.maxBinStep}`);
-      continue;
-    }
-    const xPasses = marketLegPasses(
-      {
-        isStableOrSol: isStableOrSol(pool.tokenX, config.stablecoinMints),
-        verified: pool.tokenXVerified,
-        freezeDisabled: pool.tokenXFreezeDisabled,
-        holders: pool.tokenXHolders,
-      },
-      config.minHolders,
-    );
-    if (!xPasses) {
-      reject(
-        `leg ${pool.tokenXSymbol ?? pool.tokenX} fails token safety (verified=${pool.tokenXVerified}, freezeDisabled=${pool.tokenXFreezeDisabled}, holders=${pool.tokenXHolders})`,
-      );
-      continue;
-    }
-    const yPasses = marketLegPasses(
-      {
-        isStableOrSol: isStableOrSol(pool.tokenY, config.stablecoinMints),
-        verified: pool.tokenYVerified,
-        freezeDisabled: pool.tokenYFreezeDisabled,
-        holders: pool.tokenYHolders,
-      },
-      config.minHolders,
-    );
-    if (!yPasses) {
-      reject(
-        `leg ${pool.tokenYSymbol ?? pool.tokenY} fails token safety (verified=${pool.tokenYVerified}, freezeDisabled=${pool.tokenYFreezeDisabled}, holders=${pool.tokenYHolders})`,
-      );
-      continue;
-    }
+    const { feeAprPct, volumeTurnover } = gate;
 
     // Composite rank: fee APR is the profit engine; TVL adds a liquidity
     // factor (deeper pools → less IL per dollar and more stable fees), capped
