@@ -277,15 +277,14 @@ function updateOpenPosition(
   const inRange =
     snapshot.activeBinId >= position.lowerBinId && snapshot.activeBinId <= position.upperBinId;
   if (inRange && snapshot.tvlUsd > 0) {
-    const intervalMs =
-      previousTimestamp === null ? 30_000 : snapshot.timestamp - previousTimestamp;
+    const intervalMs = previousTimestamp === null ? 30_000 : snapshot.timestamp - previousTimestamp;
     if (intervalMs > MAX_FEE_GAP_MS) {
       book.feeGapCount++;
     } else {
       const fee =
         snapshot.fees24hUsd *
-          Math.min(position.depositedUsd / snapshot.tvlUsd, 1) *
-          (intervalMs / DAY_MS);
+        Math.min(position.depositedUsd / snapshot.tvlUsd, 1) *
+        (intervalMs / DAY_MS);
       addFee(events, snapshot.timestamp, pool, fee);
       book.shadowCashUsd += fee;
     }
@@ -311,15 +310,15 @@ function updateOpenPosition(
   }
 }
 
-function isEntryEligible(avgYield: number | null, yieldPct: number, dd: number, tvlUsd: number): boolean {
+function isEntryEligible(
+  avgYield: number | null,
+  yieldPct: number,
+  dd: number,
+  tvlUsd: number,
+): boolean {
   const yieldDecayed =
     avgYield !== null && avgYield > 0 && yieldPct < avgYield * YIELD_DECAY_FRACTION;
-  return (
-    tvlUsd >= MIN_TVL_USD &&
-    yieldPct > 0 &&
-    dd > -DRAWDOWN_EXIT_FRACTION &&
-    !yieldDecayed
-  );
+  return tvlUsd >= MIN_TVL_USD && yieldPct > 0 && dd > -DRAWDOWN_EXIT_FRACTION && !yieldDecayed;
 }
 
 function tryOpenPosition(
@@ -481,7 +480,12 @@ function buildEvents(
   const phase = (event: SharedPortfolioEvent): number =>
     event.type === "entry-request" ? 2 : event.type === "exit" ? 1 : 0;
   events.sort((a, b) => a.timestamp - b.timestamp || phase(a) - phase(b));
-  return { events, entryRequests: book.entryRequests, acceptedEntries: book.acceptedEntries, feeGapCount: book.feeGapCount };
+  return {
+    events,
+    entryRequests: book.entryRequests,
+    acceptedEntries: book.acceptedEntries,
+    feeGapCount: book.feeGapCount,
+  };
 }
 
 function main(): void {

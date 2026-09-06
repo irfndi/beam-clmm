@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "BeamAutoresearchKnobs",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "halfWidth",
+    "driftThreshold",
+    "minHoldTicks",
+    "minNetBenefitUsd",
+    "maxRebalances",
+    "maxPositionsPerPool",
+    "confidenceThreshold",
+    "minPoolTvlUsd"
+  ],
+  "properties": {
+    "halfWidth": { "type": "integer", "minimum": 5, "maximum": 50 },
+    "driftThreshold": { "type": "number", "minimum": 0.3, "maximum": 0.95 },
+    "minHoldTicks": { "type": "integer", "minimum": 1, "maximum": 1000 },
+    "minNetBenefitUsd": { "type": "number", "minimum": 0, "maximum": 100 },
+    "maxRebalances": { "type": "integer", "minimum": 1, "maximum": 200 },
+    "maxPositionsPerPool": { "type": "integer", "minimum": 1, "maximum": 4 },
+    "confidenceThreshold": { "type": "number", "minimum": 0.4, "maximum": 0.9 },
+    "minPoolTvlUsd": { "type": "number", "minimum": 0, "maximum": 5_000_000 }
+  }
+}

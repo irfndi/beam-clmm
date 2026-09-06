@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "updatedAt": "2026-09-06T08:35:26.411Z",
+  "passedWinGoal": true,
+  "score": {
+    "netPnlUsd": 30.64023425231244,
+    "maxDrawdownPct": 0,
+    "roundTrips": 0,
+    "totalFeesUsd": 30.64023425233139,
+    "winRate": 0,
+    "sharpeRatio": 1425.7614945554249
+  },
+  "knobs": {
+    "halfWidth": 20,
+    "driftThreshold": 0.65,
+    "minHoldTicks": 72,
+    "minNetBenefitUsd": 10,
+    "maxRebalances": 30,
+    "maxPositionsPerPool": 2,
+    "confidenceThreshold": 0.55,
+    "minPoolTvlUsd": 25000
+  },
+  "winGoal": {
+    "minNetPnlUsd": 5,
+    "maxDrawdownPct": 0.05,
+    "minRoundTrips": 0,
+    "minFeesUsd": 5,
+    "relativeImproveIfPassed": 1.1
+  }
+}

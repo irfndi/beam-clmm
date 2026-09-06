@@ -468,6 +468,10 @@ export interface BacktestResult {
   totalIlUsd: number;
   netPnlUsd: number;
   totalRebalances: number;
+  /** Completed ENTER→EXIT cycles during the replay window. */
+  roundTrips: number;
+  /** Peak-to-trough equity drawdown as a fraction of peak (0–1). */
+  maxDrawdownPct: number;
   winRate: number;
   sharpeRatio: number;
 }

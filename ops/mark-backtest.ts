@@ -436,7 +436,10 @@ function closeMarkPosition(
   const finalEquity = book.cashUsd;
   book.maxDrawdownUsd = Math.max(book.maxDrawdownUsd, peakEquityUsd - finalEquity);
   if (peakEquityUsd > 0) {
-    book.maxDrawdownPct = Math.max(book.maxDrawdownPct, (peakEquityUsd - finalEquity) / peakEquityUsd);
+    book.maxDrawdownPct = Math.max(
+      book.maxDrawdownPct,
+      (peakEquityUsd - finalEquity) / peakEquityUsd,
+    );
   }
 }
 
@@ -493,7 +496,12 @@ export function simulatePool(snaps: readonly Snapshot[], cfg: Config): PoolResul
     wins: book.wins,
     realizedPnlUsd: book.realizedPnlUsd,
     feesUsd: book.feesUsd,
-    netPnlUsd: book.realizedPnlUsd + book.feesUsd - book.entryCostsUsd - book.exitCostsUsd - book.slippageCostsUsd,
+    netPnlUsd:
+      book.realizedPnlUsd +
+      book.feesUsd -
+      book.entryCostsUsd -
+      book.exitCostsUsd -
+      book.slippageCostsUsd,
     finalValueUsd: book.cashUsd,
     entryCostsUsd: book.entryCostsUsd,
     exitCostsUsd: book.exitCostsUsd,

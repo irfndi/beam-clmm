@@ -1,8 +1,5 @@
 import { describe, it, expect } from "vitest";
-import {
-  assessMarketStress,
-  assessStressZScore,
-} from "../engine/market-stress.js";
+import { assessMarketStress, assessStressZScore } from "../engine/market-stress.js";
 
 const HOUR = 3_600_000;
 
@@ -106,6 +103,11 @@ describe("assessStressZScore", () => {
   });
 
   it("is null when the baseline has zero variance", () => {
-    expect(assessStressZScore(0.5, Array.from({ length: 10 }, () => 0.3))).toBeNull();
+    expect(
+      assessStressZScore(
+        0.5,
+        Array.from({ length: 10 }, () => 0.3),
+      ),
+    ).toBeNull();
   });
 });

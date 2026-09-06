@@ -764,7 +764,6 @@ function liveConfigIssues(
   ];
 }
 
-
 function resolveFeeDensityBounds(
   oorCooldownMs: number,
   minRaw: number,
@@ -799,7 +798,6 @@ function resolveFeeDensityBounds(
     lowPct: bandInverted ? lowDefault : lowRaw,
   };
 }
-
 
 const loadConfig = Effect.gen(function* () {
   const isTest = process.env.NODE_ENV === "test" || process.env.VITEST === "true";
@@ -1123,9 +1121,16 @@ const loadConfig = Effect.gen(function* () {
     Effect.orElseSucceed(() => true),
   );
   const entryRangeAsymmetry = yield* validatedNumber("ENTRY_RANGE_ASYMMETRY", -0.5, 0, 0.5);
-  const ladderEnabled = yield* Config.boolean("LADDER_ENABLED").pipe(Effect.orElseSucceed(() => false));
+  const ladderEnabled = yield* Config.boolean("LADDER_ENABLED").pipe(
+    Effect.orElseSucceed(() => false),
+  );
   const ladderTightPct = yield* validatedNumber("LADDER_TIGHT_PCT", 0, 0.6, 1);
-  const maxPositionAgeMs = yield* validatedNumber("MAX_POSITION_AGE_MS", 0, 0, 365 * 24 * 3600 * 1000);
+  const maxPositionAgeMs = yield* validatedNumber(
+    "MAX_POSITION_AGE_MS",
+    0,
+    0,
+    365 * 24 * 3600 * 1000,
+  );
 
   // ─── F3: Fee compounding / auto-reinvest ─────────────────────────────────────
   const autoCompoundFees = yield* Config.boolean("AUTO_COMPOUND_FEES").pipe(

@@ -234,7 +234,11 @@ function maybeExitWalkForwardPosition(
   }
 }
 
-function passesFeeCostGate(minFeeCostRatio: number, expectedFees: number, roundTrip: number): boolean {
+function passesFeeCostGate(
+  minFeeCostRatio: number,
+  expectedFees: number,
+  roundTrip: number,
+): boolean {
   return minFeeCostRatio <= 0 || expectedFees >= roundTrip * minFeeCostRatio;
 }
 
@@ -372,11 +376,32 @@ function buildEvents(
       position.peakValueUsd = Math.max(position.peakValueUsd, mark);
       events.push({ type: "mark", timestamp: snapshot.timestamp, pool, valueUsd: mark });
       accrueWalkForwardFees(events, position, pool, snapshot, previous);
-      maybeExitWalkForwardPosition(book, events, state, pool, snapshot, position, average, yieldPct, dd, strategy);
+      maybeExitWalkForwardPosition(
+        book,
+        events,
+        state,
+        pool,
+        snapshot,
+        position,
+        average,
+        yieldPct,
+        dd,
+        strategy,
+      );
     }
 
     if (state.position === null && snapshot.timestamp >= state.cooldownUntil) {
-      tryOpenWalkForwardPosition(book, events, state, pool, snapshot, average, yieldPct, dd, strategy);
+      tryOpenWalkForwardPosition(
+        book,
+        events,
+        state,
+        pool,
+        snapshot,
+        average,
+        yieldPct,
+        dd,
+        strategy,
+      );
     }
     state.previousTimestamp = snapshot.timestamp;
     states.set(pool, state);

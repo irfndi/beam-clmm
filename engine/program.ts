@@ -62,7 +62,12 @@ import {
 } from "./pnl.js";
 import { buildRewardClaimMetadata, summarizeRewardClaim, type ClaimedReward } from "./rewards.js";
 import { errorReporter } from "./error-reporter.js";
-import { BlacklistError, ConfigError, DiscoverPoolsError, underlyingErrorMessage } from "./errors.js";
+import {
+  BlacklistError,
+  ConfigError,
+  DiscoverPoolsError,
+  underlyingErrorMessage,
+} from "./errors.js";
 import {
   GAS_TOP_UP_STABLECOIN,
   NATIVE_GAS_TOP_UP_THRESHOLD_WEI,
@@ -112,7 +117,10 @@ import { GeckoTerminalLive, enrichPoolFromGecko } from "./gecko-terminal-service
 import { KrystalLive, enrichPoolFromKrystal } from "./krystal-service.js";
 import { PythPriceLive } from "./pyth-price-service.js";
 import { AlertLive } from "./alert-service.js";
-import { detectDepegAndLiquidityDrain, type DepegLiquiditySignals } from "./depeg-liquidity-detector.js";
+import {
+  detectDepegAndLiquidityDrain,
+  type DepegLiquiditySignals,
+} from "./depeg-liquidity-detector.js";
 import { consultTokenRisks, type TokenRiskSignal } from "./token-risk-service.js";
 import { CopySignalLive, applyCopySignalBoost } from "./copy-trading-signals.js";
 import { evaluateFallenAngelDiscovery } from "./fallen-angel-discovery.js";
@@ -3613,9 +3621,7 @@ function shouldTakeRebalance(input: {
 }): { readonly take: boolean; readonly force: boolean } {
   const force = input.recoveryProb <= input.forceThreshold;
   return {
-    take:
-      !input.adoptedExternal &&
-      (input.netBenefitUsd > input.minNetBenefitUsd || force),
+    take: !input.adoptedExternal && (input.netBenefitUsd > input.minNetBenefitUsd || force),
     force,
   };
 }
@@ -3722,8 +3728,7 @@ function isRotationSuperior(input: {
   return (
     input.bestNet >= input.incumbentNet * (1 + (input.minSuperiorityPct ?? 25) / 100) &&
     input.bestApr >= input.seatApr + (input.minAprLeadPct ?? 20) &&
-    input.bestFeeDensity >=
-      input.seatFeeDensity * (1 + (input.minFeeDensityLeadPct ?? 15) / 100) &&
+    input.bestFeeDensity >= input.seatFeeDensity * (1 + (input.minFeeDensityLeadPct ?? 15) / 100) &&
     input.bestNet >= input.minChallengerNetFeesUsdPerDay
   );
 }
@@ -3773,7 +3778,11 @@ function resolveChallengeSignals(input: {
         ).halfWidth
       : null;
   const avgYieldPerDayPct = avgFeeYieldPct(input.previousSnapshots);
-  const rotation = challengeRotationSignal(input.pool, avgYieldPerDayPct, input.drawdownExitPct ?? 5);
+  const rotation = challengeRotationSignal(
+    input.pool,
+    avgYieldPerDayPct,
+    input.drawdownExitPct ?? 5,
+  );
   return { rangeHalfWidthOverride, avgYieldPerDayPct, rotation };
 }
 
@@ -7122,7 +7131,9 @@ export const program = Effect.gen(function* () {
             // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
             .pipe(Effect.catch(() => Effect.succeed([] as ReadonlyArray<PoolSnapshot>)));
           const previousSnapshot =
-            previousSnapshots.length > 0 ? previousSnapshots[previousSnapshots.length - 1] : undefined;
+            previousSnapshots.length > 0
+              ? previousSnapshots[previousSnapshots.length - 1]
+              : undefined;
           const w15Signals = detectDepegAndLiquidityDrain(pool, previousSnapshots, config);
 
           // Persist a snapshot every cycle (both paper and live): TVL velocity and
@@ -7560,7 +7571,8 @@ export const program = Effect.gen(function* () {
       const syncOorTrackingStage = (pool: PoolState): Effect.Effect<void, Error> =>
         Effect.gen(function* () {
           for (const pos of poolPositions) {
-            const inRange = pool.activeBinId >= pos.lowerBinId && pool.activeBinId <= pos.upperBinId;
+            const inRange =
+              pool.activeBinId >= pos.lowerBinId && pool.activeBinId <= pos.upperBinId;
             if (!inRange) {
               if (pos.outOfRangeSince === null) {
                 pos.outOfRangeSince = Date.now();
@@ -7622,17 +7634,15 @@ export const program = Effect.gen(function* () {
           if (adapter.hasWallet() && poolPositions.some((p) => p.positionPubKey !== null)) {
             const walletAddress = adapter.getWalletAddress();
             if (walletAddress) {
-              const onChainPositions = yield* adapter
-                .getPositions(poolAddress, walletAddress)
-                .pipe(
-                  Effect.catch((err) => {
-                    console.error("Per-cycle reconcile: failed to fetch positions — skipping", {
-                      pool: poolAddress,
-                      err: String(err),
-                    });
-                    return Effect.succeed(null);
-                  }),
-                );
+              const onChainPositions = yield* adapter.getPositions(poolAddress, walletAddress).pipe(
+                Effect.catch((err) => {
+                  console.error("Per-cycle reconcile: failed to fetch positions — skipping", {
+                    pool: poolAddress,
+                    err: String(err),
+                  });
+                  return Effect.succeed(null);
+                }),
+              );
               if (onChainPositions !== null) {
                 const survivors: PositionRecord[] = [];
                 for (const pos of poolPositions) {
@@ -8334,9 +8344,7 @@ export const program = Effect.gen(function* () {
                     pool.binStep,
                     true,
                     config.volatilityWideHalfWidthBins,
-                    config.entryRangeHalfWidthBins > 0
-                      ? config.entryRangeHalfWidthBins
-                      : undefined,
+                    config.entryRangeHalfWidthBins > 0 ? config.entryRangeHalfWidthBins : undefined,
                   )
                 : strategy.recommendBinRange(pool.activeBinId, pool.binStep, rangeHalfWidth);
             // Asymmetric bias: bullish → wider upper (+15%/-8% skew), bearish → opposite
@@ -8558,11 +8566,7 @@ export const program = Effect.gen(function* () {
           // Safety exits above already fired (decision set) → rotation is
           // skipped; the incumbent's own capital-protection gates win.
           const evaluateRotationChallenge = (pos: PositionRecord): AgentDecision | null => {
-            if (
-              config.challengeMode !== true ||
-              harvestBookStats.size === 0 ||
-              pool.tvlUsd <= 0
-            ) {
+            if (config.challengeMode !== true || harvestBookStats.size === 0 || pool.tvlUsd <= 0) {
               return null;
             }
             const incumbentShare =

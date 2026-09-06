@@ -1,8 +1,5 @@
 import { describe, it, expect } from "vitest";
-import {
-  annualizedVarianceFromSnapshots,
-  estimateLvrEdge,
-} from "../engine/lvr-estimator.js";
+import { annualizedVarianceFromSnapshots, estimateLvrEdge } from "../engine/lvr-estimator.js";
 
 const HOUR = 3_600_000;
 
@@ -18,11 +15,7 @@ describe("annualizedVarianceFromSnapshots", () => {
     for (let i = 0; i < 24; i++) {
       prices.push(i % 2 === 0 ? prices[i]! * 1.01 : prices[i]! / 1.01);
     }
-    const res = annualizedVarianceFromSnapshots(
-      hourlySeries(prices),
-      1_000 * HOUR + 24 * HOUR,
-      48,
-    );
+    const res = annualizedVarianceFromSnapshots(hourlySeries(prices), 1_000 * HOUR + 24 * HOUR, 48);
     expect(res.variance).not.toBeNull();
     const expected = Math.log(1.01) ** 2 * 24 * 365;
     expect(res.variance!).toBeCloseTo(expected, 6);
@@ -70,7 +63,10 @@ describe("annualizedVarianceFromSnapshots", () => {
 describe("estimateLvrEdge", () => {
   it("σ²/8 drag: 50% vol pool needs ~3.1% fee yield to break even", () => {
     // σ = 0.5 ⇒ σ² = 0.25 ⇒ σ²/8 = 0.03125.
-    expect(estimateLvrEdge({ annualizedFeeYield: 0.03125, annualizedVariance: 0.25 })).toBeCloseTo(0, 10);
+    expect(estimateLvrEdge({ annualizedFeeYield: 0.03125, annualizedVariance: 0.25 })).toBeCloseTo(
+      0,
+      10,
+    );
     expect(estimateLvrEdge({ annualizedFeeYield: 0.02, annualizedVariance: 0.25 })).toBeLessThan(0);
   });
 

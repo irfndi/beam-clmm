@@ -103,9 +103,7 @@ function readFiniteNumber(value: unknown): number | null {
  * `maxStalenessMs`, `malformed` for any structural/numeric problem. `nowMs` is
  * injectable so staleness is unit-testable without fake timers.
  */
-function extractPythPriceFields(
-  raw: unknown,
-): {
+function extractPythPriceFields(raw: unknown): {
   readonly entry: Record<string, unknown>;
   readonly price: Record<string, unknown>;
   readonly rawPrice: string;

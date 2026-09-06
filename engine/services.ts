@@ -163,10 +163,7 @@ export interface AdapterApi {
    */
   readonly getPoolStatesWithBins?: (
     poolAddresses: ReadonlyArray<string>,
-  ) => Effect.Effect<
-    ReadonlyMap<string, { state: PoolState; bins: BinArray | null }>,
-    never
-  >;
+  ) => Effect.Effect<ReadonlyMap<string, { state: PoolState; bins: BinArray | null }>, never>;
   /**
    * Bin arrays for MANY pools in one pass (screener enrichment). Shares the
    * same batched core-state + lens multicalls as getPoolStatesWithBins;

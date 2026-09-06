@@ -440,8 +440,7 @@ export function toHistoryJsonOutput(positions: ReadonlyArray<PositionRecord>): H
         realizedPnlPct: pnlPct,
         // P&L net of claimed fees/rewards — the market component (IL + price
         // move + rebalance churn). Negative = fees did not pay for volatility.
-        marketComponentUsd:
-          pnlUsd - pos.cumulativeFeesClaimedUsd - pos.cumulativeRewardsClaimedUsd,
+        marketComponentUsd: pnlUsd - pos.cumulativeFeesClaimedUsd - pos.cumulativeRewardsClaimedUsd,
         holdHours:
           exitedAt != null ? Math.round(((exitedAt - pos.timestamp) / 3_600_000) * 10) / 10 : null,
         closedAt: pos.closedAt,

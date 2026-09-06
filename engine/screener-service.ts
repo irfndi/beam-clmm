@@ -132,10 +132,13 @@ export const ScreenerLive = (screenerConfig: ScreenerConfig) =>
                 ? (binsByPool.get(candidate.address.toLowerCase()) ?? null)
                 : yield* adapter.getBinArray(candidate.address).pipe(
                     Effect.catch((err) => {
-                      logger.warn("Bin data unavailable for candidate — skipping utilization gate", {
-                        pool: candidate.address,
-                        error: String(err),
-                      });
+                      logger.warn(
+                        "Bin data unavailable for candidate — skipping utilization gate",
+                        {
+                          pool: candidate.address,
+                          error: String(err),
+                        },
+                      );
                       return Effect.succeed(null);
                     }),
                   );

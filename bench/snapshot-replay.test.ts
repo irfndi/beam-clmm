@@ -274,6 +274,8 @@ function replaySnapshots(snaps: ReadonlyArray<PoolSnapshot>, cfg: ReplayConfig):
     totalIlUsd: totalIl,
     netPnlUsd: portfolioValue - initialValue,
     totalRebalances: rebalances,
+    roundTrips: 0,
+    maxDrawdownPct: 0,
     winRate: rebalances > 0 ? wins / rebalances : 0,
     sharpeRatio: 0,
   };

@@ -1,6 +1,6 @@
 {
   "name": "beam-clmm",
-  "version": "0.1.11",
+  "version": "0.1.12",
   "description": "Autonomous concentrated-liquidity agent for Uniswap v3 & v4 on Robinhood Chain",
   "keywords": [
     "ai-agent",
@@ -39,6 +39,7 @@
     "setup:env": "bun run scripts/postinstall.js",
     "postinstall": "bun run scripts/postinstall.js",
     "backtest": "bun $(bun scripts/cli-entry.mjs) backtest",
+    "autoresearch": "bun ops/autoresearch.ts",
     "pretest": "tsc --noEmit",
     "test": "bun --bun vitest run",
     "test:watch": "bun --bun vitest",

@@ -189,7 +189,10 @@ function resolveFeeRate(info: GeckoPoolInfo | null, dp: { fee: number | null } |
   return 0.0001;
 }
 
-function resolvePriceScale(ohlcv: readonly Bar[], dp: { lastPriceUsd: number | null } | null): number {
+function resolvePriceScale(
+  ohlcv: readonly Bar[],
+  dp: { lastPriceUsd: number | null } | null,
+): number {
   // Gecko can mis-scale a pool's OHLCV to a stablecoin peg (~1.0) even when
   // the pool trades at ~1890 (seen on the v3 WETH/USDG pool). The RELATIVE
   // daily moves and real daily volume are still genuine; only the absolute
@@ -282,14 +285,25 @@ async function backfillPool(db: string, pool: string): Promise<void> {
   const tokenX = dp?.symbols?.[0] || info?.baseSymbol || "X";
   const tokenY = dp?.symbols?.[1] || info?.quoteSymbol || "Y";
   const priceScale = resolvePriceScale(ohlcv, dp);
-  if (priceScale !== 1) log.info(`  rescaling OHLCV by ${priceScale.toFixed(3)}x (gecko peg → real price)`);
+  if (priceScale !== 1)
+    log.info(`  rescaling OHLCV by ${priceScale.toFixed(3)}x (gecko peg → real price)`);
 
   log.info(
     `  ${pool.slice(0, 18)}: ${ohlcv.length} candles, tvl=$${tvlUsd.toFixed(0)}, fee=${feeRate}, ` +
       `binStep=${binStep}, ${tokenX}/${tokenY}`,
   );
 
-  const snaps = buildBackfillSnapshots({ ohlcv, priceScale, feeRate, tvlUsd, vol24, binStep, tokenX, tokenY, pool });
+  const snaps = buildBackfillSnapshots({
+    ohlcv,
+    priceScale,
+    feeRate,
+    tvlUsd,
+    vol24,
+    binStep,
+    tokenX,
+    tokenY,
+    pool,
+  });
 
   const effect = Effect.gen(function* () {
     const svc = yield* DbService;

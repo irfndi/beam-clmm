@@ -434,7 +434,6 @@ function usdWhenPriced(price0: number, price1: number, value: number): number | 
   return price0 > 0 && price1 > 0 ? value : null;
 }
 
-
 function isNative(mint: string): boolean {
   return mint.toLowerCase() === NATIVE_MINT.toLowerCase();
 }
@@ -3969,7 +3968,11 @@ export const AdapterLive = Layer.effect(
                 `enterPosition: wallet can fund neither leg (need ${amount0} ${state.token0} / ${amount1} ${state.token1})`,
               );
             };
-            const fundNativeDeficit = async (nativeBal: bigint, wrapable0: bigint, wrapable1: bigint) => {
+            const fundNativeDeficit = async (
+              nativeBal: bigint,
+              wrapable0: bigint,
+              wrapable1: bigint,
+            ) => {
               if (state.liquidity <= 0n) {
                 throw new Error(
                   `enterPosition: wallet can fund neither leg (pool has no liquidity: ${poolAddress})`,
@@ -4083,7 +4086,8 @@ export const AdapterLive = Layer.effect(
                   value: built.value,
                 });
                 const positionPubKey = tokenIdFromMintReceipt(receipt)?.toString() ?? "";
-                if (!positionPubKey) throw new Error("enterPosition: could not decode minted tokenId");
+                if (!positionPubKey)
+                  throw new Error("enterPosition: could not decode minted tokenId");
                 return {
                   positionPubKey,
                   txSignature,
@@ -4133,7 +4137,8 @@ export const AdapterLive = Layer.effect(
                 value: built.value,
               });
               const positionPubKey = tokenIdFromMintReceipt(receipt)?.toString() ?? "";
-              if (!positionPubKey) throw new Error("enterPosition: could not decode minted tokenId");
+              if (!positionPubKey)
+                throw new Error("enterPosition: could not decode minted tokenId");
               return {
                 positionPubKey,
                 txSignature,

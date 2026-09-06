@@ -1,7 +1,13 @@
 import { Command } from "commander";
 import { Effect, Layer } from "effect";
 import { DbLive, type PositionRecord } from "../engine/db-service.js";
-import { DbService, AuditService, AdapterService, type AdapterApi, type DecisionRecord } from "../engine/services.js";
+import {
+  DbService,
+  AuditService,
+  AdapterService,
+  type AdapterApi,
+  type DecisionRecord,
+} from "../engine/services.js";
 import { AuditLive } from "../engine/audit-service.js";
 import { ConfigLive, ConfigService, type AppConfig } from "../engine/config-service.js";
 import { AdapterLive } from "../engine/adapter-service.js";
@@ -250,9 +256,7 @@ function printStatusJson(ctx: StatusReportContext): void {
         confirmedOutputAtomic: settlement.confirmedOutputAtomic,
         attempts: settlement.attempts,
         nextRetryAt:
-          settlement.nextRetryAt === null
-            ? null
-            : new Date(settlement.nextRetryAt).toISOString(),
+          settlement.nextRetryAt === null ? null : new Date(settlement.nextRetryAt).toISOString(),
         expiresAt: new Date(settlement.expiresAt).toISOString(),
         createdAt: new Date(settlement.createdAt).toISOString(),
         txSignature: settlement.txSignature,
@@ -386,35 +390,31 @@ function fetchStrandedClassification(
             value: price,
           };
         }),
-        Effect.catchCause(() =>
-          Effect.succeed({ mint, state: "unpriceable" as const, value: 0 }),
-        ),
+        Effect.catchCause(() => Effect.succeed({ mint, state: "unpriceable" as const, value: 0 })),
       );
-    const priceLookup = yield* adapter
-      .getTokenPrices(candidateMints, { useFallback: false })
-      .pipe(
-        Effect.map((prices) => {
-          const entries = candidateMints.map((mint) => {
-            const price = prices[mint] ?? 0;
-            return [
-              mint,
-              {
-                state: priceLookupState(price),
-                value: price,
-              },
-            ] as const;
-          });
-          return new Map(entries);
-        }),
-        // Batch defect: one malformed mint must not label every candidate
-        // Unpriceable — fall back to per-mint fetches, deduplicated (one
-        // fetch per unique mint, not per settlement).
-        Effect.catchCause(() =>
-          Effect.all(candidateMints.map(resolvePriceForMint), { concurrency: 4 }).pipe(
-            Effect.map((results) => new Map(results.map((r) => [r.mint, r]))),
-          ),
+    const priceLookup = yield* adapter.getTokenPrices(candidateMints, { useFallback: false }).pipe(
+      Effect.map((prices) => {
+        const entries = candidateMints.map((mint) => {
+          const price = prices[mint] ?? 0;
+          return [
+            mint,
+            {
+              state: priceLookupState(price),
+              value: price,
+            },
+          ] as const;
+        });
+        return new Map(entries);
+      }),
+      // Batch defect: one malformed mint must not label every candidate
+      // Unpriceable — fall back to per-mint fetches, deduplicated (one
+      // fetch per unique mint, not per settlement).
+      Effect.catchCause(() =>
+        Effect.all(candidateMints.map(resolvePriceForMint), { concurrency: 4 }).pipe(
+          Effect.map((results) => new Map(results.map((r) => [r.mint, r]))),
         ),
-      );
+      ),
+    );
     // Decimals channel: getTokenDecimals DOES fail typed, and the error
     // message distinguishes an RPC outage (→ Unavailable) from the
     // adapter's "Cannot resolve decimals for mint X" unresolvable case
@@ -582,8 +582,7 @@ function printStatusHuman(
         ...ctx.recentAudit
           .slice(0, 5)
           .map(
-            (d) =>
-              `    ${d.action} ${d.poolAddress.slice(0, 16)}... (${d.confidence.toFixed(2)})`,
+            (d) => `    ${d.action} ${d.poolAddress.slice(0, 16)}... (${d.confidence.toFixed(2)})`,
           ),
       ].join("\n"),
     );
