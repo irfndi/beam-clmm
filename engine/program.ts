@@ -7291,6 +7291,15 @@ export const program = Effect.gen(function* () {
       ): Effect.Effect<ReadonlyArray<AgentDecision> | null, Error> =>
         Effect.gen(function* () {
           for (const mint of [pool.tokenX, pool.tokenY]) {
+            // Empty/malformed mint (e.g. unresolved v4 id) — skip probe fail-open;
+            // do not hard-reject the pool on a missing address.
+            if (!mint || mint.length < 42) {
+              logger.warn("EVM token-risk skipped — missing mint on pool leg", {
+                pool: poolAddress,
+                mintLen: mint?.length ?? 0,
+              });
+              continue;
+            }
             if (mint === NATIVE_MINT || isTrustedMint(mint, config.stablecoinMints)) continue;
             const prober = getTokenRiskProber();
             if (prober === null) continue; // no RPC configured — advisory skip
