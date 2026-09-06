@@ -278,6 +278,7 @@ function replaySnapshots(snaps: ReadonlyArray<PoolSnapshot>, cfg: ReplayConfig):
     maxDrawdownPct: 0,
     winRate: rebalances > 0 ? wins / rebalances : 0,
     sharpeRatio: 0,
+    timeInRangePct: 0,
   };
 }
 

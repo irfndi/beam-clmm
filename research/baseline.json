@@ -1,30 +1,32 @@
 {
-  "version": 1,
-  "updatedAt": "2026-09-06T08:35:26.411Z",
+  "version": 2,
+  "updatedAt": "2026-09-06T11:26:26.983Z",
   "passedWinGoal": true,
   "score": {
-    "netPnlUsd": 30.64023425231244,
-    "maxDrawdownPct": 0,
+    "netPnlUsd": 9.327175316726425,
+    "maxDrawdownPct": 0.005994415963134657,
     "roundTrips": 0,
-    "totalFeesUsd": 30.64023425233139,
+    "totalFeesUsd": 9.327175316744732,
+    "timeInRangePct": 0.916583912611718,
     "winRate": 0,
-    "sharpeRatio": 1425.7614945554249
+    "sharpeRatio": -3.490367720985791
   },
   "knobs": {
-    "halfWidth": 20,
-    "driftThreshold": 0.65,
-    "minHoldTicks": 72,
-    "minNetBenefitUsd": 10,
-    "maxRebalances": 30,
+    "halfWidth": 45,
+    "driftThreshold": 0.75,
+    "minHoldTicks": 24,
+    "minNetBenefitUsd": 3,
+    "maxRebalances": 50,
     "maxPositionsPerPool": 2,
-    "confidenceThreshold": 0.55,
-    "minPoolTvlUsd": 25000
+    "confidenceThreshold": 0.5,
+    "minPoolTvlUsd": 20000
   },
   "winGoal": {
     "minNetPnlUsd": 5,
-    "maxDrawdownPct": 0.05,
+    "maxDrawdownPct": 0.08,
     "minRoundTrips": 0,
     "minFeesUsd": 5,
+    "minTimeInRangePct": 0.55,
     "relativeImproveIfPassed": 1.1
   }
 }

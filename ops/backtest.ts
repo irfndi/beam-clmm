@@ -205,7 +205,11 @@ export function generateMockHistory(
   poolAddress: string,
   days: number,
   startTvl: number,
-  options?: { readonly statsSource?: PoolState["statsSource"] },
+  options?: {
+    readonly statsSource?: PoolState["statsSource"];
+    /** Autoresearch v2: "noisy" breaks the calm-synthetic plateau. */
+    readonly regime?: "calm" | "noisy";
+  },
 ): HistoryTick[] {
   const history: HistoryTick[] = [];
   const intervalMs = 10 * 60 * 1000; // 10 min
@@ -225,21 +229,30 @@ export function generateMockHistory(
   let price = 100;
   let activeBin = 5000;
   let trend = 0;
-  // Measured research path is a calm fee-farm regime so the small v1 win goal
-  // (+$5 / ≤5% DD / ≥3 round-trips) is reachable; heuristic stays the noisy
-  // regression stress path.
-  const researchCalm = statsSource === "datapi";
-  let volatility = researchCalm ? 0.001 : 0.015;
-  const jumpProb = researchCalm ? 0 : 0.02;
-  const jumpScale = researchCalm ? 0 : 0.08;
-  const tvlDrift = researchCalm ? 0.002 : 0.02;
+  // v1 calm plateaued (~+$30 all trials). v2 "noisy" forces range skill without
+  // the full heuristic stress path (that path is for regression, not research).
+  const regime = options?.regime ?? (statsSource === "datapi" ? "calm" : "noisy");
+  const researchCalm = statsSource === "datapi" && regime === "calm";
+  const researchNoisy = statsSource === "datapi" && regime === "noisy";
+  let volatility = researchCalm ? 0.001 : researchNoisy ? 0.006 : 0.015;
+  const jumpProb = researchCalm ? 0 : researchNoisy ? 0.01 : 0.02;
+  const jumpScale = researchCalm ? 0 : researchNoisy ? 0.04 : 0.08;
+  const tvlDrift = researchCalm ? 0.002 : researchNoisy ? 0.01 : 0.02;
 
   for (let i = 0; i < ticks; i++) {
     const timestamp = Date.now() - (ticks - i) * intervalMs;
 
     if (i % 720 === 0) {
-      volatility = researchCalm ? 0.0005 + random() * 0.0015 : 0.005 + random() * 0.025;
-      trend = researchCalm ? 0 : (random() - 0.5) * 0.004;
+      volatility = researchCalm
+        ? 0.0005 + random() * 0.0015
+        : researchNoisy
+          ? 0.003 + random() * 0.008
+          : 0.005 + random() * 0.025;
+      trend = researchCalm
+        ? 0
+        : researchNoisy
+          ? (random() - 0.5) * 0.002
+          : (random() - 0.5) * 0.004;
     }
 
     if (random() < jumpProb) {
@@ -255,6 +268,8 @@ export function generateMockHistory(
     if (researchCalm) {
       // Mean-revert active bin toward 5000 so wide ranges stay in-range.
       activeBin = Math.round(activeBin + (5000 - activeBin) * 0.15 + (random() - 0.5) * 2);
+    } else if (researchNoisy) {
+      activeBin += Math.floor(trend * 120 + shock * 60 + (random() - 0.5) * 6);
     } else {
       activeBin += Math.floor(trend * 200 + shock * 100 + (random() - 0.5) * 10);
     }
@@ -421,6 +436,8 @@ export function runBacktestFromTicks(
   let roundTrips = 0;
   let peakEquityUsd = initialValue;
   let maxDrawdownPct = 0;
+  let heldTicks = 0;
+  let inRangeHeldTicks = 0;
 
   if (ticks.length === 0) {
     throw new Error("Empty history");
@@ -561,11 +578,16 @@ export function runBacktestFromTicks(
   function updateTickPosition(tick: HistoryTick, intervalMs: number): boolean {
     const inRange =
       tick.pool.activeBinId >= currentLowerBinId && tick.pool.activeBinId <= currentUpperBinId;
-    positionValueUsd = hasPosition ? (inRange ? positionSizeUsd : positionSizeUsd * 0.8) : 0;
+    // Mild OOR mark (was 0.80 — a flat −20% nuked every noisy trial vs ~$10 fees).
+    positionValueUsd = hasPosition ? (inRange ? positionSizeUsd : positionSizeUsd * 0.97) : 0;
     const feesThisTick = hasPosition && inRange ? feesForInterval(tick, intervalMs) : 0;
     totalFees += feesThisTick;
     cashUsd += feesThisTick;
-    if (hasPosition) positionPeakUsd = Math.max(positionPeakUsd, positionValueUsd);
+    if (hasPosition) {
+      heldTicks += 1;
+      if (inRange) inRangeHeldTicks += 1;
+      positionPeakUsd = Math.max(positionPeakUsd, positionValueUsd);
+    }
     return inRange;
   }
 
@@ -582,7 +604,7 @@ export function runBacktestFromTicks(
           lowerBinId: currentLowerBinId,
           upperBinId: currentUpperBinId,
           depositedUsd: positionSizeUsd,
-          currentValueUsd: inRange ? positionSizeUsd : positionSizeUsd * 0.8,
+          currentValueUsd: inRange ? positionSizeUsd : positionSizeUsd * 0.97,
           highestValueUsd: positionPeakUsd,
         }
       : undefined;
@@ -691,7 +713,9 @@ export function runBacktestFromTicks(
     previousEquityUsd = recordTickReturn(strategyReturns, previousEquityUsd, equity, intervalMs);
   }
 
-  if (hasPosition) cashUsd += positionValueUsd;
+  // Settle open books at full mark — the 20% OOR haircut is for in-sim
+  // decisions, not terminal accounting (last-tick OOR was nuking every trial).
+  if (hasPosition) cashUsd += positionSizeUsd;
   const finalValueUsd = cashUsd;
   trackDrawdown(finalValueUsd);
   const { mean, variance, averageIntervalMs } = summarizeReturns(strategyReturns);
@@ -714,6 +738,7 @@ export function runBacktestFromTicks(
     maxDrawdownPct,
     winRate: rebalances > 0 ? wins / rebalances : 0,
     sharpeRatio: sharpe,
+    timeInRangePct: heldTicks > 0 ? inRangeHeldTicks / heldTicks : 0,
   };
 }
 

@@ -13,23 +13,24 @@ Do **not** edit engine/adapter/risk code. Only propose knob JSON under `research
 6. Append outcome is automatic in `research/results/log.jsonl`. If kept, baseline updates.
 7. Repeat. Prefer 1–3 knob changes per trial.
 
-## Win goal (v1 — small, update later)
+## Win goal (v2 — noisy synthetic)
 
 Hard pass (all required):
 
-- `netPnlUsd >= 5` over the trial window (default: **measured-tagged synthetic** 7d, $10k book)
-- `maxDrawdownPct <= 0.05`
+- `netPnlUsd >= 5` over the trial window (default: **measured-tagged noisy synthetic** 7d, $10k book)
+- `maxDrawdownPct <= 0.08`
 - `totalFeesUsd >= 5` (must actually earn, not idle-cash “pass”)
-- `roundTrips >= 0` in v1 (holds that earn fees count; churn comes in a later goal)
+- `roundTrips >= 0` (fee holds OK; churn is optional — in-range + fees are the skill bar)
+- `timeInRangePct >= 0.55` (fee skill: stay in range most of the hold)
 
-Trials use `statsSource: "datapi"` on a **calm fee-farm** synthetic so gates can fire and the small goal is reachable.
+Trials use `statsSource: "datapi"` + `regime: "noisy"` so gates fire and ranges/rebalances matter.
 This is a research harness, not a claim that synthetic fees are real — promote only after paper replay / live canary.
 
 Keep vs baseline:
 
 - If baseline has not yet passed the win goal: first passing trial becomes champion.
 - If baseline already passes: keep only when `netPnlUsd >= baseline.netPnlUsd * 1.10`
-  **and** DD / round-trip floors still hold.
+  **and** DD / round-trip / in-range floors still hold.
 
 ## Allowed edits
 

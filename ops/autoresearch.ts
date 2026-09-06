@@ -96,7 +96,10 @@ function main(): void {
 
   const args = parseArgs(process.argv.slice(2));
   const baseline = loadJson<BaselineFile>(baselinePath);
-  const goal = baseline.winGoal ?? DEFAULT_WIN_GOAL;
+  const goal: WinGoal = {
+    ...DEFAULT_WIN_GOAL,
+    ...(baseline.winGoal ?? {}),
+  };
 
   const knobs = args.candidatePath
     ? assertKnobs(loadJson<unknown>(resolve(args.candidatePath)))
@@ -104,7 +107,9 @@ function main(): void {
 
   const ticks = generateMockHistory(args.pool, args.days, args.startTvl, {
     // Autoresearch needs ENTER gates to be exercisable; tag as measured.
+    // v2: noisy regime so calm hold-forever no longer plateaus the champion.
     statsSource: "datapi",
+    regime: "noisy",
   });
   const result = runBacktestFromTicks(ticks, {
     ...knobs,
@@ -112,9 +117,23 @@ function main(): void {
     minPoolTvlUsd: knobs.minPoolTvlUsd,
   });
   const trial = scoreFromResult(result);
+  // Normalize legacy baseline scores missing timeInRangePct.
+  const baselineScore: TrialScore = {
+    netPnlUsd: baseline.score.netPnlUsd,
+    maxDrawdownPct: baseline.score.maxDrawdownPct,
+    roundTrips: baseline.score.roundTrips,
+    totalFeesUsd: baseline.score.totalFeesUsd,
+    winRate: baseline.score.winRate,
+    sharpeRatio: baseline.score.sharpeRatio,
+    timeInRangePct:
+      "timeInRangePct" in baseline.score &&
+      typeof (baseline.score as { timeInRangePct?: unknown }).timeInRangePct === "number"
+        ? (baseline.score as { timeInRangePct: number }).timeInRangePct
+        : 0,
+  };
   const decision = decideKeep({
     trial,
-    baseline: baseline.score,
+    baseline: baselineScore,
     baselinePassedWinGoal: baseline.passedWinGoal,
     goal,
   });

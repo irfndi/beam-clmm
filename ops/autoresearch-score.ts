@@ -5,6 +5,8 @@ export interface WinGoal {
   readonly maxDrawdownPct: number;
   readonly minRoundTrips: number;
   readonly minFeesUsd: number;
+  /** Minimum fraction of held ticks spent in-range (0–1). */
+  readonly minTimeInRangePct: number;
   readonly relativeImproveIfPassed: number;
 }
 
@@ -13,6 +15,7 @@ export interface TrialScore {
   readonly maxDrawdownPct: number;
   readonly roundTrips: number;
   readonly totalFeesUsd: number;
+  readonly timeInRangePct: number;
   readonly winRate: number;
   readonly sharpeRatio: number;
 }
@@ -24,11 +27,14 @@ export interface ScoreDecision {
   readonly score: TrialScore;
 }
 
+/** v2: noisy synthetic + in-range/fee skill (v1 plateaued on calm holds). */
 export const DEFAULT_WIN_GOAL: WinGoal = {
   minNetPnlUsd: 5,
-  maxDrawdownPct: 0.05,
+  maxDrawdownPct: 0.08,
+  // Holds that earn fees count; force ≥1 completed cycle only when churning.
   minRoundTrips: 0,
   minFeesUsd: 5,
+  minTimeInRangePct: 0.55,
   relativeImproveIfPassed: 1.1,
 };
 
@@ -38,6 +44,7 @@ export function scoreFromResult(result: BacktestResult): TrialScore {
     maxDrawdownPct: result.maxDrawdownPct,
     roundTrips: result.roundTrips,
     totalFeesUsd: result.totalFeesUsd,
+    timeInRangePct: result.timeInRangePct,
     winRate: result.winRate,
     sharpeRatio: result.sharpeRatio,
   };
@@ -48,7 +55,8 @@ export function passesWinGoal(score: TrialScore, goal: WinGoal = DEFAULT_WIN_GOA
     score.netPnlUsd >= goal.minNetPnlUsd &&
     score.maxDrawdownPct <= goal.maxDrawdownPct &&
     score.roundTrips >= goal.minRoundTrips &&
-    score.totalFeesUsd >= goal.minFeesUsd
+    score.totalFeesUsd >= goal.minFeesUsd &&
+    score.timeInRangePct >= goal.minTimeInRangePct
   );
 }
 
@@ -80,6 +88,11 @@ export function decideKeep(input: {
     }
     if (input.trial.totalFeesUsd < goal.minFeesUsd) {
       reasons.push(`fees $${input.trial.totalFeesUsd.toFixed(2)} < $${goal.minFeesUsd}`);
+    }
+    if (input.trial.timeInRangePct < goal.minTimeInRangePct) {
+      reasons.push(
+        `inRange ${(input.trial.timeInRangePct * 100).toFixed(0)}% < ${(goal.minTimeInRangePct * 100).toFixed(0)}%`,
+      );
     }
     return {
       passedWinGoal: false,

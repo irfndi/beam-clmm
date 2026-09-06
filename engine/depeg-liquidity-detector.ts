@@ -1,4 +1,4 @@
-import type { PoolSnapshot, PoolState } from "./types.js";
+import { isMeasuredStatsSource, type PoolSnapshot, type PoolState } from "./types.js";
 
 export interface DepegLiquidityConfig {
   readonly stablecoinMints?: ReadonlySet<string>;
@@ -14,6 +14,28 @@ export interface DepegLiquiditySignals {
 }
 
 const finitePositive = (value: number): boolean => Number.isFinite(value) && value > 0;
+
+/**
+ * True when the "drain" is almost certainly a stats-source collapse (API
+ * outage / heuristic fallback), not a real TVL+volume exodus. Live Base
+ * canary 2026-09-06: gecko/krystal ~$8.9M → mid-cycle ~$10k/0 vol fired W15
+ * and exited a healthy two-sided in-range position.
+ */
+export function isLikelyStatsSourceCollapse(
+  pool: PoolState,
+  reference: PoolSnapshot | undefined,
+): boolean {
+  if (!reference || !finitePositive(reference.tvlUsd) || !finitePositive(reference.volume24hUsd)) {
+    return false;
+  }
+  const refMeasured = isMeasuredStatsSource(reference.statsSource);
+  const curMeasured = isMeasuredStatsSource(pool.statsSource);
+  if (refMeasured && !curMeasured) return true;
+  // Volume wiped while reference was healthy — classic datapi/gecko outage
+  // overlay (heuristic leaves volume modeled or zero).
+  if (refMeasured && pool.volume24hUsd <= 0 && reference.volume24hUsd > 0) return true;
+  return false;
+}
 
 function stablecoinMintsForPool(
   pool: PoolState,
@@ -98,6 +120,9 @@ export function detectDepegAndLiquidityDrain(
   const depeg = depegForMints(pool, stablecoinMints, depegThreshold, relativeThreshold);
   const lookback = Math.max(1, Math.floor(config.liquidityDrainLookbackSnapshots ?? 2));
   const reference = liquidityReference(history, lookback);
+  if (isLikelyStatsSourceCollapse(pool, reference)) {
+    return { depeg, liquidityDrain: null };
+  }
   const tvlPct = tvlChangePct(pool, reference);
   const volumePct = volumeChangePct(pool, reference);
   const liquidityDrain = drainSignal(tvlPct, volumePct, drainThreshold);

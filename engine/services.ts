@@ -272,6 +272,10 @@ export interface AdapterApi {
       depositMode: EntryDepositMode;
       amountXUsd: number;
       amountYUsd: number;
+      /** Actual minted tick bounds (may differ from the strategy recommendation
+       *  after single-sided side-of-price adjustment). */
+      lowerBinId?: number;
+      upperBinId?: number;
     },
     Error
   >;

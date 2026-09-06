@@ -474,6 +474,8 @@ export interface BacktestResult {
   maxDrawdownPct: number;
   winRate: number;
   sharpeRatio: number;
+  /** Fraction of held ticks where active bin was inside the position range (0–1). */
+  timeInRangePct: number;
 }
 
 // ─── Signal Weights (Darwinian weighting) ────────────────────────────────────

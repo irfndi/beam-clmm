@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { shouldHarvest } from "../engine/harvest-gate.js";
 import { feePersistence } from "../engine/fee-persistence.js";
-import { applyMinRangePct } from "../engine/range-floor.js";
+import { applyMinRangePct, floorRangeToMinPct } from "../engine/range-floor.js";
 import { entryBudgetWei } from "../engine/gas-reserve.js";
 
 describe("harvest gate (rule 10: do not spend $0.80 to realize $1.00)", () => {
@@ -215,6 +215,47 @@ describe("range floor (low-volatility pools still get >= 20% full width)", () =>
       expect(Number.isFinite(applyMinRangePct(bad))).toBe(true);
       expect(applyMinRangePct(bad)).toBeGreaterThanOrEqual(0);
     }
+  });
+});
+
+describe("floorRangeToMinPct usable-tick alignment (TICK_LOWER regression)", () => {
+  it("snaps widened bounds onto tickSpacing for a mid-spacing Base WETH/USDC tick", () => {
+    // Live failure: active tick -198093, spacing 10, ENTRY_MIN_RANGE_PCT=0.2
+    // previously returned lower=-199053 (mod 10 = -3) → SDK TICK_LOWER.
+    const active = -198093;
+    const spacing = 10;
+    const recommended = { lowerBinId: -198190, upperBinId: -198000 };
+    const floored = floorRangeToMinPct(
+      active,
+      spacing,
+      recommended.lowerBinId,
+      recommended.upperBinId,
+      0.2,
+    );
+    expect(floored.lowerBinId % spacing === 0).toBe(true);
+    expect(floored.upperBinId % spacing === 0).toBe(true);
+    expect(floored.upperBinId).toBeGreaterThan(floored.lowerBinId);
+    expect(floored.lowerBinId).toBeLessThan(active);
+    expect(floored.upperBinId).toBeGreaterThan(active);
+  });
+
+  it("keeps an already-wide aligned range aligned", () => {
+    const floored = floorRangeToMinPct(5000, 10, 4000, 6000, 0.2);
+    expect(floored.lowerBinId % 10 === 0).toBe(true);
+    expect(floored.upperBinId % 10 === 0).toBe(true);
+    expect(floored.upperBinId - floored.lowerBinId).toBeGreaterThanOrEqual(10);
+  });
+});
+
+describe("isInconclusiveRpcSimFailure", () => {
+  it("treats public RPC transport/rate-limit noise as inconclusive", async () => {
+    const { isInconclusiveRpcSimFailure } = await import("../engine/adapter-service.js");
+    expect(
+      isInconclusiveRpcSimFailure("RPC Request failed.\n\nURL: https://base-rpc.publicnode.com"),
+    ).toBe(true);
+    expect(isInconclusiveRpcSimFailure("HTTP request failed. Status: 429")).toBe(true);
+    expect(isInconclusiveRpcSimFailure("Invariant failed: TICK_LOWER")).toBe(false);
+    expect(isInconclusiveRpcSimFailure("execution reverted: STF")).toBe(false);
   });
 });
 

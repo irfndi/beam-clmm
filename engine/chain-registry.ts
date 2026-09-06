@@ -76,7 +76,9 @@ const BASE: ChainDeployment = {
   v3TickLens: getAddress("0x0CdeE061c75D43c82520eD998C23ac2991c9ac6d"),
   multicall3: getAddress("0xcA11bde05977b3631167028862bE2a173976CA11"),
   v3SwapRouter02: getAddress("0x2626664c2603336E57B271c5C0b26F421741e481"),
-  v3SwapRouterEncoding: "canonical-8f",
+  // Live-verified 2026-09-06: Base SwapRouter02 accepts 7-field exactInputSingle
+  // (0x04e45aaf). The 8-field selector (0x414bf389) reverts for every fee tier.
+  v3SwapRouterEncoding: "fork-7f",
   // v4 (developers.uniswap.org/docs/protocols/v4/deployments — Base: 8453)
   v4PositionManager: getAddress("0x7c5f5a4bbd8fd63184577525326123b519429bdc"),
   v4StateView: getAddress("0xa3c0c9b65bad0b08107aa264b0f3db444b867a71"),

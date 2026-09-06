@@ -17,6 +17,13 @@ const PAPER_WATCHLIST = [
   ...LIVE_WATCHLIST.split(","),
 ].join(",");
 
+const FREE_BASE_RPCS = [
+  // Prefer endpoints that accept eth_call stateOverride (mint pre-sim).
+  "https://mainnet.base.org",
+  "https://base-rpc.publicnode.com",
+  "https://base.gateway.tenderly.co",
+].join(",");
+
 const common = {
   script: `${root}/logs/beam-pm2.sh`,
   interpreter: "/bin/bash",
@@ -42,8 +49,8 @@ module.exports = {
         SQLITE_DB_PATH: `${data}/base.db`,
         BEAM_PM2_SQLITE_DB_PATH: `${data}/base.db`,
         BEAM_INSTALL_DIR: root,
-        BEAM_BASE_RPC_URL: "https://base-rpc.publicnode.com",
-        RPC_FALLBACK_URLS: "https://mainnet.base.org,https://base-rpc.publicnode.com",
+        BEAM_BASE_RPC_URL: "https://mainnet.base.org",
+        RPC_FALLBACK_URLS: FREE_BASE_RPCS,
         RPC_RETRY_COUNT: "6",
         PAPER_TRADING: "true",
         BEAM_PM2_PAPER_TRADING: "true",
@@ -54,7 +61,8 @@ module.exports = {
         WATCHLIST_POOLS: PAPER_WATCHLIST,
         CONFIDENCE_THRESHOLD: "0.55",
         MAX_OPEN_POSITIONS: "4",
-        SCAN_INTERVAL_MS: "15000",
+        // Slow paper so free public RPCs have headroom for live mint sims.
+        SCAN_INTERVAL_MS: "120000",
         ENABLE_SNAPSHOT_CAPTURE: "true",
       },
       out_file: `${data}/base.out.log`,
@@ -71,23 +79,29 @@ module.exports = {
         SQLITE_DB_PATH: `${data}/base-live.db`,
         BEAM_PM2_SQLITE_DB_PATH: `${data}/base-live.db`,
         BEAM_INSTALL_DIR: root,
-        BEAM_BASE_RPC_URL: "https://base-rpc.publicnode.com",
-        RPC_FALLBACK_URLS: "https://mainnet.base.org,https://base-rpc.publicnode.com",
-        RPC_RETRY_COUNT: "6",
+        BEAM_BASE_RPC_URL: "https://mainnet.base.org",
+        RPC_FALLBACK_URLS: FREE_BASE_RPCS,
+        RPC_RETRY_COUNT: "8",
         PAPER_TRADING: "false",
         BEAM_PM2_PAPER_TRADING: "false",
         AUTONOMOUS_TOKEN_MODE: "off",
         ENABLE_POOL_DISCOVERY: "false",
         MARKET_SCAN_ENABLED: "false",
         CHALLENGE_MODE: "false",
-        WATCHLIST_POOLS: LIVE_WATCHLIST,
+        WATCHLIST_POOLS: "0xd0b53D9277642d899DF5C87A3966A349A798F224",
         CONFIDENCE_THRESHOLD: "0.55",
         MAX_OPEN_POSITIONS: "1",
         MAX_POSITIONS_PER_POOL: "1",
-        MAX_ENTRY_SIZE_USD: "25",
+        MAX_ENTRY_SIZE_USD: "20",
         MAX_PER_POOL_ALLOCATION_PCT: "0.5",
-        ENTRY_SIZE_FLOOR_USD: "20",
-        SCAN_INTERVAL_MS: "20000",
+        // After gas + leftover WETH, sized entries sit ~$14 — floor must allow that.
+        ENTRY_SIZE_FLOOR_USD: "10",
+        ENTRY_SIZE_EQUITY_FRACTION: "0.55",
+        // Canary wallet ~0.003 ETH: fit ENTER inside balance−gas-reserve.
+        MIN_NATIVE_FOR_ENTRY_WEI: "1500000000000000",
+        MIN_NATIVE_FOR_GAS_WEI: "800000000000000",
+        // Free RPCs: fewer cycles/min beats paid throughput for canary fills.
+        SCAN_INTERVAL_MS: "90000",
         LIVE_ENTRY_V4_ENABLED: "true",
         LIVE_ENTRY_NATIVE_LEG_ONLY: "true",
         EXIT_ROUTE_PROOF_REQUIRED: "true",
@@ -98,6 +112,15 @@ module.exports = {
         ENTRY_RANGE_HALF_WIDTH_BINS: "25",
         VOLATILITY_ADAPTIVE_RANGES: "false",
         ENTER_MIN_7D_FEE_OVER_GAS: "0",
+        // Canary: don't sit idle 4h after an OOR/vol exit; re-enter in-range.
+        OOR_COOLDOWN_MS: "0",
+        REPEAT_OOR_COOLDOWN_MS: "0",
+        // Wider vol gate — tiny ranges + public RPC tick noise trip stddev=5.
+        VOLATILITY_EXIT_STDDEV: "12",
+        // Fee canary: USDC→WETH swap then in-range two-sided; never park OOR.
+        ENTRY_REQUIRE_TWO_SIDED: "true",
+        // Disabled once we have a healthy in-range fill (was used to flush OOR junk).
+        MAX_POSITION_AGE_MS: "0",
 
         MIN_FEE_IL_RATIO: "0.1",
         VOLUME_AUTH_THRESHOLD: "0.5",

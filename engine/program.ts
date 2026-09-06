@@ -134,7 +134,7 @@ import {
   challengeYieldBelowExitThreshold,
   avgFeeYieldPct,
 } from "./challenge-strategy.js";
-import { applyMinRangePct } from "./range-floor.js";
+import { applyMinRangePct, floorRangeToMinPct } from "./range-floor.js";
 import { entryBudgetWei } from "./gas-reserve.js";
 import { shouldHarvest } from "./harvest-gate.js";
 import { feePersistence } from "./fee-persistence.js";
@@ -371,34 +371,8 @@ export function snapshotBucketTimestamp(timestamp: number): number {
   return Math.floor(timestamp / SNAPSHOT_BUCKET_MS) * SNAPSHOT_BUCKET_MS;
 }
 
-/**
- * Fee-Truth range floor: widen a (lower, upper) tick range so the FULL price
- * range is at least `minFullRangePct` around `activeBinId`, unless the range
- * is already wider. The floor is expressed in price-pct and converted to
- * binStep-aligned ticks (rounded UP so the guarantee is never undershot).
- * Pure; a malformed min pct (NaN/negative) disables the floor via the module
- * default semantics of applyMinRangePct.
- */
-export function floorRangeToMinPct(
-  activeBinId: number,
-  binStep: number,
-  lowerBinId: number,
-  upperBinId: number,
-  minFullRangePct: number,
-): BinRange {
-  if (!Number.isFinite(activeBinId) || !Number.isFinite(binStep) || binStep <= 0) {
-    return { lowerBinId, upperBinId };
-  }
-  const halfWidthPct = 1.0001 ** (((upperBinId - lowerBinId) / 2) * binStep) - 1;
-  const flooredHalfWidthPct = applyMinRangePct(halfWidthPct, minFullRangePct);
-  if (flooredHalfWidthPct <= halfWidthPct) return { lowerBinId, upperBinId };
-  const halfTicks =
-    Math.ceil(Math.log1p(flooredHalfWidthPct) / Math.log(1.0001) / binStep) * binStep;
-  return {
-    lowerBinId: Math.max(activeBinId - halfTicks, -887272),
-    upperBinId: Math.min(activeBinId + halfTicks, 887272),
-  };
-}
+// Re-export for callers/tests that historically imported the floor from program.
+export { floorRangeToMinPct } from "./range-floor.js";
 
 /**
  * Collapse a pool's snapshot series into one fees24hUsd value per UTC day
@@ -1912,18 +1886,16 @@ function readNativeBalanceGate(
       emergencyExitWei: minGasWei,
     });
     if (entryBudget < minEntryWei) {
-      const availableWei = Number(nativeBalanceWei);
-      const neededWei = Number(minEntryWei);
-      const reserve = nativeBalanceWei - entryBudget;
-      const availableHuman = (availableWei / 1e18).toFixed(6);
-      const neededHuman = (neededWei / 1e18).toFixed(6);
-      const reserveHuman = (Number(reserve) / 1e18).toFixed(6);
+      const spendableHuman = (Number(entryBudget) / 1e18).toFixed(6);
+      const neededHuman = (Number(minEntryWei) / 1e18).toFixed(6);
+      const balanceHuman = (Number(nativeBalanceWei) / 1e18).toFixed(6);
+      const reserveHuman = (Number(nativeBalanceWei - entryBudget) / 1e18).toFixed(6);
       console.warn(
-        `Insufficient ETH for ENTER — spendable ${availableHuman} ETH, need ${neededHuman} ETH ` +
-          `(gas ${(Number(minGasWei) / 1e18).toFixed(6)} + reserve ${reserveHuman})`,
+        `Insufficient ETH for ENTER — spendable ${spendableHuman} ETH (of ${balanceHuman}), need ${neededHuman} ETH ` +
+          `(reserve ${reserveHuman} held for gas/exit)`,
       );
       const error =
-        `Insufficient ETH for ENTER — spendable: ${availableHuman} ETH, ` +
+        `Insufficient ETH for ENTER — spendable: ${spendableHuman} ETH, ` +
         `needed: ${neededHuman} ETH, ` +
         `reserve: ${reserveHuman} ETH`;
       if (autonomous && entryOperation) {
@@ -2034,8 +2006,8 @@ function executeLiveEnterMint(
         tokenXSymbol: pool.tokenXSymbol,
         tokenYSymbol: pool.tokenYSymbol,
         activeBinId: pool.activeBinId,
-        lowerBinId: floored.lowerBinId,
-        upperBinId: floored.upperBinId,
+        lowerBinId: enterResult.result.lowerBinId ?? floored.lowerBinId,
+        upperBinId: enterResult.result.upperBinId ?? floored.upperBinId,
         timestamp: Date.now(),
         outOfRangeSince: null,
         oorCycleCount: 0,
@@ -7974,7 +7946,21 @@ export const program = Effect.gen(function* () {
                     ...noExitSideEffects,
                   };
                 },
-                () => buildW15ExitOutcome(w15Signals, poolAddress, pos.positionId),
+                () => {
+                  // Brand-new positions: ignore liquidity-drain alone for 30m —
+                  // free-RPC stats collapses look like drains right after mint
+                  // (live Base canary #5944897 exited ~3m in-range on a flake).
+                  // Stablecoin depeg still fires immediately.
+                  const ageMs = Date.now() - pos.timestamp;
+                  if (
+                    w15Signals.liquidityDrain !== null &&
+                    w15Signals.depeg === null &&
+                    ageMs < 30 * 60_000
+                  ) {
+                    return null;
+                  }
+                  return buildW15ExitOutcome(w15Signals, poolAddress, pos.positionId);
+                },
                 () =>
                   buildIlDominanceOutcome({
                     ilProtectionEnabled: config.ilProtectionEnabled === true,

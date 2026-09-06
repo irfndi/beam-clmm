@@ -6,6 +6,7 @@ const good: TrialScore = {
   maxDrawdownPct: 0.02,
   roundTrips: 0,
   totalFeesUsd: 12,
+  timeInRangePct: 0.7,
   winRate: 0.6,
   sharpeRatio: 1.2,
 };
@@ -15,13 +16,14 @@ describe("autoresearch-score", () => {
     expect(passesWinGoal({ ...good, netPnlUsd: 1 })).toBe(false);
     expect(passesWinGoal({ ...good, maxDrawdownPct: 0.2 })).toBe(false);
     expect(passesWinGoal({ ...good, totalFeesUsd: 1 })).toBe(false);
+    expect(passesWinGoal({ ...good, timeInRangePct: 0.2 })).toBe(false);
     expect(passesWinGoal(good)).toBe(true);
   });
 
   it("keeps first passing trial when baseline has not passed", () => {
     const d = decideKeep({
       trial: good,
-      baseline: { ...good, netPnlUsd: 0, totalFeesUsd: 0 },
+      baseline: { ...good, netPnlUsd: 0, totalFeesUsd: 0, roundTrips: 0 },
       baselinePassedWinGoal: false,
     });
     expect(d.keep).toBe(true);

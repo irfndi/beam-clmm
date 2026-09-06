@@ -59,4 +59,24 @@ describe("W15 depeg and liquidity signals", () => {
     );
     expect(result.liquidityDrain).toEqual({ tvlPct: -0.6, volumePct: -0.6 });
   });
+
+  it("ignores drain when measured→heuristic stats collapse (live canary false exit)", () => {
+    const history: PoolSnapshot[] = [
+      { ...snapshot(8_900_000, 8_000_000), statsSource: "geckoterminal" },
+      { ...snapshot(8_896_000, 8_004_000), statsSource: "krystal" },
+    ];
+    const collapsed: PoolState = {
+      ...pool,
+      currentPrice: 1,
+      tvlUsd: 10_315,
+      volume24hUsd: 0,
+      statsSource: "heuristic",
+    };
+    const result = detectDepegAndLiquidityDrain(collapsed, history, {
+      ...config,
+      liquidityDrainPct: 0.5,
+      liquidityDrainLookbackSnapshots: 2,
+    });
+    expect(result.liquidityDrain).toBeNull();
+  });
 });

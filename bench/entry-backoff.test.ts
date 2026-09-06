@@ -20,6 +20,10 @@ describe("entry failure backoff", () => {
       ),
     ).toBe(true);
     expect(isInsufficientTokenBalanceError("Insufficient SOL for gas — skipping ENTER")).toBe(true);
+    // Native ETH capacity must NOT arm the 30m–6h backoff (canary wallets).
+    expect(isInsufficientTokenBalanceError("Insufficient ETH for ENTER — spendable: 0.001")).toBe(
+      false,
+    );
     expect(isInsufficientTokenBalanceError("RPC 429 Too Many Requests")).toBe(false);
     expect(isInsufficientTokenBalanceError(undefined)).toBe(false);
   });

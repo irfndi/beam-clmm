@@ -9,15 +9,16 @@ export interface EntryFailureBackoff {
 export function isInsufficientTokenBalanceError(error: string | undefined): boolean {
   if (!error) return false;
   const normalized = error.toLowerCase();
+  // Native-ETH capacity ("Insufficient ETH for ENTER") is intentionally NOT
+  // here: tiny canary wallets bounce on the gas reserve every cycle, and a
+  // 30m–6h backoff freezes the agent after one flake. Retry next cycle.
   return (
     normalized.includes("insufficient token balance") ||
     normalized.includes("insufficient_usdc_balance") ||
     normalized.includes("insufficient_balance_after_swap") ||
-    // SOL-era variants (kept for legacy paths) + the EVM ETH gate messages.
+    // SOL-era variants (kept for legacy paths).
     normalized.includes("insufficient sol for gas") ||
-    normalized.includes("insufficient sol for enter") ||
-    normalized.includes("insufficient eth for gas") ||
-    normalized.includes("insufficient eth for enter")
+    normalized.includes("insufficient sol for enter")
   );
 }
 
