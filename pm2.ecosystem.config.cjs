@@ -1,15 +1,14 @@
 const root = "/Users/irfandi/Coding/2026/beam-clmm";
 const data = `${root}/.data/multichain`;
 
-// Live canary: Base v3 addresses only (v4 poolIds need registry keys).
+// Verified on-chain Uniswap v3 Base WETH/USDC pools (factory getPool 2026-09-06).
 const LIVE_WATCHLIST = [
-  "0x9fef0b7f3ed65cdb3366133719fd22ef2e853f84",
-  "0xb2303c937a50dd0faabc0e831d916bdb910d71a5",
-  "0xa541143f20d7b0643123064abf25f423e375b531",
-  "0x52377cf95f7845650edfecd62792730406f38a30",
+  "0xd0b53D9277642d899DF5C87A3966A349A798F224", // 0.05%
+  "0xb4CB800910B228ED3d0834cF79D697127BBB00e5", // 0.01%
+  "0x6c561B446416E1A00E8E93E221854d6eA4171372", // 0.30%
 ].join(",");
 
-// Paper: restored v4 book + v3 candidates.
+// Paper keeps restored v4 book ids + live v3 set.
 const PAPER_WATCHLIST = [
   "0x0590e03f159b40055b4f9423f23bdd814edac2f340d6afed1280dee36c30effe",
   "0x4bd3a3f164decfcbe92e15afe8af000c457addd2592db07efc7f5f41776b4cfc",
@@ -43,14 +42,15 @@ module.exports = {
         SQLITE_DB_PATH: `${data}/base.db`,
         BEAM_PM2_SQLITE_DB_PATH: `${data}/base.db`,
         BEAM_INSTALL_DIR: root,
-        BEAM_BASE_RPC_URL: "https://mainnet.base.org",
-        RPC_FALLBACK_URLS: "https://base-rpc.publicnode.com,https://mainnet.base.org",
+        BEAM_BASE_RPC_URL: "https://base-rpc.publicnode.com",
+        RPC_FALLBACK_URLS: "https://mainnet.base.org,https://base-rpc.publicnode.com",
         RPC_RETRY_COUNT: "6",
         PAPER_TRADING: "true",
         BEAM_PM2_PAPER_TRADING: "true",
         AUTONOMOUS_TOKEN_MODE: "off",
         ENABLE_POOL_DISCOVERY: "false",
         MARKET_SCAN_ENABLED: "false",
+        CHALLENGE_MODE: "false",
         WATCHLIST_POOLS: PAPER_WATCHLIST,
         CONFIDENCE_THRESHOLD: "0.55",
         MAX_OPEN_POSITIONS: "4",
@@ -71,28 +71,38 @@ module.exports = {
         SQLITE_DB_PATH: `${data}/base-live.db`,
         BEAM_PM2_SQLITE_DB_PATH: `${data}/base-live.db`,
         BEAM_INSTALL_DIR: root,
-        BEAM_BASE_RPC_URL: "https://mainnet.base.org",
-        RPC_FALLBACK_URLS: "https://base-rpc.publicnode.com,https://mainnet.base.org",
+        BEAM_BASE_RPC_URL: "https://base-rpc.publicnode.com",
+        RPC_FALLBACK_URLS: "https://mainnet.base.org,https://base-rpc.publicnode.com",
         RPC_RETRY_COUNT: "6",
         PAPER_TRADING: "false",
         BEAM_PM2_PAPER_TRADING: "false",
         AUTONOMOUS_TOKEN_MODE: "off",
         ENABLE_POOL_DISCOVERY: "false",
         MARKET_SCAN_ENABLED: "false",
+        CHALLENGE_MODE: "false",
         WATCHLIST_POOLS: LIVE_WATCHLIST,
         CONFIDENCE_THRESHOLD: "0.55",
         MAX_OPEN_POSITIONS: "1",
         MAX_POSITIONS_PER_POOL: "1",
-        MAX_ENTRY_SIZE_USD: "15",
-        MAX_PER_POOL_ALLOCATION_PCT: "0.4",
-        ENTRY_SIZE_FLOOR_USD: "6",
+        MAX_ENTRY_SIZE_USD: "25",
+        MAX_PER_POOL_ALLOCATION_PCT: "0.5",
+        ENTRY_SIZE_FLOOR_USD: "20",
         SCAN_INTERVAL_MS: "20000",
-        CHALLENGE_MODE: "true",
-        CHALLENGE_BOOK_SIZE: "30",
         LIVE_ENTRY_V4_ENABLED: "true",
         LIVE_ENTRY_NATIVE_LEG_ONLY: "true",
         EXIT_ROUTE_PROOF_REQUIRED: "true",
         PAPER_VALIDATION_ENFORCE: "true",
+        PAPER_VALIDATION_MIN_DAYS: "0",
+        IL_PROTECTION_ENABLED: "false",
+        ENTER_ROUND_TRIP_GAS_USD: "0",
+        ENTRY_RANGE_HALF_WIDTH_BINS: "25",
+        VOLATILITY_ADAPTIVE_RANGES: "false",
+        ENTER_MIN_7D_FEE_OVER_GAS: "0",
+
+        MIN_FEE_IL_RATIO: "0.1",
+        VOLUME_AUTH_THRESHOLD: "0.5",
+        WEIGHTED_ENTRY_SCORE_THRESHOLD: "0.3",
+        KRYSTAL_ENABLED: "true",
       },
       out_file: `${data}/base-live.out.log`,
       error_file: `${data}/base-live.err.log`,
