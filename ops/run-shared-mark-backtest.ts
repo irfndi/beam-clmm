@@ -403,15 +403,17 @@ function closeOpenPositions(
   }
 }
 
-function buildEvents(
-  snapshotsByPool: ReadonlyMap<string, readonly Snapshot[]>,
-  args: Args,
-): {
+interface SharedMarkBacktestEvents {
   readonly events: SharedPortfolioEvent[];
   readonly entryRequests: number;
   readonly acceptedEntries: number;
   readonly feeGapCount: number;
-} {
+}
+
+function buildEvents(
+  snapshotsByPool: ReadonlyMap<string, readonly Snapshot[]>,
+  args: Args,
+): SharedMarkBacktestEvents {
   const states = new Map<string, PoolState>();
   const timeline = [...snapshotsByPool.entries()]
     .flatMap(([pool, snapshots]) => snapshots.map((snapshot, index) => ({ pool, snapshot, index })))
@@ -492,6 +494,8 @@ function main(): void {
   const args = parseArgs(process.argv.slice(2));
   const db = new Database(args.dbPath, { readonly: true });
   try {
+    // SAFETY: PRAGMA table_info always returns rows with a text `name` column;
+    // the assertion only names that sqlite schema shape.
     const columns = db.query("PRAGMA table_info(pool_snapshots)").all() as Array<{
       readonly name: string;
     }>;
@@ -532,6 +536,8 @@ function main(): void {
     const metadataSelect = hasUsdMetadata
       ? "token_x_address, token_y_address, token_x_decimals, token_y_decimals, token_x_price_usd, token_y_price_usd"
       : "NULL AS token_x_address, NULL AS token_y_address, NULL AS token_x_decimals, NULL AS token_y_decimals, NULL AS token_x_price_usd, NULL AS token_y_price_usd";
+    // SAFETY: this GROUP BY query selects exactly `source` (coalesced text) and
+    // `count` (integer) columns matching the SourceRow contract.
     const sourceRows = db
       .query(
         `SELECT COALESCE(${sourceExpression}, 'heuristic') AS source, COUNT(*) AS count FROM pool_snapshots WHERE timestamp>=? AND timestamp<=? GROUP BY source`,
@@ -542,6 +548,8 @@ function main(): void {
       (sum, row) => sum + (MEASURED_SOURCES.has(row.source) ? row.count : 0),
       0,
     );
+    // SAFETY: this DISTINCT query selects exactly one `pool` text column per row,
+    // matching the PoolRow contract.
     const pools = (
       db
         .query(
@@ -551,6 +559,8 @@ function main(): void {
     ).map((row) => row.pool);
     const snapshotsByPool = new Map<string, Snapshot[]>();
     for (const pool of pools) {
+      // SAFETY: this snapshot query selects exactly the SnapshotRow columns
+      // (timestamp, prices, fees, tvl, bin, drawdown, symbols, metadata, source).
       const rows = db
         .query(
           `SELECT timestamp, current_price, fees_24h_usd, tvl_usd, active_bin_id, ${drawdownSelect}, ${tokenXSelect}, ${tokenYSelect}, ${metadataSelect}, ${sourceSelect} FROM pool_snapshots WHERE pool_address=? AND timestamp>=? AND timestamp<=? ORDER BY timestamp`,

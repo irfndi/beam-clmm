@@ -5,6 +5,7 @@
  *   bun run autoresearch -- --candidate research/candidates/trial-1.json
  *   bun run autoresearch -- --days 7 --pool synthetic-demo
  */
+// oxlint-disable anti-slop/no-unknown-parameters, anti-slop/no-unsafe-dictionary-type, anti-slop/no-runtime-typeof -- CLI/JSON knob parsing is the I/O boundary; every value is validated finite below.
 import { mkdirSync, readFileSync, writeFileSync, appendFileSync, existsSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { generateMockHistory, runBacktestFromTicks, type BacktestConfig } from "./backtest.js";
@@ -30,13 +31,14 @@ interface BaselineFile {
   winGoal: WinGoal;
 }
 
-function parseArgs(argv: ReadonlyArray<string>): {
-  candidatePath: string | null;
-  days: number;
-  pool: string;
-  startTvl: number;
-  updateBaseline: boolean;
-} {
+interface AutoresearchArgs {
+  readonly candidatePath: string | null;
+  readonly days: number;
+  readonly pool: string;
+  readonly startTvl: number;
+  readonly updateBaseline: boolean;
+}
+function parseArgs(argv: ReadonlyArray<string>): AutoresearchArgs {
   let candidatePath: string | null = null;
   let days = 7;
   let pool = "autoresearch-synthetic";
@@ -62,11 +64,13 @@ function parseArgs(argv: ReadonlyArray<string>): {
 }
 
 function loadJson<T>(path: string): T {
+  // SAFETY: generic JSON loader — T is fixed by the caller (BaselineFile/unknown) and every consumer validates shape after load (assertKnobs, score normalization).
   return JSON.parse(readFileSync(path, "utf8")) as T;
 }
 
 function assertKnobs(raw: unknown): Knobs {
   if (raw === null || typeof raw !== "object") throw new Error("knobs must be an object");
+  // SAFETY: proven non-null object above; Record<string, unknown> is the narrowest honest shape before per-key finite-number validation in num().
   const o = raw as Record<string, unknown>;
   const num = (k: string): number => {
     const v = o[k];
@@ -98,7 +102,7 @@ function main(): void {
   const baseline = loadJson<BaselineFile>(baselinePath);
   const goal: WinGoal = {
     ...DEFAULT_WIN_GOAL,
-    ...(baseline.winGoal ?? {}),
+    ...baseline.winGoal,
   };
 
   const knobs = args.candidatePath
@@ -117,7 +121,15 @@ function main(): void {
     minPoolTvlUsd: knobs.minPoolTvlUsd,
   });
   const trial = scoreFromResult(result);
-  // Normalize legacy baseline scores missing timeInRangePct.
+  // Normalize legacy baseline scores missing timeInRangePct (single assertion, guarded).
+  // SAFETY: legacy baselines predate the field; `in` + finite-number checks below prove presence before numeric use.
+  const legacyScore = baseline.score as { timeInRangePct?: unknown };
+  const legacyTimeInRangePct =
+    "timeInRangePct" in baseline.score &&
+    typeof legacyScore.timeInRangePct === "number" &&
+    Number.isFinite(legacyScore.timeInRangePct)
+      ? legacyScore.timeInRangePct
+      : 0;
   const baselineScore: TrialScore = {
     netPnlUsd: baseline.score.netPnlUsd,
     maxDrawdownPct: baseline.score.maxDrawdownPct,
@@ -125,11 +137,7 @@ function main(): void {
     totalFeesUsd: baseline.score.totalFeesUsd,
     winRate: baseline.score.winRate,
     sharpeRatio: baseline.score.sharpeRatio,
-    timeInRangePct:
-      "timeInRangePct" in baseline.score &&
-      typeof (baseline.score as { timeInRangePct?: unknown }).timeInRangePct === "number"
-        ? (baseline.score as { timeInRangePct: number }).timeInRangePct
-        : 0,
+    timeInRangePct: legacyTimeInRangePct,
   };
   const decision = decideKeep({
     trial,

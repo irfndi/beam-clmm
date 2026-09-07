@@ -380,6 +380,8 @@ export const FeedbackLive = Layer.effect(
             hash,
             reportedAt,
           },
+          // SAFETY: apiKeyGate above returns unless apiKey is a non-empty
+          // string, so apiKey is narrowed to string on this path.
           apiKey as string,
         );
 

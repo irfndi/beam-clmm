@@ -242,7 +242,11 @@ function createRpcMock(opts: MockOpts = {}): RpcMock {
     );
   }
 
-  const selectorHandlers: Record<string, (ctx: EthCallCtx) => Response> = {
+  interface SelectorHandlerMap {
+    readonly [selector: string]: (ctx: EthCallCtx) => Response;
+  }
+
+  const selectorHandlers: SelectorHandlerMap = {
     [sel.balanceOf]: (ctx) => {
       // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
       const [holder] = decodeAbiParameters(
@@ -257,6 +261,8 @@ function createRpcMock(opts: MockOpts = {}): RpcMock {
       ok(encodeAbiParameters([{ type: "uint8" }], [ctx.to === addr(WETH) ? 18 : 6]), ctx.id),
     [sel.allowance]: (ctx) => ok(encodeAbiParameters([{ type: "uint256" }], [MAX_UINT256]), ctx.id),
     [sel.getPool]: (ctx) => {
+      // SAFETY: ctx.data is a `0x`-prefixed calldata hex built by the mock; slicing
+      // the 4-byte selector leaves a valid `0x` hex payload for these fixed params.
       const [a, b, fee] = decodeAbiParameters(
         [{ type: "address" }, { type: "address" }, { type: "uint24" }],
         ctx.data.slice(8) as `0x${string}`,
@@ -330,6 +336,8 @@ function createRpcMock(opts: MockOpts = {}): RpcMock {
   };
 
   async function handleAggregate3(id: number, data: Hex): Promise<Response> {
+    // SAFETY: data is `0x`-prefixed aggregate3 calldata built by the mock; slicing
+    // the selector leaves a valid `0x` hex payload for the tuple[] params.
     const decoded = decodeAbiParameters(
       [
         {
@@ -343,6 +351,8 @@ function createRpcMock(opts: MockOpts = {}): RpcMock {
       ],
       data.slice(8) as `0x${string}`,
     );
+    // SAFETY: decodeAbiParameters with the tuple[] ABI above always yields one tuple
+    // array element; the assertion only names that decoded row shape.
     const subcalls = (decoded[0] ?? []) as ReadonlyArray<{
       target: string;
       allowFailure: boolean;
@@ -355,11 +365,15 @@ function createRpcMock(opts: MockOpts = {}): RpcMock {
         method: "eth_call",
         params: [{ to: sub.target, data: sub.callData }],
       });
+      // SAFETY: the mock Response is always a JSON-RPC envelope created by ok()/err(),
+      // so the parsed body has exactly `result`/`error` fields.
       const json = (await response.json()) as { result?: string; error?: unknown };
       const success = json.error === undefined && json.result !== undefined;
       if (!success && !sub.allowFailure) {
         return err(revertBody("multicall subcall reverted"), id);
       }
+      // SAFETY: json.result comes from ok() as a `0x`-prefixed hex string; the
+      // fallback "0x" is the empty hex literal, both valid Hex.
       results.push([success, (json.result ?? "0x") as Hex]);
     }
     return ok(
@@ -396,7 +410,11 @@ function createRpcMock(opts: MockOpts = {}): RpcMock {
     if (method !== "eth_getTransactionReceipt") {
       console.error(`[mock:req] ${method} ${JSON.stringify(body.params).slice(0, 160)}`);
     }
-    const methodHandlers: Record<string, (b: RpcBody) => Promise<Response> | Response> = {
+    interface MethodHandlerMap {
+      readonly [method: string]: (b: RpcBody) => Promise<Response> | Response;
+    }
+
+    const methodHandlers: MethodHandlerMap = {
       eth_chainId: (b) => ok(n(4663), b.id),
       eth_getBalance: (b) => ok(n(opts.nativeBalance ?? 0n), b.id),
       eth_getTransactionCount: (b) => ok("0x0", b.id),

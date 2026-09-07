@@ -27,6 +27,11 @@ export interface LvrAssessment {
 }
 
 /** Minimum aligned hourly samples to trust the variance estimate. */
+interface AnnualizedVarianceResult {
+  readonly variance: number | null;
+  readonly samples: number;
+}
+
 const MIN_SAMPLES = 12;
 
 /**
@@ -39,7 +44,7 @@ export function annualizedVarianceFromSnapshots(
   snaps: ReadonlyArray<{ timestamp: number; price: number }>,
   nowMs: number,
   windowHours: number,
-): { variance: number | null; samples: number } {
+): AnnualizedVarianceResult {
   const gridStart = nowMs - windowHours * 3_600_000;
   const sorted = [...snaps].filter((s) => s.price > 0).sort((a, b) => a.timestamp - b.timestamp);
   const prices: number[] = [];

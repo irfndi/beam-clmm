@@ -48,7 +48,10 @@ function getNonInteractiveSetupInputs(options: {
   paperTrading?: boolean;
 }): SetupInputs {
   const rpcUrl =
-    options.rpcUrl || process.env.ROBINHOOD_RPC_URL || "https://rpc.mainnet.chain.robinhood.com";
+    options.rpcUrl ||
+    process.env.BEAM_BASE_RPC_URL ||
+    process.env.ROBINHOOD_RPC_URL ||
+    "https://mainnet.base.org";
   const rpcFallbackUrl =
     options.rpcFallbackUrl ||
     process.env.RPC_FALLBACK_URLS ||
@@ -72,9 +75,12 @@ async function getInteractiveSetupInputs(): Promise<SetupInputs> {
     {
       rpcUrl: () =>
         p.text({
-          message: "Robinhood Chain RPC URL",
-          placeholder: "https://rpc.mainnet.chain.robinhood.com",
-          initialValue: process.env.ROBINHOOD_RPC_URL ?? "https://rpc.mainnet.chain.robinhood.com",
+          message: "EVM RPC URL (Base default)",
+          placeholder: "https://mainnet.base.org",
+          initialValue:
+            process.env.BEAM_BASE_RPC_URL ??
+            process.env.ROBINHOOD_RPC_URL ??
+            "https://mainnet.base.org",
         }),
       rpcFallbackUrl: () =>
         p.text({
@@ -111,7 +117,7 @@ async function getInteractiveSetupInputs(): Promise<SetupInputs> {
   const rpcUrl = stringAnswer(answers.rpcUrl);
   const rpcFallbackUrl = stringAnswer(answers.rpcFallbackUrl);
   if (!rpcUrl.trim()) {
-    p.cancel("A Robinhood Chain RPC URL is required.");
+    p.cancel("An EVM RPC URL is required.");
     process.exit(1);
   }
   const walletKey = stringAnswer(answers.walletKey);
@@ -140,7 +146,8 @@ function collectSetupInputs(
 function buildEnvFileContent(inputs: SetupInputs): string {
   return [
     "# RPC providers",
-    `ROBINHOOD_RPC_URL=${escapeEnv(inputs.rpcUrl)}`,
+    "# RPC providers (Base-first; ROBINHOOD_RPC_URL legacy fallback)",
+    `BEAM_BASE_RPC_URL=${escapeEnv(inputs.rpcUrl)}`,
     `RPC_FALLBACK_URLS=${escapeEnv(inputs.rpcFallbackUrl)}`,
     "",
     "# Wallet (optional — leave empty for paper trading)",

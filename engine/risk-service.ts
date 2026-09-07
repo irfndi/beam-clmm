@@ -522,6 +522,7 @@ export const RiskLive = (riskConfig: RiskConfig) =>
 export interface AgentRebalanceCapitalGateInput {
   readonly now: number;
   readonly lastRebalanceAt: number;
+  readonly positionTimestamp?: number;
   readonly minRebalanceIntervalMs: number;
   /** When true (OOR grace expired), min-interval may be bypassed. */
   readonly oorGraceExpired: boolean;
@@ -546,7 +547,11 @@ export interface CapitalGateVerdict {
 export function evaluateAgentRebalanceCapitalGates(
   input: AgentRebalanceCapitalGateInput,
 ): CapitalGateVerdict {
-  const timeSinceRebal = input.now - input.lastRebalanceAt;
+  const anchor =
+    input.lastRebalanceAt > 0
+      ? input.lastRebalanceAt
+      : (input.positionTimestamp ?? input.lastRebalanceAt);
+  const timeSinceRebal = input.now - anchor;
   if (timeSinceRebal < input.minRebalanceIntervalMs && !input.oorGraceExpired) {
     return {
       approved: false,
@@ -804,6 +809,8 @@ export function evaluatePerPoolAllocation(input: PerPoolAllocationInput): PerPoo
   }
 
   const portfolioCapUsd = Math.max(input.portfolioValueUsd * input.maxPerPoolAllocationPct, 0);
+  // SAFETY: the ternary condition guards poolTvlUsd as a positive number, so the
+  // optional value is a finite number on the taken branch.
   const tvlShareCapUsd =
     input.challengePoolShareCapPct !== undefined && (input.poolTvlUsd ?? 0) > 0
       ? Math.max((input.poolTvlUsd as number) * (input.challengePoolShareCapPct / 100), 0)

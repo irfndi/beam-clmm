@@ -1,7 +1,11 @@
 const path = require("path");
 const root = path.resolve(__dirname);
 const data = `${root}/.data/multichain`;
-
+// Ops: launch from a clean env and never use `pm2 restart --update-env` for
+// live — operator shell exports + project .env merge into children (seen in
+// `pm2 jlist`). Preferred: `pm2 delete --all; env -i PATH=$PATH HOME=$HOME pm2 start pm2.ecosystem.config.cjs`.
+// The BEAM_PM2_* shadows + scripts/beam-pm2.sh generic re-pin guard the
+// pinned keys when --update-env is accidentally used.
 // Verified on-chain Uniswap v3 Base WETH/USDC pools (factory getPool 2026-09-06).
 const LIVE_WATCHLIST = [
   "0xd0b53D9277642d899DF5C87A3966A349A798F224", // 0.05%
@@ -50,20 +54,41 @@ module.exports = {
         BEAM_PM2_SQLITE_DB_PATH: `${data}/base.db`,
         BEAM_INSTALL_DIR: root,
         BEAM_BASE_RPC_URL: "https://mainnet.base.org",
+        BEAM_PM2_BEAM_BASE_RPC_URL: "https://mainnet.base.org",
         RPC_FALLBACK_URLS: FREE_BASE_RPCS,
+        BEAM_PM2_RPC_FALLBACK_URLS: FREE_BASE_RPCS,
         RPC_RETRY_COUNT: "6",
+        BEAM_PM2_RPC_RETRY_COUNT: "6",
         PAPER_TRADING: "true",
         BEAM_PM2_PAPER_TRADING: "true",
         AUTONOMOUS_TOKEN_MODE: "off",
+        BEAM_PM2_AUTONOMOUS_TOKEN_MODE: "off",
         ENABLE_POOL_DISCOVERY: "false",
         MARKET_SCAN_ENABLED: "false",
         CHALLENGE_MODE: "false",
+        BEAM_PM2_CHALLENGE_MODE: "false",
         WATCHLIST_POOLS: PAPER_WATCHLIST,
+        BEAM_PM2_WATCHLIST_POOLS: PAPER_WATCHLIST,
         CONFIDENCE_THRESHOLD: "0.55",
         MAX_OPEN_POSITIONS: "4",
         // Slow paper so free public RPCs have headroom for live mint sims.
         SCAN_INTERVAL_MS: "120000",
+        BEAM_PM2_SCAN_INTERVAL_MS: "120000",
         ENABLE_SNAPSHOT_CAPTURE: "true",
+        // Paper-validation relaxations (explicit — was implicitly inherited
+        // from project .env; cleaning .env must not silently stop ENTERs).
+        MIN_FEE_IL_RATIO: "0.5",
+        BEAM_PM2_MIN_FEE_IL_RATIO: "0.5",
+        ENTRY_SIZE_FLOOR_USD: "6",
+        BEAM_PM2_ENTRY_SIZE_FLOOR_USD: "6",
+        FEE_PERSISTENCE_MIN_POSITIVE_DAYS: "1",
+        BEAM_PM2_FEE_PERSISTENCE_MIN_POSITIVE_DAYS: "1",
+        EXIT_ROUTE_PROOF_REQUIRED: "false",
+        BEAM_PM2_EXIT_ROUTE_PROOF_REQUIRED: "false",
+        PAPER_VALIDATION_ENFORCE: "false",
+        BEAM_PM2_PAPER_VALIDATION_ENFORCE: "false",
+        CHALLENGE_MIN_SCORE: "1",
+        BEAM_PM2_CHALLENGE_MIN_SCORE: "1",
       },
       out_file: `${data}/base.out.log`,
       error_file: `${data}/base.err.log`,
@@ -80,15 +105,20 @@ module.exports = {
         BEAM_PM2_SQLITE_DB_PATH: `${data}/base-live.db`,
         BEAM_INSTALL_DIR: root,
         BEAM_BASE_RPC_URL: "https://mainnet.base.org",
+        BEAM_PM2_BEAM_BASE_RPC_URL: "https://mainnet.base.org",
         RPC_FALLBACK_URLS: FREE_BASE_RPCS,
+        BEAM_PM2_RPC_FALLBACK_URLS: FREE_BASE_RPCS,
         RPC_RETRY_COUNT: "8",
+        BEAM_PM2_RPC_RETRY_COUNT: "8",
         PAPER_TRADING: "false",
         BEAM_PM2_PAPER_TRADING: "false",
         // Pin off: project .env has CHALLENGE_MODE=true (paper harvest book).
         CHALLENGE_MODE: "false",
         BEAM_PM2_CHALLENGE_MODE: "false",
         AUTONOMOUS_TOKEN_MODE: "off",
+        BEAM_PM2_AUTONOMOUS_TOKEN_MODE: "off",
         ENABLE_POOL_DISCOVERY: "false",
+        BEAM_PM2_ENABLE_POOL_DISCOVERY: "false",
         // Ranking code is live; for fee canary prefer one mid-TVL swappable book
         // (meme top-K mostly fails token-risk / swap). Re-enable scan once fills stick.
         MARKET_SCAN_ENABLED: "false",
@@ -105,6 +135,7 @@ module.exports = {
         MARKET_SCAN_MIN_HOLDERS: "0",
         // Mid-TVL WETH/USDC 0.01% (~$360k) — capital-fit vs $8M mega 0.05%.
         WATCHLIST_POOLS: "0xb4CB800910B228ED3d0834cF79D697127BBB00e5",
+        BEAM_PM2_WATCHLIST_POOLS: "0xb4CB800910B228ED3d0834cF79D697127BBB00e5",
         CONFIDENCE_THRESHOLD: "0.55",
         MAX_OPEN_POSITIONS: "1",
         MAX_POSITIONS_PER_POOL: "1",
@@ -118,6 +149,7 @@ module.exports = {
         MIN_NATIVE_FOR_GAS_WEI: "800000000000000",
         // Free RPCs: fewer cycles/min beats paid throughput for canary fills.
         SCAN_INTERVAL_MS: "90000",
+        BEAM_PM2_SCAN_INTERVAL_MS: "90000",
         LIVE_ENTRY_V4_ENABLED: "true",
         LIVE_ENTRY_NATIVE_LEG_ONLY: "true",
         EXIT_ROUTE_PROOF_REQUIRED: "true",

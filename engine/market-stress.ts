@@ -58,6 +58,11 @@ function hourlyPricesOnGrid(
   }
   return prices;
 }
+interface PairwiseCorrelationAccum {
+  readonly sum: number;
+  readonly pairs: number;
+}
+
 function logReturns(prices: ReadonlyArray<number>): number[] {
   const rets: number[] = [];
   for (let i = 1; i < prices.length; i++) rets.push(Math.log(prices[i]! / prices[i - 1]!));
@@ -68,7 +73,7 @@ function meanPairwiseCorrelation(
   means: ReadonlyArray<number>,
   stds: ReadonlyArray<number>,
   minLength: number,
-): { sum: number; pairs: number } {
+): PairwiseCorrelationAccum {
   let sum = 0;
   let pairs = 0;
   for (let i = 0; i < aligned.length; i++) {

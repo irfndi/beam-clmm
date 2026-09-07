@@ -936,11 +936,14 @@ describe("program — idle-redeploy agent-overlay routing (P1)", () => {
 
 describe("program — idle-redeploy entry-backoff guard (P2)", () => {
   it("skips the redeploy when the pool has an active entry-failure backoff", async () => {
-    // Live mode so the normal ENTER's insufficient-funds failure arms the SAME
-    // entryFailureBackoff the redeploy guard consults. A $0 native SOL balance
-    // makes executeLive bail with "Insufficient SOL for gas" (an
+    // Live mode so the normal ENTER's token-balance failure arms the SAME
+    // entryFailureBackoff the redeploy guard consults. enterPosition fails
+    // with an "insufficient token balance" error (an
     // isInsufficientTokenBalanceError match) — arming the backoff THIS cycle,
-    // after the candidate was captured at decision-build time.
+    // after the candidate was captured at decision-build time. NOTE: the EVM
+    // native-gas gate ("Insufficient ETH for ENTER") intentionally does NOT
+    // arm this backoff (short retry, no 30m-6h freeze), so the test arms it
+    // via the mint/swap-leg failure instead of a $0 native balance.
     const usdcHoldings = new Map<string, { amountAtomic: bigint; decimals: number }>();
     usdcHoldings.set(STABLECOIN_MINT, { amountAtomic: 9_500_000_000n, decimals: 6 }); // $9,500 idle
     const layer = makeProgramLayer({
@@ -949,9 +952,13 @@ describe("program — idle-redeploy entry-backoff guard (P2)", () => {
         {
           hasWallet: () => true,
           getWalletHoldings: () => Effect.succeed(usdcHoldings),
-          // $0 native balance — the insufficient-funds ENTER failure arms the
-          // backoff this test asserts on.
-          getNativeBalance: () => Effect.succeed(0n),
+          // Sufficient native so the gas gate passes; the mint-leg failure
+          // below arms the backoff this test asserts on.
+          getNativeBalance: () => Effect.succeed(10_000_000_000_000_000_000n),
+          // Token-leg failure — arms entryFailureBackoff via
+          // isInsufficientTokenBalanceError (normal ENTER fails, redeploy skips).
+          enterPosition: () =>
+            Effect.fail(new Error("insufficient token balance for entry (test backoff arm)")),
         },
       ),
       gecko: { getPoolStats: () => Effect.succeed(makeGeckoStats()) },

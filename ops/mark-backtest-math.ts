@@ -108,6 +108,11 @@ function valuePerLiquidityForRange(
   return valuePerLiquidity;
 }
 
+interface HodlRangeAmounts {
+  readonly movingAmount: number;
+  readonly numeraireAmount: number;
+}
+
 /** Concentrated-range leg amounts at entry (mirrors computeEntryHodlLegsUsd formulas). */
 function hodlAmountsForRange(
   entryPriceUsd: number,
@@ -117,7 +122,7 @@ function hodlAmountsForRange(
   sLower: number,
   sUpper: number,
   sEntry: number,
-): { movingAmount: number; numeraireAmount: number } {
+): HodlRangeAmounts {
   const movingAmount =
     entryPriceUsd <= lowerPrice
       ? liquidity * (1 / sLower - 1 / sUpper)

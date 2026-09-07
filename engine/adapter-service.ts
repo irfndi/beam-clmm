@@ -438,6 +438,44 @@ function isNative(mint: string): boolean {
   return mint.toLowerCase() === NATIVE_MINT.toLowerCase();
 }
 
+function isTwoSidedEntryRequired(): boolean {
+  return process.env.ENTRY_REQUIRE_TWO_SIDED === "true";
+}
+
+function hasTwoSidedBalances(
+  bal0: bigint,
+  bal1: bigint,
+  amount0: bigint,
+  amount1: bigint,
+): boolean {
+  return bal0 >= amount0 && bal1 >= amount1;
+}
+
+function canUseNativeDeficit(nativeBal: bigint, oneLegNative: boolean): boolean {
+  return nativeBal > 0n && oneLegNative;
+}
+
+function isOneLegNativeLike(token0: string, token1: string): boolean {
+  return (
+    isNative(token0) ||
+    getAddress(token0) === WETH9 ||
+    isNative(token1) ||
+    getAddress(token1) === WETH9
+  );
+}
+
+function wrapableBalanceForToken(token: string, bal: bigint, nativeBal: bigint): bigint {
+  return getAddress(token) === WETH9 ? bal + nativeBal : bal;
+}
+
+function violatesTwoSidedRequirement(mode: string): boolean {
+  return isTwoSidedEntryRequired() && mode !== "two-sided";
+}
+
+function isUnpriceableEntry(amount0: bigint, amount1: bigint): boolean {
+  return amount0 <= 0n && amount1 <= 0n;
+}
+
 /** Uniswap tick → price of token1 in token0 (1.0001^tick). */
 function tickToPrice(tick: number): number {
   return Math.pow(1.0001, tick);
@@ -620,13 +658,22 @@ export function usableTickRangeOverride(
  * pulls the missing leg → SafeTransferFrom (STF) revert with zero balance.
  * Preserves the caller's width when possible; floors to one spacing.
  */
+export interface SingleSidedTickRange {
+  readonly tickLower: number;
+  readonly tickUpper: number;
+}
+export interface EntryFunding {
+  readonly mode: EntryDepositMode;
+  readonly amount0: bigint;
+  readonly amount1: bigint;
+}
 export function singleSidedTickRange(args: {
   readonly tickCurrent: number;
   readonly tickSpacing: number;
   readonly tickLower: number;
   readonly tickUpper: number;
   readonly side: "token0" | "token1";
-}): { readonly tickLower: number; readonly tickUpper: number } {
+}): SingleSidedTickRange {
   const { tickCurrent, tickSpacing, side } = args;
   const width = Math.max(tickSpacing, args.tickUpper - args.tickLower);
   if (side === "token0") {
@@ -654,37 +701,53 @@ export function singleSidedTickRange(args: {
  * frequently 429 the stateOverride sim; blocking ENTER on that starves the
  * canary even when the mint calldata is locally valid.
  */
+const DEFINITIVE_REVERT_MARKERS: ReadonlyArray<string> = [
+  "invariant failed",
+  "execution reverted",
+  "execution reverted:",
+  "tick_lower",
+  "tick_upper",
+  "tick_order",
+  "price_bounds",
+];
+
+const INCONCLUSIVE_RPC_MARKERS: ReadonlyArray<string> = [
+  "rpc request failed",
+  "http request failed",
+  "timeout",
+  "timed out",
+  "429",
+  "rate limit",
+  "too many requests",
+  "503",
+  "502",
+  "504",
+  "econnreset",
+  "fetch failed",
+  "missing or invalid parameters",
+  "method not found",
+  "state override",
+  "stateoverride",
+];
+
+function containsMarker(reasonLower: string, markers: ReadonlyArray<string>): boolean {
+  return markers.some((marker) => reasonLower.includes(marker));
+}
+
+function isDefinitiveSimRevert(reasonLower: string): boolean {
+  return containsMarker(reasonLower, DEFINITIVE_REVERT_MARKERS);
+}
+
+function isInconclusiveTransport(reasonLower: string): boolean {
+  return containsMarker(reasonLower, INCONCLUSIVE_RPC_MARKERS);
+}
+
 export function isInconclusiveRpcSimFailure(reason: string): boolean {
   const r = reason.toLowerCase();
-  if (
-    r.includes("invariant failed") ||
-    r.includes("execution reverted") ||
-    r.includes("execution reverted:") ||
-    r.includes("tick_lower") ||
-    r.includes("tick_upper") ||
-    r.includes("tick_order") ||
-    r.includes("price_bounds")
-  ) {
+  if (isDefinitiveSimRevert(r)) {
     return false;
   }
-  return (
-    r.includes("rpc request failed") ||
-    r.includes("http request failed") ||
-    r.includes("timeout") ||
-    r.includes("timed out") ||
-    r.includes("429") ||
-    r.includes("rate limit") ||
-    r.includes("too many requests") ||
-    r.includes("503") ||
-    r.includes("502") ||
-    r.includes("504") ||
-    r.includes("econnreset") ||
-    r.includes("fetch failed") ||
-    r.includes("missing or invalid parameters") ||
-    r.includes("method not found") ||
-    r.includes("state override") ||
-    r.includes("stateoverride")
-  );
+  return isInconclusiveTransport(r);
 }
 
 function sdkPercent(bps: number): Percent {
@@ -3281,9 +3344,9 @@ export const AdapterLive = Layer.effect(
         const activeTick = Number(core.slot0[1]);
         const bins: BinData[] = [];
         const lensBase = lensTargets.findIndex((p) => p.toLowerCase() === key) * WORDS_PER_POOL;
-        // SAFETY: lensResults is Aggregate3Result[] which structurally matches {success, returnData} for the lens branch; cast is safe.
         bins.push(
           ...collectBinsFromWords(
+            // oxlint-disable-next-line anti-slop/no-chained-type-assertions, anti-slop/require-safety-comment-for-type-assertion -- aggregate3Read returns the shared multicall result union; the lens branch structurally matches {success, returnData} by the allowFailure branch contract.
             lensResults as unknown as ReadonlyArray<{
               success: boolean;
               returnData: `0x${string}`;
@@ -4124,7 +4187,7 @@ export const AdapterLive = Layer.effect(
             const halfUsd = positionSizeUsd / 2;
             let amount0 = usdToAtomic(halfUsd, price0, state.token0Decimals);
             let amount1 = usdToAtomic(halfUsd, price1, state.token1Decimals);
-            const chooseSingleSided = (wrapable0: bigint, wrapable1: bigint) => {
+            const chooseSingleSided = (wrapable0: bigint, wrapable1: bigint): EntryFunding => {
               // Feasibility must use the FULL position size — checking the
               // half-size leftovers lets a wallet with ~½ ETH "qualify" for
               // single-sided-x then fail on the WETH wrap of the full size
@@ -4133,14 +4196,14 @@ export const AdapterLive = Layer.effect(
               const full1 = usdToAtomic(positionSizeUsd, price1, state.token1Decimals);
               if (full0 > 0n && wrapable0 >= full0) {
                 return {
-                  mode: "single-sided-x" as EntryDepositMode,
+                  mode: "single-sided-x",
                   amount0: full0,
                   amount1: 0n,
                 };
               }
               if (full1 > 0n && wrapable1 >= full1) {
                 return {
-                  mode: "single-sided-y" as EntryDepositMode,
+                  mode: "single-sided-y",
                   amount0: 0n,
                   amount1: full1,
                 };
@@ -4153,7 +4216,7 @@ export const AdapterLive = Layer.effect(
               nativeBal: bigint,
               wrapable0: bigint,
               wrapable1: bigint,
-            ) => {
+            ): Promise<EntryFunding> => {
               if (state.liquidity <= 0n) {
                 throw new Error(
                   `enterPosition: wallet can fund neither leg (pool has no liquidity: ${poolAddress})`,
@@ -4204,7 +4267,7 @@ export const AdapterLive = Layer.effect(
                 );
               }
               return fundedBySwap === "swapped"
-                ? { mode: "two-sided" as EntryDepositMode, amount0, amount1 }
+                ? { mode: "two-sided", amount0, amount1 }
                 : chooseSingleSided(wrapable0, wrapable1);
             };
             /**
@@ -4214,14 +4277,17 @@ export const AdapterLive = Layer.effect(
              * vol-gate immediately exits (live Base canary: USDC-only →
              * below-spot range → EXIT in ~5 min + 4h cooldown).
              */
-            const trySwapHeldToTwoSided = async (
+            const describeSwapHeldDeficit = (
               bal0Now: bigint,
               bal1Now: bigint,
-            ): Promise<{
-              mode: EntryDepositMode;
-              amount0: bigint;
-              amount1: bigint;
-            } | null> => {
+            ): {
+              tokenIn: string;
+              tokenOut: string;
+              missing: bigint;
+              spendable: bigint;
+              inPrice: number;
+              inDecimals: number;
+            } | null => {
               const need0 = amount0 > bal0Now ? amount0 - bal0Now : 0n;
               const need1 = amount1 > bal1Now ? amount1 - bal1Now : 0n;
               if (need0 > 0n && need1 > 0n) return null;
@@ -4234,80 +4300,144 @@ export const AdapterLive = Layer.effect(
               // Keep the held half for the mint; only spend surplus on the swap.
               if (heldBal <= heldNeededForOtherHalf) return null;
               const spendable = heldBal - heldNeededForOtherHalf;
-              // Size input from USD half (same halfUsd the mint wants), capped
-              // by spendable surplus.
               const inPrice = need0 > 0n ? price1 : price0;
               const inDecimals = need0 > 0n ? state.token1Decimals : state.token0Decimals;
-              let amountIn = usdToAtomic(halfUsd, inPrice, inDecimals);
+              return { tokenIn, tokenOut, missing, spendable, inPrice, inDecimals };
+            };
+            const sizeSwapHeldAmountIn = (
+              inPrice: number,
+              inDecimals: number,
+              spendable: bigint,
+            ): bigint => {
+              // Size input from USD half (same halfUsd the mint wants), capped
+              // by spendable surplus.
+              const sized = usdToAtomic(halfUsd, inPrice, inDecimals);
+              if (sized <= 0n) return 0n;
+              if (sized > spendable) return spendable;
+              return sized;
+            };
+            const bumpSwapHeldQuoteToCover = async (
+              tokenIn: string,
+              tokenOut: string,
+              startingAmountIn: bigint,
+              spendable: bigint,
+              missing: bigint,
+              outFloorFactor: bigint,
+            ): Promise<{
+              amountIn: bigint;
+              route: SwapRoute;
+              amountOutMinimum: bigint;
+            } | null> => {
+              let amountIn = startingAmountIn;
+              let quoted = await quotePair(tokenIn, tokenOut, amountIn);
+              let outAmountAtomic = quoted.outAmountAtomic;
+              let route = quoted.route;
+              if (outAmountAtomic <= 0n) {
+                logger.warn("enterPosition swap-held: quote returned 0", {
+                  tokenIn: tokenIn.slice(0, 8),
+                  amountIn: amountIn.toString(),
+                });
+                return null;
+              }
+              let amountOutMinimum = (outAmountAtomic * outFloorFactor) / 10_000n;
+              // Scale input until the slippage floor covers the mint deficit
+              // (USD half vs pool mid often diverge a few %).
+              let bumps = 0;
+              while (amountOutMinimum < missing && amountIn < spendable && bumps < 6) {
+                const scaled = (amountIn * missing) / outAmountAtomic + amountIn / 50n + 1n;
+                const next = scaled > spendable ? spendable : scaled;
+                if (next <= amountIn) break;
+                amountIn = next;
+                const requote = await quotePair(tokenIn, tokenOut, amountIn);
+                outAmountAtomic = requote.outAmountAtomic;
+                route = requote.route;
+                amountOutMinimum = (outAmountAtomic * outFloorFactor) / 10_000n;
+                bumps += 1;
+              }
+              if (amountOutMinimum < missing) {
+                logger.warn("enterPosition swap-held: minOut below deficit after bumps", {
+                  amountIn: amountIn.toString(),
+                  amountOutMinimum: amountOutMinimum.toString(),
+                  missing: missing.toString(),
+                  bumps,
+                });
+                return null;
+              }
+              return { amountIn, route, amountOutMinimum };
+            };
+            const executeSwapHeldWithRetry = async (
+              route: SwapRoute,
+              tokenIn: string,
+              tokenOut: string,
+              amountIn: bigint,
+              amountOutMinimum: bigint,
+              missing: bigint,
+            ): Promise<void> => {
+              // Skip a separate eth_call probe — free RPCs flake it and then we
+              // fell back to OOR single-sided. sendTx inside executeSwapViaRoute
+              // already dry-runs with inconclusive-RPC proceed semantics.
+              const runSwap = async (
+                r: SwapRoute,
+                inAmt: bigint,
+                minOut: bigint,
+              ): Promise<void> => {
+                await executeSwapViaRoute(r, tokenIn, tokenOut, inAmt, minOut);
+              };
+              try {
+                await runSwap(route, amountIn, amountOutMinimum);
+              } catch (e1) {
+                const msg1 = underlyingErrorMessage(e1);
+                if (!isInconclusiveRpcSimFailure(msg1)) throw e1;
+                await new Promise((r) => setTimeout(r, 1_500));
+                const retry = await quotePair(tokenIn, tokenOut, amountIn);
+                if (retry.outAmountAtomic <= 0n) throw e1;
+                const minOut =
+                  (retry.outAmountAtomic * (10_000n - BigInt(swapMintSlippageBps()))) / 10_000n;
+                if (minOut < missing) throw e1;
+                await runSwap(retry.route, amountIn, minOut);
+              }
+            };
+            const trySwapHeldToTwoSided = async (
+              bal0Now: bigint,
+              bal1Now: bigint,
+            ): Promise<EntryFunding | null> => {
+              const deficit = describeSwapHeldDeficit(bal0Now, bal1Now);
+              if (!deficit) return null;
+              const amountIn = sizeSwapHeldAmountIn(
+                deficit.inPrice,
+                deficit.inDecimals,
+                deficit.spendable,
+              );
               if (amountIn <= 0n) return null;
-              if (amountIn > spendable) amountIn = spendable;
               try {
                 // Free-RPC quotes go stale fast — give swap-held more room than
                 // the nested default (100 bps) so USDC→WETH can clear.
                 const slippageBps = Math.max(swapMintSlippageBps(), 200);
                 const outFloorFactor = 10_000n - BigInt(slippageBps);
-                let { outAmountAtomic, route } = await quotePair(tokenIn, tokenOut, amountIn);
-                if (outAmountAtomic <= 0n) {
-                  logger.warn("enterPosition swap-held: quote returned 0", {
-                    tokenIn: tokenIn.slice(0, 8),
-                    amountIn: amountIn.toString(),
-                  });
-                  return null;
-                }
-                let amountOutMinimum = (outAmountAtomic * outFloorFactor) / 10_000n;
-                // Scale input until the slippage floor covers the mint deficit
-                // (USD half vs pool mid often diverge a few %).
-                let bumps = 0;
-                while (amountOutMinimum < missing && amountIn < spendable && bumps < 6) {
-                  const scaled = (amountIn * missing) / outAmountAtomic + amountIn / 50n + 1n;
-                  const next = scaled > spendable ? spendable : scaled;
-                  if (next <= amountIn) break;
-                  amountIn = next;
-                  const requote = await quotePair(tokenIn, tokenOut, amountIn);
-                  outAmountAtomic = requote.outAmountAtomic;
-                  route = requote.route;
-                  amountOutMinimum = (outAmountAtomic * outFloorFactor) / 10_000n;
-                  bumps += 1;
-                }
-                if (amountOutMinimum < missing) {
-                  logger.warn("enterPosition swap-held: minOut below deficit after bumps", {
-                    amountIn: amountIn.toString(),
-                    amountOutMinimum: amountOutMinimum.toString(),
-                    missing: missing.toString(),
-                    bumps,
-                  });
-                  return null;
-                }
-                // Skip a separate eth_call probe — free RPCs flake it and then we
-                // fell back to OOR single-sided. sendTx inside executeSwapViaRoute
-                // already dry-runs with inconclusive-RPC proceed semantics.
-                const runSwap = async (
-                  r: typeof route,
-                  inAmt: bigint,
-                  minOut: bigint,
-                ): Promise<void> => {
-                  await executeSwapViaRoute(r, tokenIn, tokenOut, inAmt, minOut);
-                };
-                try {
-                  await runSwap(route, amountIn, amountOutMinimum);
-                } catch (e1) {
-                  const msg1 = underlyingErrorMessage(e1);
-                  if (!isInconclusiveRpcSimFailure(msg1)) throw e1;
-                  await new Promise((r) => setTimeout(r, 1_500));
-                  const retry = await quotePair(tokenIn, tokenOut, amountIn);
-                  if (retry.outAmountAtomic <= 0n) throw e1;
-                  const minOut =
-                    (retry.outAmountAtomic * (10_000n - BigInt(swapMintSlippageBps()))) / 10_000n;
-                  if (minOut < missing) throw e1;
-                  await runSwap(retry.route, amountIn, minOut);
-                }
+                const bumped = await bumpSwapHeldQuoteToCover(
+                  deficit.tokenIn,
+                  deficit.tokenOut,
+                  amountIn,
+                  deficit.spendable,
+                  deficit.missing,
+                  outFloorFactor,
+                );
+                if (!bumped) return null;
+                await executeSwapHeldWithRetry(
+                  bumped.route,
+                  deficit.tokenIn,
+                  deficit.tokenOut,
+                  bumped.amountIn,
+                  bumped.amountOutMinimum,
+                  deficit.missing,
+                );
                 logger.info("enterPosition swap-held-to-two-sided", {
-                  tokenIn: tokenIn.slice(0, 8),
-                  tokenOut: tokenOut.slice(0, 8),
-                  amountIn: amountIn.toString(),
-                  amountOutMinimum: amountOutMinimum.toString(),
+                  tokenIn: deficit.tokenIn.slice(0, 8),
+                  tokenOut: deficit.tokenOut.slice(0, 8),
+                  amountIn: bumped.amountIn.toString(),
+                  amountOutMinimum: bumped.amountOutMinimum.toString(),
                 });
-                return { mode: "two-sided" as EntryDepositMode, amount0, amount1 };
+                return { mode: "two-sided", amount0, amount1 };
               } catch (e) {
                 logger.warn("enterPosition swap-held-to-two-sided failed", {
                   error: underlyingErrorMessage(e).slice(0, 180),
@@ -4316,7 +4446,7 @@ export const AdapterLive = Layer.effect(
               }
             };
             // Fail closed on an unpriceable pool: a USD-sized entry needs both leg prices.
-            if (amount0 <= 0n && amount1 <= 0n) {
+            if (isUnpriceableEntry(amount0, amount1)) {
               throw new Error(
                 `enterPosition: cannot price pool legs (${state.token0}, ${state.token1})`,
               );
@@ -4326,16 +4456,12 @@ export const AdapterLive = Layer.effect(
               getBalance(state.token0, owner),
               getBalance(state.token1, owner),
             ]);
-            const wrapable0 = getAddress(state.token0) === WETH9 ? bal0 + nativeBal : bal0;
-            const wrapable1 = getAddress(state.token1) === WETH9 ? bal1 + nativeBal : bal1;
-            const oneLegNative =
-              isNative(state.token0) ||
-              getAddress(state.token0) === WETH9 ||
-              isNative(state.token1) ||
-              getAddress(state.token1) === WETH9;
-            let funding;
-            if (bal0 >= amount0 && bal1 >= amount1) {
-              funding = { mode: "two-sided" as EntryDepositMode, amount0, amount1 };
+            const wrapable0 = wrapableBalanceForToken(state.token0, bal0, nativeBal);
+            const wrapable1 = wrapableBalanceForToken(state.token1, bal1, nativeBal);
+            const oneLegNative = isOneLegNativeLike(state.token0, state.token1);
+            let funding: EntryFunding;
+            if (hasTwoSidedBalances(bal0, bal1, amount0, amount1)) {
+              funding = { mode: "two-sided", amount0, amount1 };
             } else {
               // 1) Swap surplus of the held leg → missing leg for an in-range
               //    two-sided mint (fee capture). 2) Native ETH deficit swap.
@@ -4343,11 +4469,11 @@ export const AdapterLive = Layer.effect(
               const swapped = await trySwapHeldToTwoSided(bal0, bal1);
               if (swapped) {
                 funding = swapped;
-              } else if (process.env.ENTRY_REQUIRE_TWO_SIDED === "true") {
+              } else if (isTwoSidedEntryRequired()) {
                 throw new Error(
                   "enterPosition: swap-held-to-two-sided failed; refusing OOR single-sided",
                 );
-              } else if (nativeBal > 0n && oneLegNative) {
+              } else if (canUseNativeDeficit(nativeBal, oneLegNative)) {
                 funding = await fundNativeDeficit(nativeBal, wrapable0, wrapable1);
               } else {
                 funding = chooseSingleSided(wrapable0, wrapable1);
@@ -4356,7 +4482,7 @@ export const AdapterLive = Layer.effect(
             // Live canary: ENTRY_REQUIRE_TWO_SIDED=true refuses OOR single-sided
             // (zero fees + vol-exit). Off by default so intentional single-sided
             // paths and unit tests keep working.
-            if (process.env.ENTRY_REQUIRE_TWO_SIDED === "true" && funding.mode !== "two-sided") {
+            if (violatesTwoSidedRequirement(funding.mode)) {
               throw new Error(
                 `enterPosition: two-sided funding required (got ${funding.mode}); refusing OOR single-sided`,
               );

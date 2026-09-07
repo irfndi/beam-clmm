@@ -2,6 +2,17 @@
 
 All notable changes to Beam are documented here.
 
+## [0.1.12] — 2026-09-07
+
+### Fixed
+
+- Base live canary: anchor rebalance clock on ENTER, held-pool pre-filter bypass, portable pm2 launcher with CHALLENGE_MODE guard
+- Live fee canary: two-sided in-range entries, Base SwapRouter fork-7f encoding, honest EXIT USD marks
+- Wallet holdings lowercase normalization, snapshot native dedup, fee-density warn silence
+- Risk: gate TVL-drop EXIT on feed outages (feed-dead guard)
+- Enter: modeled-fee pools face env volume bar, not measured 0.8; Gecko fallback re-enabled
+- Ops audit fixes: BEAM_PM2_* shadow pins, Base-first setup/docs, agent-rebalance 0-clock fallback, replay volume-bar boundary parity
+
 ## [0.1.11] — 2026-08-08
 
 ### Added

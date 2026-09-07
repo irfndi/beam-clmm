@@ -645,6 +645,8 @@ async function updateFromBundle(
 type ReleaseChannel = "stable" | "beta" | "dev" | "canary";
 
 function isReleaseChannel(value: string): value is ReleaseChannel {
+  // SAFETY: the literal tuple is widened only to run Array.includes against the
+  // runtime string; the type predicate re-narrows on the true branch.
   return (["stable", "beta", "dev", "canary"] as ReadonlyArray<string>).includes(value);
 }
 

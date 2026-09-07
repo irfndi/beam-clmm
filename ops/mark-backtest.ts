@@ -594,6 +594,7 @@ const hasDrawdownColumn = (() => {
 
 const hasStatsSourceColumn = (() => {
   try {
+    // SAFETY: PRAGMA table_info always returns rows with a text `name` column.
     const cols = db.query("PRAGMA table_info(pool_snapshots)").all() as SchemaRow[];
     return cols.some((row) => row.name === "stats_source");
   } catch {
@@ -603,6 +604,7 @@ const hasStatsSourceColumn = (() => {
 
 const hasUsdMetadataColumns = (() => {
   try {
+    // SAFETY: PRAGMA table_info always returns rows with a text `name` column.
     const cols = db.query("PRAGMA table_info(pool_snapshots)").all() as SchemaRow[];
     const names = new Set(cols.map((row) => row.name));
     return [
@@ -719,6 +721,8 @@ function cliConfig(config: Config): Config {
 const snapshotsByPool = new Map<string, Snapshot[]>();
 for (const pool of poolAddresses) snapshotsByPool.set(pool, loadSnapshots(pool));
 
+// SAFETY: this GROUP BY query selects exactly `source` (coalesced text) and
+// `count` (integer) columns matching the inline row contract.
 const coverageRows = hasStatsSourceColumn
   ? (db
       .query(
@@ -726,6 +730,8 @@ const coverageRows = hasStatsSourceColumn
       )
       .all(startMs, endMs) as Array<{ readonly source: string; readonly count: number }>)
   : [];
+// SAFETY: SELECT COUNT(*) always returns one row with an integer `count` column
+// matching the inline row contract.
 const totalSnapshotCount = hasStatsSourceColumn
   ? coverageRows.reduce((sum, row) => sum + row.count, 0)
   : Number(

@@ -912,9 +912,13 @@ function isTrackedPositionGone(
   return !!positionPubKey && !liveByPubkey.has(positionPubKey);
 }
 
+interface OwedAmounts {
+  readonly owedX: bigint;
+  readonly owedY: bigint;
+}
 function owedAmounts(
   onChain: { readonly tokensOwedX?: bigint; readonly tokensOwedY?: bigint } | undefined,
-): { owedX: bigint; owedY: bigint } {
+): OwedAmounts {
   return { owedX: onChain?.tokensOwedX ?? 0n, owedY: onChain?.tokensOwedY ?? 0n };
 }
 
@@ -1916,6 +1920,160 @@ function readNativeBalanceGate(
   });
 }
 
+type LiveEnterRangePlan =
+  | { readonly ok: false; readonly error: string }
+  | {
+      readonly ok: true;
+      readonly floored: { readonly lowerBinId: number; readonly upperBinId: number };
+    };
+
+function resolveLiveEnterRange(
+  strategy: StrategyApi,
+  pool: ExecuteLivePool,
+  entryRangeHalfWidth: number | undefined,
+  entryMinRangePct: number | undefined,
+): LiveEnterRangePlan {
+  const recommended = strategy.recommendBinRange(
+    pool.activeBinId,
+    pool.binStep,
+    entryRangeHalfWidth,
+  );
+  // A pool trading at the tick-domain edge with a wide volatility range
+  // clamps to a degenerate range (lower >= upper) — entering it is
+  // impossible; fail cleanly instead of letting the SDK invariant crash.
+  if (recommended.lowerBinId >= recommended.upperBinId) {
+    return {
+      ok: false,
+      error: `ENTER skipped: pool at tick-domain edge — range ${recommended.lowerBinId}-${recommended.upperBinId} is degenerate`,
+    };
+  }
+  // Fee-Truth range floor: the minted range must span at least
+  // ENTRY_MIN_RANGE_PCT (default 20%) around the current price.
+  const floored = floorRangeToMinPct(
+    pool.activeBinId,
+    pool.binStep,
+    recommended.lowerBinId,
+    recommended.upperBinId,
+    entryMinRangePct ?? 0.2,
+  );
+  return { ok: true, floored };
+}
+
+function failLiveEnterOperation(
+  db: DbApi,
+  entryOperation: ExecutionOperationRecord | null | undefined,
+  error: string,
+): Effect.Effect<void, never, never> {
+  if (!entryOperation) return Effect.void;
+  return updateExecutionOperation(db, entryOperation, {
+    status: "failed",
+    error,
+    txSignature: null,
+  });
+}
+
+type LiveEnterResult = Effect.Success<ReturnType<AdapterApi["enterPosition"]>>;
+
+function buildLiveEnterPosition(
+  decision: AgentDecision,
+  pool: ExecuteLivePool,
+  minted: LiveEnterResult,
+  floored: { readonly lowerBinId: number; readonly upperBinId: number },
+  signalTimestamp: number | undefined,
+  signalSnapshotId: number | undefined,
+): PositionRecord {
+  return {
+    positionId: minted.positionPubKey,
+    poolAddress: decision.poolAddress,
+    positionPubKey: minted.positionPubKey,
+    // Basis = ACTUAL deployed legs, not the USD target: v3 pool math
+    // pulls both legs from the liquidity, so a $10.12 target can
+    // deploy ~$5 (the pool's computed amounts, capped by the desired
+    // min leg). Comparing the target against the deployed value read a
+    // phantom ~50% loss and tripped the stop-loss on a healthy
+    // position (WETH/LEMON, 2026-08-14).
+    depositedUsd: minted.amountXUsd + minted.amountYUsd,
+    currentValueUsd: minted.amountXUsd + minted.amountYUsd,
+    tokenXSymbol: pool.tokenXSymbol,
+    tokenYSymbol: pool.tokenYSymbol,
+    activeBinId: pool.activeBinId,
+    lowerBinId: minted.lowerBinId ?? floored.lowerBinId,
+    upperBinId: minted.upperBinId ?? floored.upperBinId,
+    timestamp: Date.now(),
+    outOfRangeSince: null,
+    oorCycleCount: 0,
+    lastFeeClaimAt: Date.now(),
+    trailingStopThreshold: null,
+    highestValueUsd: null,
+    // Anchor the rebalance/vol-exit clock at entry — lastRebalanceAt=0 made
+    // timeSinceRebal ≈ epoch age and let vol-exit fire on the first noisy cycle.
+    lastRebalanceAt: Date.now(),
+    paperExitedAt: null,
+    entrySignalTimestamp: signalTimestamp ?? null,
+    entrySignalSnapshotId: signalSnapshotId ?? null,
+    entryPriceUsd: pool.currentPrice,
+    // Entry legs come from the adapter's executed deposit: 50/50 for a
+    // two-sided entry, full-size/0 for a single-sided one.
+    entryAmountXUsd: minted.amountXUsd,
+    entryAmountYUsd: minted.amountYUsd,
+    cumulativeFeesClaimedUsd: 0,
+    cumulativeRewardsClaimedUsd: 0,
+    closedAt: null,
+    realizedPnlUsd: null,
+    positionMode: decision.positionMode ?? null,
+    tpLadderJson: decision.tpLadderJson ?? null,
+    invalidationStopPrice: decision.invalidationStopPrice ?? null,
+  };
+}
+
+function persistLiveEnterSuccess(
+  db: DbApi,
+  trackedPositions: Map<string, PositionRecord>,
+  decision: AgentDecision,
+  pool: ExecuteLivePool,
+  pos: PositionRecord,
+  minted: LiveEnterResult,
+  positionSizeUsd: number,
+  entryStrategyMode: EntryStrategyMode,
+  entryOperation: ExecutionOperationRecord | null | undefined,
+): Effect.Effect<void, never, never> {
+  return Effect.gen(function* () {
+    trackedPositions.set(pos.positionId, pos);
+    yield* persist(`savePosition ${pos.positionId}`, db.savePosition(pos));
+    yield* db
+      .savePositionEvent({
+        id: randomUUID(),
+        poolAddress: decision.poolAddress,
+        positionPubKey: pos.positionPubKey,
+        positionId: pos.positionId,
+        event: "ENTER",
+        valueUsd: positionSizeUsd,
+        feesUsd: null,
+        price: pool.currentPrice,
+        metadata: {
+          lowerBinId: pos.lowerBinId,
+          upperBinId: pos.upperBinId,
+          txSignature: minted.txSignature,
+          depositMode: minted.depositMode,
+          strategyMode: entryStrategyMode,
+        },
+        createdAt: Date.now(),
+      })
+      .pipe(Effect.catch(() => Effect.void));
+    if (entryOperation) {
+      yield* db
+        .saveExecutionOperation({
+          ...entryOperation,
+          positionId: pos.positionId,
+          status: "confirmed",
+          txSignature: minted.txSignature,
+          updatedAt: Date.now(),
+        })
+        .pipe(Effect.catch(() => Effect.void));
+    }
+  });
+}
+
 function executeLiveEnterMint(
   deps: ExecuteLiveDeps,
   decision: AgentDecision,
@@ -1929,46 +2087,18 @@ function executeLiveEnterMint(
   return Effect.gen(function* () {
     if (positionSizeUsd === undefined) {
       const error = "ENTER decision missing position size";
-      if (entryOperation) {
-        yield* updateExecutionOperation(db, entryOperation, {
-          status: "failed",
-          error,
-          txSignature: null,
-        });
-      }
+      yield* failLiveEnterOperation(db, entryOperation, error);
       return { executed: false, error };
     }
-    const recommended = strategy.recommendBinRange(
-      pool.activeBinId,
-      pool.binStep,
-      entryRangeHalfWidth,
-    );
-    // A pool trading at the tick-domain edge with a wide volatility range
-    // clamps to a degenerate range (lower >= upper) — entering it is
-    // impossible; fail cleanly instead of letting the SDK invariant crash.
-    if (recommended.lowerBinId >= recommended.upperBinId) {
-      const error = `ENTER skipped: pool at tick-domain edge — range ${recommended.lowerBinId}-${recommended.upperBinId} is degenerate`;
-      if (entryOperation) {
-        yield* updateExecutionOperation(db, entryOperation, {
-          status: "failed",
-          error,
-          txSignature: null,
-        });
-      }
+    const plan = resolveLiveEnterRange(strategy, pool, entryRangeHalfWidth, deps.entryMinRangePct);
+    if (!plan.ok) {
+      yield* failLiveEnterOperation(db, entryOperation, plan.error);
       return {
         executed: false,
-        error,
+        error: plan.error,
       };
     }
-    // Fee-Truth range floor: the minted range must span at least
-    // ENTRY_MIN_RANGE_PCT (default 20%) around the current price.
-    const floored = floorRangeToMinPct(
-      pool.activeBinId,
-      pool.binStep,
-      recommended.lowerBinId,
-      recommended.upperBinId,
-      deps.entryMinRangePct ?? 0.2,
-    );
+    const floored = plan.floored;
     const enterResult = yield* adapter
       .enterPosition(
         decision.poolAddress,
@@ -2000,90 +2130,32 @@ function executeLiveEnterMint(
         }),
       );
     if (enterResult.result) {
-      const pos: PositionRecord = {
-        positionId: enterResult.result.positionPubKey,
-        poolAddress: decision.poolAddress,
-        positionPubKey: enterResult.result.positionPubKey,
-        // Basis = ACTUAL deployed legs, not the USD target: v3 pool math
-        // pulls both legs from the liquidity, so a $10.12 target can
-        // deploy ~$5 (the pool's computed amounts, capped by the desired
-        // min leg). Comparing the target against the deployed value read a
-        // phantom ~50% loss and tripped the stop-loss on a healthy
-        // position (WETH/LEMON, 2026-08-14).
-        depositedUsd: enterResult.result.amountXUsd + enterResult.result.amountYUsd,
-        currentValueUsd: enterResult.result.amountXUsd + enterResult.result.amountYUsd,
-        tokenXSymbol: pool.tokenXSymbol,
-        tokenYSymbol: pool.tokenYSymbol,
-        activeBinId: pool.activeBinId,
-        lowerBinId: enterResult.result.lowerBinId ?? floored.lowerBinId,
-        upperBinId: enterResult.result.upperBinId ?? floored.upperBinId,
-        timestamp: Date.now(),
-        outOfRangeSince: null,
-        oorCycleCount: 0,
-        lastFeeClaimAt: Date.now(),
-        trailingStopThreshold: null,
-        highestValueUsd: null,
-        // Anchor the rebalance/vol-exit clock at entry — lastRebalanceAt=0 made
-        // timeSinceRebal ≈ epoch age and let vol-exit fire on the first noisy cycle.
-        lastRebalanceAt: Date.now(),
-        paperExitedAt: null,
-        entrySignalTimestamp: signalTimestamp ?? null,
-        entrySignalSnapshotId: signalSnapshotId ?? null,
-        entryPriceUsd: pool.currentPrice,
-        // Entry legs come from the adapter's executed deposit: 50/50 for a
-        // two-sided entry, full-size/0 for a single-sided one.
-        entryAmountXUsd: enterResult.result.amountXUsd,
-        entryAmountYUsd: enterResult.result.amountYUsd,
-        cumulativeFeesClaimedUsd: 0,
-        cumulativeRewardsClaimedUsd: 0,
-        closedAt: null,
-        realizedPnlUsd: null,
-        positionMode: decision.positionMode ?? null,
-        tpLadderJson: decision.tpLadderJson ?? null,
-        invalidationStopPrice: decision.invalidationStopPrice ?? null,
-      };
-      trackedPositions.set(pos.positionId, pos);
-      yield* persist(`savePosition ${pos.positionId}`, db.savePosition(pos));
-      yield* db
-        .savePositionEvent({
-          id: randomUUID(),
-          poolAddress: decision.poolAddress,
-          positionPubKey: pos.positionPubKey,
-          positionId: pos.positionId,
-          event: "ENTER",
-          valueUsd: positionSizeUsd,
-          feesUsd: null,
-          price: pool.currentPrice,
-          metadata: {
-            lowerBinId: pos.lowerBinId,
-            upperBinId: pos.upperBinId,
-            txSignature: enterResult.result.txSignature,
-            depositMode: enterResult.result.depositMode,
-            strategyMode: entryStrategyMode,
-          },
-          createdAt: Date.now(),
-        })
-        .pipe(Effect.catch(() => Effect.void));
-      if (entryOperation) {
-        yield* db
-          .saveExecutionOperation({
-            ...entryOperation,
-            positionId: pos.positionId,
-            status: "confirmed",
-            txSignature: enterResult.result.txSignature,
-            updatedAt: Date.now(),
-          })
-          .pipe(Effect.catch(() => Effect.void));
-      }
+      const pos = buildLiveEnterPosition(
+        decision,
+        pool,
+        enterResult.result,
+        floored,
+        signalTimestamp,
+        signalSnapshotId,
+      );
+      yield* persistLiveEnterSuccess(
+        db,
+        trackedPositions,
+        decision,
+        pool,
+        pos,
+        enterResult.result,
+        positionSizeUsd,
+        entryStrategyMode,
+        entryOperation,
+      );
       return { executed: true, error: undefined };
     }
-    if (entryOperation) {
-      yield* updateExecutionOperation(db, entryOperation, {
-        status: "failed",
-        error: enterResult.error ?? "ENTER execution failed",
-        txSignature: null,
-      });
-    }
+    yield* failLiveEnterOperation(
+      db,
+      entryOperation,
+      enterResult.error ?? "ENTER execution failed",
+    );
     return { executed: false, error: enterResult.error };
   });
 }
@@ -3480,10 +3552,11 @@ function buildPoolDegradationOutcome(input: {
   return null;
 }
 
-function describeW15Alert(signals: DepegLiquiditySignals): {
+interface W15AlertDescription {
   readonly reasons: string;
   readonly type: "liquidity_drain" | "stablecoin_depeg";
-} {
+}
+function describeW15Alert(signals: DepegLiquiditySignals): W15AlertDescription {
   const reasons: string[] = [];
   if (signals.depeg !== null) {
     reasons.push(`stablecoin deviation ${(signals.depeg.deviationUsd * 100).toFixed(2)}%`);
@@ -3511,11 +3584,15 @@ function isAdoptedExternal(
   return positionPubKey != null && depositedUsd <= 0;
 }
 
+interface RebalanceDrift {
+  readonly positionCenter: number;
+  readonly driftPct: number;
+}
 function computeRebalanceDrift(input: {
   readonly activeBinId: number;
   readonly lowerBinId: number;
   readonly upperBinId: number;
-}): { readonly positionCenter: number; readonly driftPct: number } {
+}): RebalanceDrift {
   const positionCenter = (input.lowerBinId + input.upperBinId) / 2;
   const positionHalfWidth = (input.upperBinId - input.lowerBinId) / 2;
   return {
@@ -3608,13 +3685,17 @@ function decideRebalanceGasHold(input: {
   return null;
 }
 
+interface RebalanceTake {
+  readonly take: boolean;
+  readonly force: boolean;
+}
 function shouldTakeRebalance(input: {
   readonly adoptedExternal: boolean;
   readonly netBenefitUsd: number;
   readonly minNetBenefitUsd: number;
   readonly recoveryProb: number;
   readonly forceThreshold: number;
-}): { readonly take: boolean; readonly force: boolean } {
+}): RebalanceTake {
   const force = input.recoveryProb <= input.forceThreshold;
   return {
     take: !input.adoptedExternal && (input.netBenefitUsd > input.minNetBenefitUsd || force),
@@ -4938,7 +5019,8 @@ export const program = Effect.gen(function* () {
             );
           }),
         );
-        const usdcHolding = holdings.get(STABLECOIN_MINT.toLowerCase()) ?? holdings.get(STABLECOIN_MINT);
+        const usdcHolding =
+          holdings.get(STABLECOIN_MINT.toLowerCase()) ?? holdings.get(STABLECOIN_MINT);
         idleCapitalUsd =
           usdcHolding === undefined
             ? 0
@@ -6380,7 +6462,7 @@ export const program = Effect.gen(function* () {
       if (persistedCooldowns === null) return;
       try {
         for (const [pool, until] of Object.entries(
-          parseJsonOr<Record<string, unknown>>(persistedCooldowns, {}),
+          parseJsonOr<Record<string, number>>(persistedCooldowns, {}),
         )) {
           const untilMs = typeof until === "number" ? until : Number(until);
           if (Number.isFinite(untilMs) && untilMs > Date.now()) {
@@ -6404,7 +6486,7 @@ export const program = Effect.gen(function* () {
       if (persistedFirstSeen === null) return;
       try {
         for (const [pool, seenAt] of Object.entries(
-          parseJsonOr<Record<string, unknown>>(persistedFirstSeen, {}),
+          parseJsonOr<Record<string, number>>(persistedFirstSeen, {}),
         )) {
           const seenMs = typeof seenAt === "number" ? seenAt : Number(seenAt);
           if (Number.isFinite(seenMs) && seenMs > 0) {
@@ -7614,7 +7696,12 @@ export const program = Effect.gen(function* () {
             preFilterPassed,
           };
         });
-      const measured = yield* metricsStage(pool, binArray, previousSnapshot, snapshots.feedDeadTvlRead);
+      const measured = yield* metricsStage(
+        pool,
+        binArray,
+        previousSnapshot,
+        snapshots.feedDeadTvlRead,
+      );
       if (measured.halt !== null) return measured.halt;
       const metrics = measured.metrics;
 
@@ -8805,8 +8892,7 @@ export const program = Effect.gen(function* () {
         if (
           (metrics.feeIlRatioKnown ? feeIlRatio > evolvedThresholds.minFeeIlRatio * 1.5 : true) &&
           metrics.volumeAuthenticityKnown &&
-          volumeAuth >=
-            (metrics.feeIlRatioKnown ? 0.8 : evolvedThresholds.volumeAuthThreshold) &&
+          volumeAuth >= (metrics.feeIlRatioKnown ? 0.8 : evolvedThresholds.volumeAuthThreshold) &&
           metrics.binUtilizationKnown &&
           binUtilization > 0.4 &&
           pool.tvlUsd > config.minPoolTvlUsd * 2
@@ -10077,6 +10163,7 @@ export const program = Effect.gen(function* () {
                                 const capitalGate = evaluateAgentRebalanceCapitalGates({
                                   now,
                                   lastRebalanceAt: gatePos.lastRebalanceAt ?? 0,
+                                  positionTimestamp: gatePos.timestamp,
                                   minRebalanceIntervalMs: config.minRebalanceIntervalMs,
                                   oorGraceExpired,
                                   rebalanceGasCostNative: config.rebalanceGasCostNative,

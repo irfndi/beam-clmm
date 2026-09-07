@@ -156,9 +156,10 @@ function handleDbFlag(next: string | undefined, out: CliArgs): number {
   return 1;
 }
 
-const CLI_FLAG_HANDLERS: Readonly<
-  Record<string, (next: string | undefined, out: CliArgs) => number>
-> = {
+interface CliFlagHandlers {
+  readonly [flag: string]: (next: string | undefined, out: CliArgs) => number;
+}
+const CLI_FLAG_HANDLERS: Readonly<CliFlagHandlers> = {
   "--days": handleDaysFlag,
   "--min-tvl": handleMinTvlFlag,
   "--challenge": handleChallengeFlag,
@@ -201,6 +202,105 @@ interface HistoryTick {
   binArray: BinArray;
 }
 
+function mockSeedFromPool(poolAddress: string): number {
+  let seed = 0x811c9dc5;
+  for (const char of poolAddress) seed = Math.imul(seed ^ char.charCodeAt(0), 0x01000193);
+  return seed;
+}
+
+function createMockRandom(initialSeed: number): () => number {
+  let seed = initialSeed;
+  return (): number => {
+    seed = Math.imul(seed ^ (seed >>> 16), 0x45d9f3b);
+    seed = Math.imul(seed ^ (seed >>> 16), 0x45d9f3b);
+    return ((seed ^ (seed >>> 16)) >>> 0) / 0x1_0000_0000;
+  };
+}
+
+interface MockRegimeResolution {
+  readonly regime: "calm" | "noisy";
+  readonly researchCalm: boolean;
+  readonly researchNoisy: boolean;
+}
+
+function resolveMockRegime(
+  statsSource: PoolState["statsSource"],
+  regimeOpt: "calm" | "noisy" | undefined,
+): MockRegimeResolution {
+  const regime = regimeOpt ?? (statsSource === "datapi" ? "calm" : "noisy");
+  const researchCalm = statsSource === "datapi" && regime === "calm";
+  const researchNoisy = statsSource === "datapi" && regime === "noisy";
+  return { regime, researchCalm, researchNoisy };
+}
+
+interface MockRegimeConstants {
+  readonly volatility: number;
+  readonly jumpProb: number;
+  readonly jumpScale: number;
+  readonly tvlDrift: number;
+}
+
+function mockRegimeConstants(researchCalm: boolean, researchNoisy: boolean): MockRegimeConstants {
+  const volatility = researchCalm ? 0.001 : researchNoisy ? 0.006 : 0.015;
+  const jumpProb = researchCalm ? 0 : researchNoisy ? 0.01 : 0.02;
+  const jumpScale = researchCalm ? 0 : researchNoisy ? 0.04 : 0.08;
+  const tvlDrift = researchCalm ? 0.002 : researchNoisy ? 0.01 : 0.02;
+  return { volatility, jumpProb, jumpScale, tvlDrift };
+}
+
+interface MockVolatilityTrend {
+  readonly volatility: number;
+  readonly trend: number;
+}
+
+function rollMockVolatilityTrend(
+  random: () => number,
+  researchCalm: boolean,
+  researchNoisy: boolean,
+): MockVolatilityTrend {
+  const volatility = researchCalm
+    ? 0.0005 + random() * 0.0015
+    : researchNoisy
+      ? 0.003 + random() * 0.008
+      : 0.005 + random() * 0.025;
+  const trend = researchCalm
+    ? 0
+    : researchNoisy
+      ? (random() - 0.5) * 0.002
+      : (random() - 0.5) * 0.004;
+  return { volatility, trend };
+}
+
+function stepMockActiveBin(
+  activeBin: number,
+  trend: number,
+  shock: number,
+  random: () => number,
+  researchCalm: boolean,
+  researchNoisy: boolean,
+): number {
+  if (researchCalm) {
+    // Mean-revert active bin toward 5000 so wide ranges stay in-range.
+    return Math.round(activeBin + (5000 - activeBin) * 0.15 + (random() - 0.5) * 2);
+  }
+  if (researchNoisy) {
+    return activeBin + Math.floor(trend * 120 + shock * 60 + (random() - 0.5) * 6);
+  }
+  return activeBin + Math.floor(trend * 200 + shock * 100 + (random() - 0.5) * 10);
+}
+
+interface MockVolumeFees {
+  readonly volume24hUsd: number;
+  readonly fees24hUsd: number;
+}
+
+function mockVolumeFees(tvl: number, random: () => number, researchCalm: boolean): MockVolumeFees {
+  // Calm volume/fee bands that can clear volume-auth + fee/IL when measured.
+  const volume24hUsd = tvl * (researchCalm ? 0.2 + random() * 0.15 : 0.12 + random() * 0.18);
+  const fees24hUsd = volume24hUsd * (researchCalm ? 0.008 : 0.0035);
+  return { volume24hUsd, fees24hUsd };
+}
+
 export function generateMockHistory(
   poolAddress: string,
   days: number,
@@ -217,13 +317,7 @@ export function generateMockHistory(
   // Default stays heuristic (fabricated → ENTER gates off). Autoresearch passes
   // statsSource: "datapi" so candidate gates can be exercised on a fixed seed.
   const statsSource = options?.statsSource ?? "heuristic";
-  let seed = 0x811c9dc5;
-  for (const char of poolAddress) seed = Math.imul(seed ^ char.charCodeAt(0), 0x01000193);
-  const random = (): number => {
-    seed = Math.imul(seed ^ (seed >>> 16), 0x45d9f3b);
-    seed = Math.imul(seed ^ (seed >>> 16), 0x45d9f3b);
-    return ((seed ^ (seed >>> 16)) >>> 0) / 0x1_0000_0000;
-  };
+  const random = createMockRandom(mockSeedFromPool(poolAddress));
 
   let tvl = startTvl;
   let price = 100;
@@ -231,28 +325,18 @@ export function generateMockHistory(
   let trend = 0;
   // v1 calm plateaued (~+$30 all trials). v2 "noisy" forces range skill without
   // the full heuristic stress path (that path is for regression, not research).
-  const regime = options?.regime ?? (statsSource === "datapi" ? "calm" : "noisy");
-  const researchCalm = statsSource === "datapi" && regime === "calm";
-  const researchNoisy = statsSource === "datapi" && regime === "noisy";
-  let volatility = researchCalm ? 0.001 : researchNoisy ? 0.006 : 0.015;
-  const jumpProb = researchCalm ? 0 : researchNoisy ? 0.01 : 0.02;
-  const jumpScale = researchCalm ? 0 : researchNoisy ? 0.04 : 0.08;
-  const tvlDrift = researchCalm ? 0.002 : researchNoisy ? 0.01 : 0.02;
+  const { researchCalm, researchNoisy } = resolveMockRegime(statsSource, options?.regime);
+  const regimeParams = mockRegimeConstants(researchCalm, researchNoisy);
+  const { jumpProb, jumpScale, tvlDrift } = regimeParams;
+  let volatility = regimeParams.volatility;
 
   for (let i = 0; i < ticks; i++) {
     const timestamp = Date.now() - (ticks - i) * intervalMs;
 
     if (i % 720 === 0) {
-      volatility = researchCalm
-        ? 0.0005 + random() * 0.0015
-        : researchNoisy
-          ? 0.003 + random() * 0.008
-          : 0.005 + random() * 0.025;
-      trend = researchCalm
-        ? 0
-        : researchNoisy
-          ? (random() - 0.5) * 0.002
-          : (random() - 0.5) * 0.004;
+      const rolled = rollMockVolatilityTrend(random, researchCalm, researchNoisy);
+      volatility = rolled.volatility;
+      trend = rolled.trend;
     }
 
     if (random() < jumpProb) {
@@ -265,18 +349,9 @@ export function generateMockHistory(
     // Keep TVL above typical 2× minPoolTvl candidate floor for research runs.
     tvl = Math.max(startTvl * 0.9, tvl * (1 + (random() - 0.49) * tvlDrift));
     price *= 1 + trend + shock;
-    if (researchCalm) {
-      // Mean-revert active bin toward 5000 so wide ranges stay in-range.
-      activeBin = Math.round(activeBin + (5000 - activeBin) * 0.15 + (random() - 0.5) * 2);
-    } else if (researchNoisy) {
-      activeBin += Math.floor(trend * 120 + shock * 60 + (random() - 0.5) * 6);
-    } else {
-      activeBin += Math.floor(trend * 200 + shock * 100 + (random() - 0.5) * 10);
-    }
+    activeBin = stepMockActiveBin(activeBin, trend, shock, random, researchCalm, researchNoisy);
 
-    // Calm volume/fee bands that can clear volume-auth + fee/IL when measured.
-    const volume24hUsd = tvl * (researchCalm ? 0.2 + random() * 0.15 : 0.12 + random() * 0.18);
-    const fees24hUsd = volume24hUsd * (researchCalm ? 0.008 : 0.0035);
+    const { volume24hUsd, fees24hUsd } = mockVolumeFees(tvl, random, researchCalm);
 
     const pool: PoolState = {
       address: poolAddress,
@@ -320,8 +395,6 @@ export function generateMockHistory(
 
   return history;
 }
-
-// ─── Snapshot loading (replay source) ─────────────────────────────────────────
 
 async function loadSnapshots(
   dbPath: string,
@@ -402,11 +475,14 @@ function tallyReplayDecision(
   decisionTally.set(key, (decisionTally.get(key) ?? 0) + 1);
 }
 
-function summarizeReturns(samples: ReadonlyArray<{ value: number; intervalMs: number }>): {
-  mean: number;
-  variance: number;
-  averageIntervalMs: number;
-} {
+interface ReturnsSummary {
+  readonly mean: number;
+  readonly variance: number;
+  readonly averageIntervalMs: number;
+}
+function summarizeReturns(
+  samples: ReadonlyArray<{ value: number; intervalMs: number }>,
+): ReturnsSummary {
   if (samples.length === 0) return { mean: 0, variance: 0, averageIntervalMs: 10 * 60 * 1000 };
   const mean = samples.reduce((sum, sample) => sum + sample.value, 0) / samples.length;
   const variance =

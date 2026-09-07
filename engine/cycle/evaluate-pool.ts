@@ -162,12 +162,18 @@ const DEFAULT_SIGNAL_WEIGHTS: SignalWeights = {
   updatedAt: 0,
 };
 
+interface ReplayTrailingExit {
+  readonly decision: AgentDecision | null;
+  readonly trailingBreaches: number;
+  readonly stopLossBreaches: number;
+}
+
 function replayExitWithTrailing(
   input: ReplayEvaluationInput,
   poolAddress: string,
   trailingBreaches: number,
   stopLossBreaches: number,
-): { decision: AgentDecision | null; trailingBreaches: number; stopLossBreaches: number } {
+): ReplayTrailingExit {
   const position = input.position;
   if (!position) return { decision: null, trailingBreaches, stopLossBreaches };
   let tB = trailingBreaches;
@@ -256,9 +262,7 @@ function replayGateExit(
     // against the previous snapshot; replay metrics carry no previous row, so
     // the zero-volume/zero-fees shape is the portable signal.)
     const feedDead =
-      metrics.pool.volume24hUsd <= 0 &&
-      metrics.pool.fees24hUsd <= 0 &&
-      metrics.tvlVelocity < 0;
+      metrics.pool.volume24hUsd <= 0 && metrics.pool.fees24hUsd <= 0 && metrics.tvlVelocity < 0;
     if (!feedDead) {
       return {
         action: "EXIT",
@@ -312,6 +316,9 @@ function replayEnterAllocation(
     input.signalWeights ?? DEFAULT_SIGNAL_WEIGHTS,
   );
   if (entryScore <= input.weightedEntryScoreThreshold) return null;
+  // SAFETY: allocationArgs is built field-by-field from ReplayEvaluationInput
+  // with the same shapes evaluatePerPoolAllocation consumes; the assertion
+  // only names that evaluated parameter contract.
   const allocationArgs = {
     proposedDepositUsd: input.proposedSizeUsd,
     portfolioValueUsd: input.portfolioValueUsd,
@@ -348,7 +355,7 @@ function isPoolCandidateGateBlocked(
   return (
     !(input.metrics.feeIlRatioKnown ? feeIlRatio > input.minFeeIlRatio * 1.5 : true) ||
     !input.metrics.volumeAuthenticityKnown ||
-    volumeAuth <= volumeBar ||
+    volumeAuth < volumeBar ||
     !input.metrics.binUtilizationKnown ||
     input.metrics.binUtilization <= 0.4 ||
     input.poolTvlUsd <= input.minPoolTvlUsd * 2

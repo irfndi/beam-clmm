@@ -942,7 +942,7 @@ const MIGRATIONS: ReadonlyArray<Migration> = [
     up(db) {
       // v22 and earlier constrained destination_asset to 'SOL' (Solana era).
       // SQLite cannot alter a CHECK constraint — rebuild the table. The new
-      // CHECK accepts the native gas token of Robinhood Chain (ETH).
+      // CHECK accepts the native gas token (ETH) on EVM chains (Base, Robinhood Chain).
       const existing = db
         .query("SELECT sql FROM sqlite_master WHERE type='table' AND name='settlement_jobs'")
         .get() as { sql: string } | undefined;

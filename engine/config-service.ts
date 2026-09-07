@@ -770,12 +770,18 @@ function liveConfigIssues(
   ];
 }
 
+interface FeeDensityBounds {
+  readonly minMs: number;
+  readonly highPct: number;
+  readonly lowPct: number;
+}
+
 function resolveFeeDensityBounds(
   oorCooldownMs: number,
   minRaw: number,
   highRaw: number,
   lowRaw: number,
-): { minMs: number; highPct: number; lowPct: number } {
+): FeeDensityBounds {
   const minInverted = minRaw >= oorCooldownMs;
   if (minInverted) {
     logger.warn(
@@ -864,7 +870,7 @@ const loadConfig = Effect.gen(function* () {
 
   // WALLET_PRIVATE_KEY (env / .env) takes precedence; otherwise fall back to the local
   // keystore written by `beam wallet generate|import`, so a generated wallet actually
-  // enables live trading (engine/adapter-service.ts decodes this base58 key).
+  // enables live trading (engine/adapter-service.ts decodes this hex key).
   const walletPrivateKey = yield* Config.string("WALLET_PRIVATE_KEY").pipe(
     Effect.orElseSucceed(() => loadKeystoreSecretKeyHex() ?? ""),
   );

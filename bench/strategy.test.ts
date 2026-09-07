@@ -336,9 +336,7 @@ describe("isFeedDeadTvlRead", () => {
   });
 
   it("flags the 2026-09-07 Krystal outage (TVL $348k→$727, zero activity)", () => {
-    expect(
-      isFeedDeadTvlRead({ ...live, tvlUsd: 727, volume24hUsd: 0, fees24hUsd: 0 }),
-    ).toBe(true);
+    expect(isFeedDeadTvlRead({ ...live, tvlUsd: 727, volume24hUsd: 0, fees24hUsd: 0 })).toBe(true);
   });
 
   it("flags a symbol flip even when economics look alive", () => {
@@ -352,8 +350,8 @@ describe("isFeedDeadTvlRead", () => {
   });
 
   it("passes a small dip under the 50% collapse line", () => {
-    expect(
-      isFeedDeadTvlRead({ ...live, tvlUsd: 300_000, volume24hUsd: 0, fees24hUsd: 0 }),
-    ).toBe(false);
+    expect(isFeedDeadTvlRead({ ...live, tvlUsd: 300_000, volume24hUsd: 0, fees24hUsd: 0 })).toBe(
+      false,
+    );
   });
 });

@@ -7,6 +7,8 @@ import type { ReplayEvaluationInput } from "../engine/cycle/evaluate-pool.js";
 const metrics: PoolMetrics = {
   // Active pool: nonzero volume/fees so TVL-velocity reads model real flights,
   // not feed outages (zero-activity collapses HOLD — see feed-outage test).
+  // SAFETY: the replay harness only reads tvlUsd/fees24hUsd/volume24hUsd here;
+  // remaining PoolState fields are never inspected on this path.
   pool: { tvlUsd: 150_000, fees24hUsd: 300, volume24hUsd: 30_000 } as PoolState,
   // SAFETY: replay tests do not inspect bin contents.
   binArray: {} as PoolMetrics["binArray"],
@@ -374,6 +376,8 @@ describe("evaluateReplayPool", () => {
       ...base,
       metrics: {
         ...metrics,
+        // SAFETY: the replay harness only reads tvlUsd/fees24hUsd/volume24hUsd here;
+        // remaining PoolState fields are never inspected on this path.
         pool: { tvlUsd: 727, fees24hUsd: 0, volume24hUsd: 0 } as PoolState,
         tvlVelocity: -0.998,
       },

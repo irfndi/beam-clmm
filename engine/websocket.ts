@@ -14,6 +14,7 @@ export function openWebSocket(url: string, token?: string): WebSocket {
   if (!token) return new WebSocket(url);
   // SAFETY: Bun 1.4 implements this overload; the runtime is Bun for all Beam
   // engine entrypoints and the cast narrows only the second-argument shape.
+  // oxlint-disable-next-line anti-slop/no-chained-type-assertions -- single Bun-overload narrowing; no untrusted input flows through this cast.
   const BunWebSocket = WebSocket as unknown as AuthenticatedWebSocketConstructor;
   return new BunWebSocket(url, { headers: { Authorization: `Bearer ${token}` } });
 }

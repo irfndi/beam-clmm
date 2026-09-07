@@ -160,12 +160,14 @@ export const GECKO_NETWORK_SLUG = DEPLOYMENT.geckoNetworkSlug;
 export const DEFAULT_GECKO_SLUG = DEPLOYMENT.geckoNetworkSlug;
 export const LIVE_ENTRY_V4_ENABLED_CHAIN = DEPLOYMENT.liveEntryV4Enabled;
 
-export const ROBINHOOD_CHAIN = {
+export const ACTIVE_CHAIN = {
   id: DEPLOYMENT.chainId,
   name: DEPLOYMENT.name,
   nativeCurrency: DEPLOYMENT.nativeCurrency,
   rpcUrls: { default: { http: [DEFAULT_RPC] } },
 } as const;
+/** Legacy alias — prefer ACTIVE_CHAIN (this is the active chain, not always Robinhood). */
+export const ROBINHOOD_CHAIN = ACTIVE_CHAIN;
 
 /** List every registered chain (for setup/CLI surfaces). */
 export function listChains(): ReadonlyArray<{

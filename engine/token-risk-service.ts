@@ -101,6 +101,13 @@ export function parseTokenRiskEntry(raw: unknown): {
 
 // ─── Fetcher ─────────────────────────────────────────────────────────────────
 
+type JupiterRequestHeaders = Record<string, string>;
+
+interface CacheWarmSplit {
+  readonly result: Map<string, TokenRiskSignal>;
+  readonly toFetch: string[];
+}
+
 export async function fetchTokenRisks(
   mints: ReadonlyArray<string>,
   options: {
@@ -111,7 +118,7 @@ export async function fetchTokenRisks(
 ): Promise<Map<string, TokenRiskSignal>> {
   const fetchImpl = options.fetchImpl ?? fetch;
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-  const headers: { "x-api-key"?: string } = {};
+  const headers: JupiterRequestHeaders = {};
   // ONLY send the key when a non-empty value is configured — an empty
   // `x-api-key` header can be treated as an invalid key and 401; its absence
   // is the supported keyless path.
@@ -208,7 +215,7 @@ function splitCacheWarmAndFetch(
   mints: ReadonlyArray<string>,
   now: number,
   ttlMs: number,
-): { result: Map<string, TokenRiskSignal>; toFetch: string[] } {
+): CacheWarmSplit {
   const result = new Map<string, TokenRiskSignal>();
   const toFetch: string[] = [];
   for (const mint of mints) {

@@ -260,6 +260,8 @@ export function acquireLock(
   const resolved = resolveExistingWithRetry(first.existing, lockfilePath);
   if ("acquired" in resolved) return resolved;
   const existing = resolved.existing;
+  // SAFETY: checkLiveLock/checkUnparseableLock return non-null unless existing is a
+  // well-formed stale lock, so existing matches LockfileData on this path.
   return (
     checkLiveLock(existing) ??
     checkUnparseableLock(existing) ??

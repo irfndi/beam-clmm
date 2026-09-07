@@ -282,6 +282,8 @@ export async function fetchKrystalUniverse(
       logger.warn("Krystal universe response malformed");
       return staleOrEmptyUniverse(now);
     }
+    // SAFETY: Array.isArray narrows result to an array; elements are still
+    // untrusted JSON and fillUniverseFromResult validates each entry.
     const pools = fillUniverseFromResult(result as unknown[]);
     universeCache = { fetchedAt: Date.now(), pools };
     pruneStaleLastKnown();

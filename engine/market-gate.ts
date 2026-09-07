@@ -183,7 +183,22 @@ export function capitalFitSizeFactor(tvlUsd: number, targetTvlUsd: number): numb
  * Prefer higher LP fee tiers (more $/volume for the same turnover). Uses the
  * implied fee rate fees24h/volume24h when volume > 0.
  */
-export function feeTierScoreFactor(pool: DiscoveredPool): { factor: number; note: string } {
+interface FeeTierScoreFactor {
+  readonly factor: number;
+  readonly note: string;
+}
+
+interface StableLegScoreFactor {
+  readonly factor: number;
+  readonly note: string | null;
+}
+
+interface MarketPoolScore {
+  readonly score: number;
+  readonly notes: string[];
+}
+
+export function feeTierScoreFactor(pool: DiscoveredPool): FeeTierScoreFactor {
   const implied = pool.volume24hUsd > 0 ? pool.fees24hUsd / pool.volume24hUsd : 0;
   if (implied >= 0.009) return { factor: 1.25, note: "fee-tier~1%" };
   if (implied >= 0.0025) return { factor: 1.1, note: "fee-tier~0.3%" };
@@ -194,10 +209,7 @@ export function feeTierScoreFactor(pool: DiscoveredPool): { factor: number; note
 const STABLE_SYMBOLS = new Set(["USDC", "USDBC", "USDT", "DAI", "USD+", "USDG", "PYUSD"]);
 
 /** Mild boost for stable-leg books — more likely to pass token-risk + swap. */
-export function stableLegScoreFactor(pool: DiscoveredPool): {
-  factor: number;
-  note: string | null;
-} {
+export function stableLegScoreFactor(pool: DiscoveredPool): StableLegScoreFactor {
   const x = (pool.tokenXSymbol ?? "").toUpperCase();
   const y = (pool.tokenYSymbol ?? "").toUpperCase();
   if (STABLE_SYMBOLS.has(x) || STABLE_SYMBOLS.has(y)) {
@@ -210,7 +222,7 @@ export function marketPoolScore(
   pool: DiscoveredPool,
   feeAprPct: number,
   config: Pick<MarketGateConfig, "rankMode" | "targetTvlUsd">,
-): { score: number; notes: string[] } {
+): MarketPoolScore {
   const sizeFactor =
     config.rankMode === "depth"
       ? depthLiquidityFactor(pool.tvlUsd)

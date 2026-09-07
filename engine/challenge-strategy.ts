@@ -76,11 +76,18 @@ function challengeBaseScore(yieldPct: number, dd: number): number {
   return yieldPct * ddFactor;
 }
 
-function challengeStableLegInfo(pool: PoolState): {
-  hasStableLeg: boolean;
-  factor: number;
-  reason: string | null;
-} {
+interface ChallengeStableLegInfo {
+  readonly hasStableLeg: boolean;
+  readonly factor: number;
+  readonly reason: string | null;
+}
+
+interface ChallengeFeeTierInfo {
+  readonly factor: number;
+  readonly reason: string;
+}
+
+function challengeStableLegInfo(pool: PoolState): ChallengeStableLegInfo {
   const xSymbol = pool.tokenXSymbol?.toUpperCase() ?? "";
   const ySymbol = pool.tokenYSymbol?.toUpperCase() ?? "";
   const hasStableLeg = STABLE_SYMBOLS.has(xSymbol) || STABLE_SYMBOLS.has(ySymbol);
@@ -88,7 +95,7 @@ function challengeStableLegInfo(pool: PoolState): {
   return { hasStableLeg: false, factor: 1, reason: null };
 }
 
-function challengeFeeTierInfo(pool: PoolState): { factor: number; reason: string } {
+function challengeFeeTierInfo(pool: PoolState): ChallengeFeeTierInfo {
   // Fee tier weight: high-fee pools dominate yield; sub-0.05% are churn races.
   // The adapter stores tickSpacing in binStep; map v3/v4 fee tiers from
   // fees24hUsd/volume24hUsd as a sanity check, else assume mid-tier.

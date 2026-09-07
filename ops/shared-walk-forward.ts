@@ -334,15 +334,17 @@ function closeWalkForwardPositions(
   }
 }
 
+interface WalkForwardBuildEventsResult {
+  readonly events: readonly SharedPortfolioEvent[];
+  readonly acceptedEntries: number;
+  readonly coverageMs: number;
+}
+
 function buildEvents(
   snapshotsByPool: ReadonlyMap<string, readonly SharedWalkForwardSnapshot[]>,
   strategy: SharedWalkForwardStrategy,
   split: SharedWalkForwardSplit,
-): {
-  readonly events: readonly SharedPortfolioEvent[];
-  readonly acceptedEntries: number;
-  readonly coverageMs: number;
-} {
+): WalkForwardBuildEventsResult {
   const states = new Map<string, PoolState>();
   const events: SharedPortfolioEvent[] = [];
   const book: WalkForwardBook = {

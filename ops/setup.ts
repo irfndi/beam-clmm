@@ -26,9 +26,12 @@ async function main(): Promise<void> {
     {
       rpcUrl: () =>
         p.text({
-          message: "Robinhood Chain RPC URL",
-          placeholder: "https://rpc.mainnet.chain.robinhood.com",
-          initialValue: process.env.ROBINHOOD_RPC_URL ?? "https://rpc.mainnet.chain.robinhood.com",
+          message: "EVM RPC URL (Base default)",
+          placeholder: "https://mainnet.base.org",
+          initialValue:
+            process.env.BEAM_BASE_RPC_URL ??
+            process.env.ROBINHOOD_RPC_URL ??
+            "https://mainnet.base.org",
         }),
 
       rpcFallbackUrl: () =>
@@ -70,12 +73,12 @@ async function main(): Promise<void> {
 
   const rpcUrl = stringAnswer(answers.rpcUrl);
   if (!rpcUrl.trim()) {
-    throw new Error("A Robinhood Chain RPC URL is required");
+    throw new Error("An EVM RPC URL is required");
   }
 
   const envContent = [
-    "# RPC providers",
-    `ROBINHOOD_RPC_URL=${rpcUrl}`,
+    "# RPC providers (Base-first; ROBINHOOD_RPC_URL legacy fallback)",
+    `BEAM_BASE_RPC_URL=${rpcUrl}`,
     `RPC_FALLBACK_URLS=${stringAnswer(answers.rpcFallbackUrl)}`,
     "",
     "# Strategy",
