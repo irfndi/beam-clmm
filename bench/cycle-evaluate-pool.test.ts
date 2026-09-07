@@ -5,8 +5,9 @@ import type { PoolMetrics, PoolState, Position } from "../engine/types.js";
 import type { ReplayEvaluationInput } from "../engine/cycle/evaluate-pool.js";
 
 const metrics: PoolMetrics = {
-  // SAFETY: this fixture supplies only the PoolState fields read by replay evaluation.
-  pool: { tvlUsd: 150_000, fees24hUsd: 0, volume24hUsd: 0 } as PoolState,
+  // Active pool: nonzero volume/fees so TVL-velocity reads model real flights,
+  // not feed outages (zero-activity collapses HOLD — see feed-outage test).
+  pool: { tvlUsd: 150_000, fees24hUsd: 300, volume24hUsd: 30_000 } as PoolState,
   // SAFETY: replay tests do not inspect bin contents.
   binArray: {} as PoolMetrics["binArray"],
   tvlVelocity: 0,
@@ -341,6 +342,22 @@ describe("evaluateReplayPool", () => {
 
     expect(result.decision.action).toBe("EXIT");
     expect(result.decision.reasoning).toContain("capital protection exit");
+  });
+  it("HOLDS on a zero-activity TVL collapse (dead feed, not a flight)", () => {
+    // 2026-09-07: Krystal zeroed TVL/volume/fees and relabeled USDC→TOKEN,
+    // firing a false live EXIT. A real flight still prints volume.
+    const result = evaluateReplayPool({
+      ...base,
+      metrics: {
+        ...metrics,
+        pool: { tvlUsd: 727, fees24hUsd: 0, volume24hUsd: 0 } as PoolState,
+        tvlVelocity: -0.998,
+      },
+      position: heldPosition,
+      openPositions: [heldPosition],
+    });
+
+    expect(result.decision.action).toBe("HOLD");
   });
 
   it("exits a dust position below the dust threshold", () => {

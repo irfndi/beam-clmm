@@ -251,12 +251,22 @@ function replayGateExit(
     };
   }
   if (metrics.tvlVelocity < -input.tvlDropExitPct) {
-    return {
-      action: "EXIT",
-      poolAddress,
-      confidence: 0.85,
-      reasoning: `TVL dropped ${(Math.abs(metrics.tvlVelocity) * 100).toFixed(1)}% — capital protection exit`,
-    };
+    // Feed-outage parity with live: a zero-activity read is a dead feed, not a
+    // flight — HOLD. (Live additionally checks symbol flips and TVL collapse
+    // against the previous snapshot; replay metrics carry no previous row, so
+    // the zero-volume/zero-fees shape is the portable signal.)
+    const feedDead =
+      metrics.pool.volume24hUsd <= 0 &&
+      metrics.pool.fees24hUsd <= 0 &&
+      metrics.tvlVelocity < 0;
+    if (!feedDead) {
+      return {
+        action: "EXIT",
+        poolAddress,
+        confidence: 0.85,
+        reasoning: `TVL dropped ${(Math.abs(metrics.tvlVelocity) * 100).toFixed(1)}% — capital protection exit`,
+      };
+    }
   }
   if (metrics.volumeAuthenticityKnown && metrics.volumeAuthenticity < input.volumeAuthThreshold) {
     return {

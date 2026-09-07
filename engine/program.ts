@@ -19,6 +19,7 @@ import {
 } from "./risk-service.js";
 import {
   computeBinVolatilityStddev,
+  isFeedDeadTvlRead,
   isHighVolatility,
   recommendBinRangeForVolatility,
   recommendAsymmetricBinRange,
@@ -7128,7 +7129,6 @@ export const program = Effect.gen(function* () {
       yield* backdateLaunchRugStage(pool);
 
       // TVL velocity + IL price-drift need a previous reference point, so the
-      // previous snapshot must be read BEFORE persisting the current one.
       const snapshotStage = (
         pool: PoolState,
       ): Effect.Effect<
@@ -7136,6 +7136,7 @@ export const program = Effect.gen(function* () {
           readonly previousSnapshots: ReadonlyArray<PoolSnapshot>;
           readonly previousSnapshot: PoolSnapshot | undefined;
           readonly w15Signals: DepegLiquiditySignals;
+          readonly feedDeadTvlRead: boolean;
         },
         Error
       > =>
@@ -7154,52 +7155,76 @@ export const program = Effect.gen(function* () {
               ? previousSnapshots[previousSnapshots.length - 1]
               : undefined;
           const w15Signals = detectDepegAndLiquidityDrain(pool, previousSnapshots, config);
+          // Feed-outage gate: a dead Krystal read (symbol flip or TVL collapse
+          // with zero volume/fees) must not poison the snapshot baseline nor
+          // feed the TVL-drop EXIT — HOLD on last-good instead.
+          const feedDeadTvlRead =
+            previousSnapshot !== undefined &&
+            isFeedDeadTvlRead({
+              tvlUsd: pool.tvlUsd,
+              prevTvlUsd: previousSnapshot.tvlUsd,
+              volume24hUsd: pool.volume24hUsd,
+              fees24hUsd: pool.fees24hUsd,
+              tokenXSymbol: pool.tokenXSymbol,
+              tokenYSymbol: pool.tokenYSymbol,
+              prevTokenXSymbol: previousSnapshot.tokenXSymbol,
+              prevTokenYSymbol: previousSnapshot.tokenYSymbol,
+            });
+          if (feedDeadTvlRead) {
+            logger.warn("Feed-dead TVL read — keeping last-good snapshot, skipping EXIT input", {
+              pool: poolAddress,
+              tvlUsd: pool.tvlUsd,
+              prevTvlUsd: previousSnapshot.tvlUsd,
+            });
+          }
 
           // Persist a snapshot every cycle (both paper and live): TVL velocity and
           // the TVL-drop EXIT are dead code without per-cycle history. The full
           // bin-array detail is only stored under ENABLE_SNAPSHOT_CAPTURE (paper)
           // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
           // as before; routine rows stay lightweight.
-          yield* db
-            .saveSnapshot({
-              poolAddress,
-              timestamp: snapshotTimestamp,
-              activeBinId: pool.activeBinId,
-              tvlUsd: pool.tvlUsd,
-              volume24hUsd: pool.volume24hUsd,
-              fees24hUsd: pool.fees24hUsd,
-              apr: pool.apr,
-              currentPrice: pool.currentPrice,
-              binStep: pool.binStep,
-              tokenXAddress: pool.tokenX,
-              tokenYAddress: pool.tokenY,
-              tokenXDecimals: pool.tokenXDecimals,
-              tokenYDecimals: pool.tokenYDecimals,
-              tokenXPriceUsd: pool.tokenXPriceUsd,
-              tokenYPriceUsd: pool.tokenYPriceUsd,
-              statsSource: pool.statsSource,
-              drawdown24h: pool.drawdown24h ?? null,
-              tokenXSymbol: pool.tokenXSymbol,
-              tokenYSymbol: pool.tokenYSymbol,
-              binArray:
-                config.enableSnapshotCapture && config.paperTrading
-                  ? { ...binArray, binStep: pool.binStep }
-                  : {
-                      lowerBinId: binArray.lowerBinId,
-                      upperBinId: binArray.upperBinId,
-                      bins: [],
-                      activeBinId: binArray.activeBinId,
-                      binStep: pool.binStep,
-                      reservesKnown: binArray.reservesKnown,
-                    },
-            })
-            .pipe(
-              Effect.catch((err) => {
-                console.warn("Snapshot save failed", { pool: poolAddress, err });
-                return Effect.void;
-              }),
-            );
-          return { previousSnapshots, previousSnapshot, w15Signals };
+          if (!feedDeadTvlRead) {
+            yield* db
+              .saveSnapshot({
+                poolAddress,
+                timestamp: snapshotTimestamp,
+                activeBinId: pool.activeBinId,
+                tvlUsd: pool.tvlUsd,
+                volume24hUsd: pool.volume24hUsd,
+                fees24hUsd: pool.fees24hUsd,
+                apr: pool.apr,
+                currentPrice: pool.currentPrice,
+                binStep: pool.binStep,
+                tokenXAddress: pool.tokenX,
+                tokenYAddress: pool.tokenY,
+                tokenXDecimals: pool.tokenXDecimals,
+                tokenYDecimals: pool.tokenYDecimals,
+                tokenXPriceUsd: pool.tokenXPriceUsd,
+                tokenYPriceUsd: pool.tokenYPriceUsd,
+                statsSource: pool.statsSource,
+                drawdown24h: pool.drawdown24h ?? null,
+                tokenXSymbol: pool.tokenXSymbol,
+                tokenYSymbol: pool.tokenYSymbol,
+                binArray:
+                  config.enableSnapshotCapture && config.paperTrading
+                    ? { ...binArray, binStep: pool.binStep }
+                    : {
+                        lowerBinId: binArray.lowerBinId,
+                        upperBinId: binArray.upperBinId,
+                        bins: [],
+                        activeBinId: binArray.activeBinId,
+                        binStep: pool.binStep,
+                        reservesKnown: binArray.reservesKnown,
+                      },
+              })
+              .pipe(
+                Effect.catch((err) => {
+                  console.warn("Snapshot save failed", { pool: poolAddress, err });
+                  return Effect.void;
+                }),
+              );
+          }
+          return { previousSnapshots, previousSnapshot, w15Signals, feedDeadTvlRead };
         });
       const snapshots = yield* snapshotStage(pool);
       const previousSnapshots = snapshots.previousSnapshots;
@@ -7496,6 +7521,7 @@ export const program = Effect.gen(function* () {
         pool: PoolState,
         binArray: BinArray,
         previousSnapshot: PoolSnapshot | undefined,
+        feedDeadTvlRead: boolean,
       ): Effect.Effect<
         | { readonly halt: ReadonlyArray<AgentDecision> }
         | {
@@ -7513,10 +7539,14 @@ export const program = Effect.gen(function* () {
         Error
       > =>
         Effect.gen(function* () {
+          // Feed-dead reads carry last-good baseline protection: pin velocity to
+          // 0 so the TVL-drop EXIT cannot fire on a dead feed (snapshot write
+          // already skipped — baseline stays clean).
+          const baselineTvlUsd = feedDeadTvlRead ? pool.tvlUsd : (previousSnapshot?.tvlUsd ?? 0);
           const metrics = strategy.computeMetrics(
             pool,
             binArray,
-            previousSnapshot?.tvlUsd ?? 0,
+            baselineTvlUsd,
             previousSnapshot
               ? {
                   previousPrice: previousSnapshot.currentPrice,
@@ -7584,7 +7614,7 @@ export const program = Effect.gen(function* () {
             preFilterPassed,
           };
         });
-      const measured = yield* metricsStage(pool, binArray, previousSnapshot);
+      const measured = yield* metricsStage(pool, binArray, previousSnapshot, snapshots.feedDeadTvlRead);
       if (measured.halt !== null) return measured.halt;
       const metrics = measured.metrics;
 

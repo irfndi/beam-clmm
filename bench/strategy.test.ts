@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   DLMMStrategy,
+  isFeedDeadTvlRead,
   recommendStrategyMode as recommendStrategy,
 } from "../engine/strategy-service.js";
 import type { PoolState, BinArray } from "../engine/types.js";
@@ -315,5 +316,44 @@ describe("DLMMStrategy", () => {
         "curve",
       );
     });
+  });
+});
+
+describe("isFeedDeadTvlRead", () => {
+  const live = {
+    tvlUsd: 348_193,
+    prevTvlUsd: 348_193,
+    volume24hUsd: 4_480_227,
+    fees24hUsd: 336,
+    tokenXSymbol: "WETH",
+    tokenYSymbol: "USDC",
+    prevTokenXSymbol: "WETH",
+    prevTokenYSymbol: "USDC",
+  };
+
+  it("passes a healthy read", () => {
+    expect(isFeedDeadTvlRead(live)).toBe(false);
+  });
+
+  it("flags the 2026-09-07 Krystal outage (TVL $348k→$727, zero activity)", () => {
+    expect(
+      isFeedDeadTvlRead({ ...live, tvlUsd: 727, volume24hUsd: 0, fees24hUsd: 0 }),
+    ).toBe(true);
+  });
+
+  it("flags a symbol flip even when economics look alive", () => {
+    expect(isFeedDeadTvlRead({ ...live, tokenYSymbol: "TOKEN" })).toBe(true);
+  });
+
+  it("passes a real flight that still prints volume", () => {
+    expect(
+      isFeedDeadTvlRead({ ...live, tvlUsd: 34_819, volume24hUsd: 9_000_000, fees24hUsd: 700 }),
+    ).toBe(false);
+  });
+
+  it("passes a small dip under the 50% collapse line", () => {
+    expect(
+      isFeedDeadTvlRead({ ...live, tvlUsd: 300_000, volume24hUsd: 0, fees24hUsd: 0 }),
+    ).toBe(false);
   });
 });

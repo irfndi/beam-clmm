@@ -101,6 +101,39 @@ function computeConcentrationMultiplier(binArray: BinArray): number {
     MAX_CONCENTRATION_MULTIPLIER,
   );
 }
+/**
+ * Feed-outage guard for the TVL-drop capital-protection EXIT.
+ * 2026-09-07: Krystal relabeled USDC→TOKEN with TVL $348k→$727 and zero
+ * volume/fees, firing a false EXIT (realized −$0.11 + gas). A real flight
+ * still prints volume; zero-volume + zero-fees is a dead feed — HOLD for a
+ * better read. A symbol flip on the same pool is corruption, not a rebrand.
+ */
+export function isFeedDeadTvlRead(input: {
+  readonly tvlUsd: number;
+  readonly prevTvlUsd: number;
+  readonly volume24hUsd: number;
+  readonly fees24hUsd: number;
+  readonly tokenXSymbol?: string;
+  readonly tokenYSymbol?: string;
+  readonly prevTokenXSymbol?: string | null;
+  readonly prevTokenYSymbol?: string | null;
+}): boolean {
+  const flip = (cur?: string, prev?: string | null): boolean =>
+    cur !== undefined &&
+    cur !== "" &&
+    prev !== undefined &&
+    prev !== null &&
+    prev !== "" &&
+    cur.toLowerCase() !== prev.toLowerCase();
+  if (flip(input.tokenXSymbol, input.prevTokenXSymbol)) return true;
+  if (flip(input.tokenYSymbol, input.prevTokenYSymbol)) return true;
+  return (
+    input.prevTvlUsd > 0 &&
+    input.tvlUsd < input.prevTvlUsd * 0.5 &&
+    input.volume24hUsd <= 0 &&
+    input.fees24hUsd <= 0
+  );
+}
 
 /**
  * Estimated daily impermanent loss in USD for liquidity in this pool.
