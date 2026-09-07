@@ -131,8 +131,11 @@ module.exports = {
         VOLATILITY_ADAPTIVE_RANGES: "false",
         ENTER_MIN_7D_FEE_OVER_GAS: "0",
         // Canary: don't sit idle 4h after an OOR/vol exit; re-enter in-range.
-        OOR_COOLDOWN_MS: "0",
+        // OOR=1 (not 0): fee-density floor must sit strictly below OOR or
+        // ConfigService warns every cycle; 1ms behaves like 0.
+        OOR_COOLDOWN_MS: "1",
         REPEAT_OOR_COOLDOWN_MS: "0",
+        FEE_DENSITY_COOLDOWN_MIN_MS: "0",
         // Wider vol gate — tickSpacing=1 noise + lastRebalanceAt=0 was churning
         // overnight (σ≈15–22 vs 12). Hold through normal WETH tick chatter.
         VOLATILITY_EXIT_STDDEV: "40",

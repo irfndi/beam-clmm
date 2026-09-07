@@ -4937,7 +4937,7 @@ export const program = Effect.gen(function* () {
             );
           }),
         );
-        const usdcHolding = holdings.get(STABLECOIN_MINT);
+        const usdcHolding = holdings.get(STABLECOIN_MINT.toLowerCase()) ?? holdings.get(STABLECOIN_MINT);
         idleCapitalUsd =
           usdcHolding === undefined
             ? 0
@@ -6524,6 +6524,9 @@ export const program = Effect.gen(function* () {
               });
             }
             for (const [mint, bal] of holdings.entries()) {
+              // ponytail: native already logged as "(native ETH)" above — skip the
+              // 0x0000… holdings entry so the snapshot doesn't double-log it.
+              if (mint.toLowerCase() === NATIVE_MINT.toLowerCase()) continue;
               breakdown.push({
                 mint: `${mint.slice(0, 8)}...`,
                 amount: (Number(bal.amountAtomic) / 10 ** bal.decimals).toFixed(

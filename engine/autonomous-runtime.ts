@@ -703,13 +703,13 @@ export function sweepOrphanSettlements(
       );
     const candidates = [...holdings.entries()].filter(
       ([mint, holding]) =>
-        mint !== NATIVE_MINT &&
+        mint.toLowerCase() !== NATIVE_MINT.toLowerCase() &&
         // USDG is the engine's funding/entry stablecoin, not an orphan: on a
         // fresh wallet no position backs it yet, and sweeping it to ETH would
         // (a) pay slippage + gas and (b) strand the stable leg WETH-paired
         // entries need (WETH != native ETH). Always keep the settlement
         // stablecoin out of the orphan bucket.
-        mint !== STABLECOIN_MINT &&
+        mint.toLowerCase() !== STABLECOIN_MINT.toLowerCase() &&
         holding.amountAtomic > 0n,
     );
     if (candidates.length === 0) return [];

@@ -3759,8 +3759,10 @@ export const AdapterLive = Layer.effect(
               getBalance(NATIVE_MINT, walletAddress),
               getBalance(STABLECOIN_MINT, walletAddress),
             ]);
-            holdings.set(NATIVE_MINT, { amountAtomic: n, decimals: 18 });
-            holdings.set(STABLECOIN_MINT, { amountAtomic: s, decimals: 6 });
+            // ponytail: lowercase keys — registry loop below is lowercased; mixed-case
+            // keys duplicated USDC and let the orphan sweep treat stables as orphans.
+            holdings.set(NATIVE_MINT.toLowerCase(), { amountAtomic: n, decimals: 18 });
+            holdings.set(STABLECOIN_MINT.toLowerCase(), { amountAtomic: s, decimals: 6 });
             // Also include every distinct token this engine trades (the v4 pool
             // registry currencies + WETH9): a stray LP leg left in the wallet
             // (swap overshoot, partial collect, failed entry) is otherwise
