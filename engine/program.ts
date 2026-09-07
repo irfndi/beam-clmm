@@ -8805,7 +8805,8 @@ export const program = Effect.gen(function* () {
         if (
           (metrics.feeIlRatioKnown ? feeIlRatio > evolvedThresholds.minFeeIlRatio * 1.5 : true) &&
           metrics.volumeAuthenticityKnown &&
-          volumeAuth >= 0.8 &&
+          volumeAuth >=
+            (metrics.feeIlRatioKnown ? 0.8 : evolvedThresholds.volumeAuthThreshold) &&
           metrics.binUtilizationKnown &&
           binUtilization > 0.4 &&
           pool.tvlUsd > config.minPoolTvlUsd * 2
@@ -9413,7 +9414,12 @@ export const program = Effect.gen(function* () {
                       ? feeIlRatio > evolvedThresholds.minFeeIlRatio * 1.5
                       : true) &&
                     metrics.volumeAuthenticityKnown &&
-                    volumeAuth >= 0.8 &&
+                    // Gecko-modeled fees skip the fee-rate band of volume
+                    // authenticity (strategy-service), so modeled-fee pools score
+                    // lower by construction — holding them to the measured 0.8
+                    // bar is a dead path. Env threshold still applies.
+                    volumeAuth >=
+                      (metrics.feeIlRatioKnown ? 0.8 : evolvedThresholds.volumeAuthThreshold) &&
                     metrics.binUtilizationKnown &&
                     binUtilization > 0.4 &&
                     pool.tvlUsd > config.minPoolTvlUsd * 2;

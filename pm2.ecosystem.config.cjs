@@ -143,9 +143,10 @@ module.exports = {
         ENTRY_REQUIRE_TWO_SIDED: "true",
         // One-shot flush done — keep age-stop off for fee canary holds.
         MAX_POSITION_AGE_MS: "0",
-        // Prefer Krystal measured fees; gecko was winning with feeIlRatioKnown=false
-        // and volumeAuth 0.7 which blocked re-ENTER after the range flush.
-        GECKO_TERMINAL_ENABLED: "false",
+        // Krystal top-500 dropped 0xb4CB (feed-dead baseline guard holds); gecko
+        // is the fallback stats source. Modeled-fee pools now face the env
+        // volume bar (0.5), not the measured 0.8 — see candidate-gate fix.
+        GECKO_TERMINAL_ENABLED: "true",
 
         MIN_FEE_IL_RATIO: "0.1",
         VOLUME_AUTH_THRESHOLD: "0.5",

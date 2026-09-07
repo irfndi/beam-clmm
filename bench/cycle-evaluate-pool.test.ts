@@ -297,6 +297,30 @@ describe("evaluateReplayPool", () => {
     expect(result.riskApproved).toBe(true);
   });
 
+  it("enters a modeled-fee pool clearing the env volume bar (gecko parity)", () => {
+    // Gecko skips the fee-rate band of volume authenticity, so modeled-fee
+    // pools score lower by construction — the env bar (0.7), not 0.8, applies.
+    const result = evaluateReplayPool({
+      ...base,
+      metrics: { ...metrics, feeIlRatioKnown: false, volumeAuthenticity: 0.75 },
+      position: undefined,
+      openPositions: [],
+    });
+
+    expect(result.decision.action).toBe("ENTER");
+  });
+
+  it("blocks a modeled-fee pool below the env volume bar", () => {
+    const result = evaluateReplayPool({
+      ...base,
+      metrics: { ...metrics, feeIlRatioKnown: false, volumeAuthenticity: 0.6 },
+      position: undefined,
+      openPositions: [],
+    });
+
+    expect(result.decision.action).not.toBe("ENTER");
+  });
+
   it("exits on measured Fee/IL below 0.5 (live gate)", () => {
     const result = evaluateReplayPool({
       ...base,

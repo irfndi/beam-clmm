@@ -343,10 +343,12 @@ function isPoolCandidateGateBlocked(
   feeIlRatio: number,
   volumeAuth: number,
 ): boolean {
+  // Live parity: modeled-fee pools face the env volume bar, measured pools 0.8.
+  const volumeBar = input.metrics.feeIlRatioKnown ? 0.8 : input.volumeAuthThreshold;
   return (
     !(input.metrics.feeIlRatioKnown ? feeIlRatio > input.minFeeIlRatio * 1.5 : true) ||
     !input.metrics.volumeAuthenticityKnown ||
-    volumeAuth <= 0.8 ||
+    volumeAuth <= volumeBar ||
     !input.metrics.binUtilizationKnown ||
     input.metrics.binUtilization <= 0.4 ||
     input.poolTvlUsd <= input.minPoolTvlUsd * 2
