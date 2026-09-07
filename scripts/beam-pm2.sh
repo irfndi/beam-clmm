@@ -3,7 +3,7 @@
 # require the TypeScript CLI entrypoint directly.
 set -euo pipefail
 
-ROOT=/Users/irfandi/Coding/2026/beam-clmm
+ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 cd "$ROOT"
 
 # PM2 may merge values from the operator shell during `--update-env`. Reapply
@@ -20,6 +20,11 @@ if [ -n "${BEAM_PM2_SQLITE_DB_PATH:-}" ]; then
 fi
 if [ -n "${BEAM_PM2_PAPER_TRADING:-}" ]; then
   export PAPER_TRADING="$BEAM_PM2_PAPER_TRADING"
+fi
+# Project .env often enables CHALLENGE_MODE for paper; live canary must not
+# inherit the harvest-book / challenge presets from that file.
+if [ -n "${BEAM_PM2_CHALLENGE_MODE:-}" ]; then
+  export CHALLENGE_MODE="$BEAM_PM2_CHALLENGE_MODE"
 fi
 
 exec "$ROOT/scripts/beam.sh" dev

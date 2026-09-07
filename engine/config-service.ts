@@ -215,6 +215,12 @@ export interface AppConfig {
   readonly marketScanUniversePages?: number;
   /** Minimum TVL for a pool to pass the market gate. Default $250K. */
   readonly marketScanMinTvlUsd?: number;
+  /** Reject mega books above this TVL (0 = disabled). Default $1M. */
+  readonly marketScanMaxTvlUsd?: number;
+  /** Peak of capital-fit size curve (USD). Default $150K. */
+  readonly marketScanTargetTvlUsd?: number;
+  /** Rank mode: capitalFit (small-wallet default) or depth (legacy). */
+  readonly marketScanRankMode?: "capitalFit" | "depth";
   /** Minimum annualized fee/TVL percent for the market gate (fees24h × 365 /
    *  tvl × 100). Default 25 (a 25%+ fee APR beats the ~5-10% LP average). */
   readonly marketScanMinFeeApr?: number;
@@ -1689,6 +1695,13 @@ const loadConfig = Effect.gen(function* () {
   );
   const marketScanUniversePages = yield* validatedNumber("MARKET_SCAN_UNIVERSE_PAGES", 1, 3, 10);
   const marketScanMinTvlUsd = yield* validatedNumber("MARKET_SCAN_MIN_TVL_USD", 0, 250_000);
+  const marketScanMaxTvlUsd = yield* validatedNumber("MARKET_SCAN_MAX_TVL_USD", 0, 1_000_000);
+  const marketScanTargetTvlUsd = yield* validatedNumber("MARKET_SCAN_TARGET_TVL_USD", 1, 150_000);
+  const marketScanRankModeRaw = yield* Config.string("MARKET_SCAN_RANK_MODE").pipe(
+    Effect.orElseSucceed(() => "capitalFit"),
+  );
+  const marketScanRankMode =
+    marketScanRankModeRaw === "depth" ? ("depth" as const) : ("capitalFit" as const);
   const marketScanMinFeeApr = yield* validatedNumber("MARKET_SCAN_MIN_FEE_APR", 0, 25);
   const marketScanTopK = yield* validatedNumber("MARKET_SCAN_TOP_K", 1, 30, 200);
   const marketScanMaxPools = yield* validatedNumber("MARKET_SCAN_MAX_POOLS", 1, 60, 500);
@@ -1850,6 +1863,9 @@ const loadConfig = Effect.gen(function* () {
     marketScanRefreshIntervalMs,
     marketScanUniversePages,
     marketScanMinTvlUsd,
+    marketScanMaxTvlUsd,
+    marketScanTargetTvlUsd,
+    marketScanRankMode,
     marketScanMinFeeApr,
     marketScanTopK,
     marketScanMaxPools,

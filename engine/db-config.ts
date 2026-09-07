@@ -180,6 +180,18 @@ export const DB_CONFIG_KEYS: ReadonlyArray<DbConfigSpec> = [
     min: 0,
   },
   {
+    envKey: "MARKET_SCAN_MAX_TVL_USD",
+    kind: "number",
+    field: "marketScanMaxTvlUsd",
+    min: 0,
+  },
+  {
+    envKey: "MARKET_SCAN_TARGET_TVL_USD",
+    kind: "number",
+    field: "marketScanTargetTvlUsd",
+    min: 1,
+  },
+  {
     envKey: "MARKET_SCAN_MIN_FEE_APR",
     kind: "number",
     field: "marketScanMinFeeApr",
@@ -296,6 +308,8 @@ const FORWARD_REFERENCE_FIELDS: ReadonlySet<string> = new Set([
   "marketScanRefreshIntervalMs",
   "marketScanUniversePages",
   "marketScanMinTvlUsd",
+  "marketScanMaxTvlUsd",
+  "marketScanTargetTvlUsd",
   "marketScanMinFeeApr",
   "marketScanTopK",
   "marketScanMaxPools",

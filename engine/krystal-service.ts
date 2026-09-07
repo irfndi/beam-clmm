@@ -1,6 +1,6 @@
 // oxlint-disable anti-slop/no-unknown-parameters, anti-slop/no-unsafe-dictionary-type, anti-slop/no-runtime-typeof -- JSON parser predicates are the I/O boundary for Krystal responses.
 import { Effect, Layer } from "effect";
-import { KrystalService, type KrystalApi } from "./services.js";
+import { KrystalService, type KrystalApi, type DiscoveredPool } from "./services.js";
 import { registerV4Pool } from "./adapter-service.js";
 import type { PoolState } from "./types.js";
 import { NATIVE_MINT } from "./constants.js";
@@ -116,6 +116,35 @@ export function parseKrystalPool(raw: unknown): KrystalPoolStats | null {
 function normalizeNativeAddress(address: string): string {
   const lower = address.toLowerCase();
   return lower === "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee" ? NATIVE_MINT : lower;
+}
+
+/** Map Krystal feeTier percent (0.05 / 0.3 / 1) → Uniswap v3 tickSpacing
+ *  (stored as `binStep` on DiscoveredPool for the market gate). */
+export function feeTierPctToTickSpacing(feeTierPct: number): number {
+  if (!Number.isFinite(feeTierPct) || feeTierPct <= 0) return 60;
+  if (feeTierPct <= 0.015) return 1;
+  if (feeTierPct <= 0.075) return 10;
+  if (feeTierPct <= 0.45) return 60;
+  return 200;
+}
+
+/** Map one Krystal universe entry into the market-scan DiscoveredPool shape. */
+export function krystalStatsToDiscoveredPool(
+  address: string,
+  stats: KrystalPoolStats,
+): DiscoveredPool {
+  return {
+    address: address.toLowerCase(),
+    tvlUsd: stats.tvlUsd,
+    volume24hUsd: stats.volume24hUsd,
+    fees24hUsd: stats.feeUsd24h,
+    apr: stats.apr,
+    binStep: feeTierPctToTickSpacing(stats.feeTier > 0 ? stats.feeTier : stats.lpFee),
+    tokenX: stats.token0Address,
+    tokenY: stats.token1Address,
+    tokenXSymbol: stats.token0Symbol,
+    tokenYSymbol: stats.token1Symbol,
+  };
 }
 
 // ─── Pool enrichment (source-aware) ──────────────────────────────────────────

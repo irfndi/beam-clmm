@@ -1,4 +1,5 @@
-const root = "/Users/irfandi/Coding/2026/beam-clmm";
+const path = require("path");
+const root = path.resolve(__dirname);
 const data = `${root}/.data/multichain`;
 
 // Verified on-chain Uniswap v3 Base WETH/USDC pools (factory getPool 2026-09-06).
@@ -23,9 +24,8 @@ const FREE_BASE_RPCS = [
   "https://base-rpc.publicnode.com",
   "https://base.gateway.tenderly.co",
 ].join(",");
-
 const common = {
-  script: `${root}/logs/beam-pm2.sh`,
+  script: `${root}/scripts/beam-pm2.sh`,
   interpreter: "/bin/bash",
   cwd: root,
   autorestart: true,
@@ -84,11 +84,27 @@ module.exports = {
         RPC_RETRY_COUNT: "8",
         PAPER_TRADING: "false",
         BEAM_PM2_PAPER_TRADING: "false",
+        // Pin off: project .env has CHALLENGE_MODE=true (paper harvest book).
+        CHALLENGE_MODE: "false",
+        BEAM_PM2_CHALLENGE_MODE: "false",
         AUTONOMOUS_TOKEN_MODE: "off",
         ENABLE_POOL_DISCOVERY: "false",
+        // Ranking code is live; for fee canary prefer one mid-TVL swappable book
+        // (meme top-K mostly fails token-risk / swap). Re-enable scan once fills stick.
         MARKET_SCAN_ENABLED: "false",
-        CHALLENGE_MODE: "false",
-        WATCHLIST_POOLS: "0xd0b53D9277642d899DF5C87A3966A349A798F224",
+        MARKET_SCAN_RANK_MODE: "capitalFit",
+        MARKET_SCAN_MIN_TVL_USD: "15000",
+        MARKET_SCAN_MAX_TVL_USD: "800000",
+        MARKET_SCAN_TARGET_TVL_USD: "100000",
+        MARKET_SCAN_MIN_FEE_APR: "25",
+        MARKET_SCAN_TOP_K: "15",
+        MARKET_SCAN_MAX_POOLS: "25",
+        MARKET_SCAN_REFRESH_INTERVAL_MS: "300000",
+        MARKET_SCAN_MIN_BIN_STEP: "1",
+        MARKET_SCAN_MAX_BIN_STEP: "200",
+        MARKET_SCAN_MIN_HOLDERS: "0",
+        // Mid-TVL WETH/USDC 0.01% (~$360k) — capital-fit vs $8M mega 0.05%.
+        WATCHLIST_POOLS: "0xb4CB800910B228ED3d0834cF79D697127BBB00e5",
         CONFIDENCE_THRESHOLD: "0.55",
         MAX_OPEN_POSITIONS: "1",
         MAX_POSITIONS_PER_POOL: "1",
@@ -109,18 +125,24 @@ module.exports = {
         PAPER_VALIDATION_MIN_DAYS: "0",
         IL_PROTECTION_ENABLED: "false",
         ENTER_ROUND_TRIP_GAS_USD: "0",
-        ENTRY_RANGE_HALF_WIDTH_BINS: "25",
+        // Tight fee canary: don't let ENTRY_MIN_RANGE_PCT=20% blow halfWidth to ~950 ticks.
+        ENTRY_RANGE_HALF_WIDTH_BINS: "50",
+        ENTRY_MIN_RANGE_PCT: "0.02",
         VOLATILITY_ADAPTIVE_RANGES: "false",
         ENTER_MIN_7D_FEE_OVER_GAS: "0",
         // Canary: don't sit idle 4h after an OOR/vol exit; re-enter in-range.
         OOR_COOLDOWN_MS: "0",
         REPEAT_OOR_COOLDOWN_MS: "0",
-        // Wider vol gate — tiny ranges + public RPC tick noise trip stddev=5.
-        VOLATILITY_EXIT_STDDEV: "12",
+        // Wider vol gate — tickSpacing=1 noise + lastRebalanceAt=0 was churning
+        // overnight (σ≈15–22 vs 12). Hold through normal WETH tick chatter.
+        VOLATILITY_EXIT_STDDEV: "40",
         // Fee canary: USDC→WETH swap then in-range two-sided; never park OOR.
         ENTRY_REQUIRE_TWO_SIDED: "true",
-        // Disabled once we have a healthy in-range fill (was used to flush OOR junk).
+        // One-shot flush done — keep age-stop off for fee canary holds.
         MAX_POSITION_AGE_MS: "0",
+        // Prefer Krystal measured fees; gecko was winning with feeIlRatioKnown=false
+        // and volumeAuth 0.7 which blocked re-ENTER after the range flush.
+        GECKO_TERMINAL_ENABLED: "false",
 
         MIN_FEE_IL_RATIO: "0.1",
         VOLUME_AUTH_THRESHOLD: "0.5",

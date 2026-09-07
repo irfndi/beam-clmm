@@ -2,6 +2,8 @@ import { describe, it, expect } from "vitest";
 import {
   gateAndRankMarketPools,
   marketLegPasses,
+  capitalFitSizeFactor,
+  feeTierScoreFactor,
   SOL_MINT,
   type MarketGateConfig,
 } from "../engine/market-gate.js";
@@ -9,6 +11,9 @@ import type { DiscoveredPool } from "../engine/services.js";
 
 const config: MarketGateConfig = {
   minTvlUsd: 1000,
+  maxTvlUsd: 0,
+  targetTvlUsd: 100_000,
+  rankMode: "capitalFit",
   minFeeApr: 5,
   minVolumeTurnover: 0.5,
   maxVolumeTurnover: 10,
@@ -106,7 +111,7 @@ describe("marketLegPasses", () => {
 });
 
 describe("gateAndRankMarketPools", () => {
-  it("ranks admissible pools by composite score (fee APR × liquidity factor)", () => {
+  it("ranks admissible pools by fee APR when TVL is equal (capitalFit)", () => {
     const lowFees = pool({
       address: "low",
       tvlUsd: 100_000,
@@ -123,6 +128,47 @@ describe("gateAndRankMarketPools", () => {
     expect(result.rejected).toHaveLength(0);
     expect(result.ranked.map((r) => r.pool.address)).toEqual(["high", "low"]);
     expect(result.ranked[0]!.notes.join(" ")).toContain("fee APR");
+    expect(result.ranked[0]!.notes.join(" ")).toContain("capitalFit");
+  });
+
+  it("capitalFit prefers a mid-TVL book over a mega book at the same fee APR", () => {
+    // Same APR: fees/tvl identical → capitalFit size curve decides.
+    const mid = pool({
+      address: "mid",
+      tvlUsd: 100_000,
+      fees24hUsd: 100,
+      volume24hUsd: 100_000,
+    });
+    const mega = pool({
+      address: "mega",
+      tvlUsd: 10_000_000,
+      fees24hUsd: 10_000,
+      volume24hUsd: 10_000_000,
+    });
+    const result = gateAndRankMarketPools([mega, mid], config);
+    expect(result.ranked.map((r) => r.pool.address)).toEqual(["mid", "mega"]);
+    expect(capitalFitSizeFactor(100_000, 100_000)).toBeGreaterThan(
+      capitalFitSizeFactor(10_000_000, 100_000),
+    );
+  });
+
+  it("rejects mega books above maxTvlUsd", () => {
+    const result = gateAndRankMarketPools(
+      [pool({ address: "mega", tvlUsd: 5_000_000, fees24hUsd: 5_000, volume24hUsd: 5_000_000 })],
+      { ...config, maxTvlUsd: 1_000_000 },
+    );
+    expect(result.ranked).toHaveLength(0);
+    expect(result.rejected[0]!.reason).toContain("mega book");
+  });
+
+  it("boosts higher implied fee tiers", () => {
+    const lowTier = feeTierScoreFactor(
+      pool({ fees24hUsd: 50, volume24hUsd: 100_000 }), // 5 bps
+    );
+    const highTier = feeTierScoreFactor(
+      pool({ fees24hUsd: 300, volume24hUsd: 100_000 }), // 30 bps
+    );
+    expect(highTier.factor).toBeGreaterThan(lowTier.factor);
   });
 
   it("rejects pools below the min TVL", () => {

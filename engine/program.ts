@@ -114,7 +114,11 @@ import {
   type AgentStateApi,
 } from "./services.js";
 import { GeckoTerminalLive, enrichPoolFromGecko } from "./gecko-terminal-service.js";
-import { KrystalLive, enrichPoolFromKrystal } from "./krystal-service.js";
+import {
+  KrystalLive,
+  enrichPoolFromKrystal,
+  krystalStatsToDiscoveredPool,
+} from "./krystal-service.js";
 import { PythPriceLive } from "./pyth-price-service.js";
 import { AlertLive } from "./alert-service.js";
 import {
@@ -1098,7 +1102,9 @@ export function reconcilePositions(
             lastFeeClaimAt: Date.now(),
             trailingStopThreshold: null,
             highestValueUsd: null,
-            lastRebalanceAt: 0,
+            // Treat discovery as a fresh range anchor so vol-exit/rebalance
+            // intervals do not treat lastRebalanceAt=0 as "ancient history".
+            lastRebalanceAt: Date.now(),
             paperExitedAt: null,
             entrySignalTimestamp: null,
             entrySignalSnapshotId: null,
@@ -1333,7 +1339,9 @@ function executePaperEnter(
       lastFeeClaimAt: Date.now(),
       trailingStopThreshold: null,
       highestValueUsd: null,
-      lastRebalanceAt: 0,
+      // Anchor the rebalance/vol-exit clock at entry — lastRebalanceAt=0 made
+      // timeSinceRebal ≈ epoch age and let vol-exit fire on the first noisy cycle.
+      lastRebalanceAt: Date.now(),
       paperExitedAt: liveExited ? liveExited.paperExitedAt : null,
       entrySignalTimestamp: signalTimestamp ?? null,
       entrySignalSnapshotId: signalSnapshotId ?? null,
@@ -2014,7 +2022,9 @@ function executeLiveEnterMint(
         lastFeeClaimAt: Date.now(),
         trailingStopThreshold: null,
         highestValueUsd: null,
-        lastRebalanceAt: 0,
+        // Anchor the rebalance/vol-exit clock at entry — lastRebalanceAt=0 made
+        // timeSinceRebal ≈ epoch age and let vol-exit fire on the first noisy cycle.
+        lastRebalanceAt: Date.now(),
         paperExitedAt: null,
         entrySignalTimestamp: signalTimestamp ?? null,
         entrySignalSnapshotId: signalSnapshotId ?? null,
@@ -3151,6 +3161,9 @@ export function executeLive(
 function buildMarketGateConfig(config: AppConfig): MarketGateConfig {
   return {
     minTvlUsd: config.marketScanMinTvlUsd ?? 250_000,
+    maxTvlUsd: config.marketScanMaxTvlUsd ?? 1_000_000,
+    targetTvlUsd: config.marketScanTargetTvlUsd ?? 150_000,
+    rankMode: config.marketScanRankMode === "depth" ? "depth" : "capitalFit",
     minFeeApr: config.marketScanMinFeeApr ?? 25,
     minHolders: config.marketScanMinHolders ?? 1000,
     minBinStep: config.marketScanMinBinStep ?? 2,
@@ -3522,6 +3535,16 @@ function shouldVolExitRebalance(input: {
     input.driftPct > 0.6 &&
     (input.timeSinceRebal >= input.minRebalanceIntervalMs || input.oorGraceExpired)
   );
+}
+
+/** Age since last range reshape; lastRebalanceAt=0 falls back to entry timestamp. */
+function rebalanceAgeMs(
+  lastRebalanceAt: number,
+  positionTimestamp: number,
+  now: number = Date.now(),
+): number {
+  const anchor = lastRebalanceAt > 0 ? lastRebalanceAt : positionTimestamp;
+  return now - (anchor > 0 ? anchor : now);
 }
 
 function shouldAttemptRebalance(input: {
@@ -4503,6 +4526,12 @@ export const program = Effect.gen(function* () {
     }
     for (const poolAddress of harvestBookPools) {
       if (!poolsToScan.includes(poolAddress)) poolsToScan.push(poolAddress);
+    }
+    // Held positions must never drop out of the scan set — exits / time-stops
+    // stall if market-scan rebuild only keeps the ranked top-K.
+    for (const pos of trackedPositions.values()) {
+      if (pos.paperExitedAt != null || pos.closedAt != null) continue;
+      if (!poolsToScan.includes(pos.poolAddress)) poolsToScan.push(pos.poolAddress);
     }
   };
   const refreshPoolsToScan = (reconcileResult: PositionReconcileResult) => {
@@ -6068,16 +6097,31 @@ export const program = Effect.gen(function* () {
   const refreshMarketUniverse = (now: number): Effect.Effect<void, never> =>
     Effect.gen(function* () {
       if (config.marketScanEnabled !== true) return;
-      if (adapter.discoverPoolsTopPages === undefined) {
-        logger.warn("Market scan: adapter does not expose discoverPoolsTopPages — disabled");
-        return;
-      }
       if (now - lastMarketRefreshAt < (config.marketScanRefreshIntervalMs ?? 1_800_000)) return;
       lastMarketRefreshAt = now;
-      const discovered = yield* adapter
-        .discoverPoolsTopPages(config.marketScanUniversePages ?? 3)
-        // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
-        .pipe(Effect.catch(() => Effect.succeed([] as ReadonlyArray<DiscoveredPool>)));
+
+      let discovered: ReadonlyArray<DiscoveredPool> = [];
+      if (adapter.discoverPoolsTopPages !== undefined) {
+        discovered = yield* adapter
+          .discoverPoolsTopPages(config.marketScanUniversePages ?? 3)
+          .pipe(Effect.catch(() => Effect.succeed([] as ReadonlyArray<DiscoveredPool>)));
+      }
+      // EVM path: Krystal universe carries measured fees/TVL; adapter log-scan
+      // discovery returns zeroed economics and cannot feed the market gate.
+      if (discovered.length === 0 && config.krystalEnabled !== false) {
+        const universe = yield* krystal.getUniverse();
+        discovered = [...universe.entries()].map(([address, stats]) =>
+          krystalStatsToDiscoveredPool(address, stats),
+        );
+        if (config.liveEntryNativeLegOnly === true && !config.paperTrading) {
+          const nativeLike = (m: string): boolean =>
+            m.toLowerCase() === NATIVE_MINT.toLowerCase() ||
+            m.toLowerCase() === WETH9.toLowerCase();
+          discovered = discovered.filter(
+            (pool) => nativeLike(pool.tokenX) || nativeLike(pool.tokenY),
+          );
+        }
+      }
       if (discovered.length === 0) {
         logger.warn("Market scan: universe fetch returned nothing — keeping last ranked set");
         return;
@@ -7461,6 +7505,7 @@ export const program = Effect.gen(function* () {
             readonly hasRecentWarning: boolean;
             readonly warnings: ReadonlyArray<MemoryEntry>;
             readonly poolPositions: PositionRecord[];
+            readonly preFilterPassed: boolean;
           },
         Error
       > =>
@@ -7490,19 +7535,27 @@ export const program = Effect.gen(function* () {
             });
           }
 
-          // Pre-filter
-          if (
-            !strategy.passesPreFilter(
-              pool,
-              metrics.volumeAuthenticity,
-              metrics.binUtilization,
-              config.minPoolTvlUsd,
-              evolvedThresholds.volumeAuthThreshold,
-              evolvedThresholds.minBinUtilization,
-              metrics.volumeAuthenticityKnown,
-              metrics.binUtilizationKnown,
-            )
-          ) {
+          // ── Per-position tracking ───────────────────────────────────────────
+          // Resolve holdings BEFORE the ENTER pre-filter: a held pool that fails
+          // TVL/volume/bin gates must still run EXIT/REBALANCE/HOLD (otherwise
+          // open positions go unmanaged — seen when CHALLENGE_MODE/.env raised
+          // thresholds and the mid-USDC canary hit "Pool failed pre-filter").
+          const poolPositions = positionsForPool(trackedPositions, poolAddress).sort(
+            (a, b) => a.timestamp - b.timestamp || a.positionId.localeCompare(b.positionId),
+          );
+
+          const preFilterPassed = strategy.passesPreFilter(
+            pool,
+            metrics.volumeAuthenticity,
+            metrics.binUtilization,
+            config.minPoolTvlUsd,
+            evolvedThresholds.volumeAuthThreshold,
+            evolvedThresholds.minBinUtilization,
+            metrics.volumeAuthenticityKnown,
+            metrics.binUtilizationKnown,
+          );
+          // Pre-filter is an ENTER admission gate only.
+          if (!preFilterPassed && poolPositions.length === 0) {
             console.debug("Pool failed pre-filter", { pool: poolAddress });
             return { halt: [] as ReadonlyArray<AgentDecision> };
           }
@@ -7515,13 +7568,6 @@ export const program = Effect.gen(function* () {
             (w) => w.category === "warning" && w.createdAt > Date.now() - 7 * 24 * 60 * 60 * 1000,
           );
 
-          // ── Per-position tracking ───────────────────────────────────────────
-          // A pool may hold several positions (tight+wide pairs). Every position
-          // gets independent OOR tracking, value estimation, and its own
-          // EXIT/REBALANCE/HOLD decision; the pool gets at most one ENTER.
-          const poolPositions = positionsForPool(trackedPositions, poolAddress).sort(
-            (a, b) => a.timestamp - b.timestamp || a.positionId.localeCompare(b.positionId),
-          );
           return {
             halt: null,
             metrics,
@@ -7532,6 +7578,7 @@ export const program = Effect.gen(function* () {
             hasRecentWarning,
             warnings,
             poolPositions,
+            preFilterPassed,
           };
         });
       const measured = yield* metricsStage(pool, binArray, previousSnapshot);
@@ -7546,6 +7593,7 @@ export const program = Effect.gen(function* () {
       const hasRecentWarning = measured.hasRecentWarning;
       const warnings = measured.warnings;
       let poolPositions = measured.poolPositions;
+      const preFilterPassed = measured.preFilterPassed;
 
       // OOR tracking must run before EXIT conditions so that out-of-range
       // cycle counts accumulate even when fee/IL triggers an EXIT.
@@ -8659,7 +8707,7 @@ export const program = Effect.gen(function* () {
               lowerBinId: pos.lowerBinId,
               upperBinId: pos.upperBinId,
             });
-            const timeSinceRebal = Date.now() - pos.lastRebalanceAt;
+            const timeSinceRebal = rebalanceAgeMs(pos.lastRebalanceAt, pos.timestamp);
             const oorGraceExpired = pos.oorCycleCount >= config.oorGracePeriodCycles;
 
             if (
@@ -8724,7 +8772,7 @@ export const program = Effect.gen(function* () {
         if (
           (metrics.feeIlRatioKnown ? feeIlRatio > evolvedThresholds.minFeeIlRatio * 1.5 : true) &&
           metrics.volumeAuthenticityKnown &&
-          volumeAuth > 0.8 &&
+          volumeAuth >= 0.8 &&
           metrics.binUtilizationKnown &&
           binUtilization > 0.4 &&
           pool.tvlUsd > config.minPoolTvlUsd * 2
@@ -8762,7 +8810,10 @@ export const program = Effect.gen(function* () {
       const runEnterSlot = (): Effect.Effect<void, Error> =>
         Effect.gen(function* () {
           if (!poolExitFired && poolPositions.length < config.maxPositionsPerPool) {
-            if (unresolvedPoolAddresses.has(poolAddress)) {
+            if (!preFilterPassed) {
+              logger.info("Skipping ENTER — pool failed pre-filter", { pool: poolAddress });
+              enterGateRejected = true;
+            } else if (unresolvedPoolAddresses.has(poolAddress)) {
               logger.warn("Skipping ENTER for unresolved pool", { pool: poolAddress });
               enterGateRejected = true;
             } else if (
@@ -9329,7 +9380,7 @@ export const program = Effect.gen(function* () {
                       ? feeIlRatio > evolvedThresholds.minFeeIlRatio * 1.5
                       : true) &&
                     metrics.volumeAuthenticityKnown &&
-                    volumeAuth > 0.8 &&
+                    volumeAuth >= 0.8 &&
                     metrics.binUtilizationKnown &&
                     binUtilization > 0.4 &&
                     pool.tvlUsd > config.minPoolTvlUsd * 2;

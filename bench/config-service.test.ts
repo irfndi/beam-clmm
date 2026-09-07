@@ -209,6 +209,9 @@ describe("ConfigService freeze screening + IL protection flags", () => {
     expect(cfg.marketScanRefreshIntervalMs).toBe(1_800_000);
     expect(cfg.marketScanUniversePages).toBe(3);
     expect(cfg.marketScanMinTvlUsd).toBe(250_000);
+    expect(cfg.marketScanMaxTvlUsd).toBe(1_000_000);
+    expect(cfg.marketScanTargetTvlUsd).toBe(150_000);
+    expect(cfg.marketScanRankMode).toBe("capitalFit");
     expect(cfg.marketScanMinFeeApr).toBe(25);
     expect(cfg.marketScanTopK).toBe(30);
     expect(cfg.marketScanMaxPools).toBe(60);

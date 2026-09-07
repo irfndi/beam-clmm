@@ -10,8 +10,19 @@
 
 import type { DiscoveredPool } from "./services.js";
 
+/** How the composite rank weights TVL.
+ *  - `capitalFit` (default): prefer mid/small books where a small wallet
+ *    captures a meaningful fee share; penalize mega pools.
+ *  - `depth`: legacy — boost deeper TVL (log10) for large-capital LPs. */
+export type MarketScanRankMode = "capitalFit" | "depth";
+
 export interface MarketGateConfig {
   readonly minTvlUsd: number;
+  /** Soft/hard ceiling — pools above this are rejected (0 = disabled). */
+  readonly maxTvlUsd: number;
+  /** Peak of the capital-fit size curve (USD TVL). */
+  readonly targetTvlUsd: number;
+  readonly rankMode: MarketScanRankMode;
   /** Minimum annualized fee/TVL percent: fees24h × 365 / tvl × 100. */
   readonly minFeeApr: number;
   /** Minimum daily volume/TVL ratio (wash-trading and dead-pool guard). */
@@ -32,7 +43,7 @@ export interface MarketPoolRank {
   readonly feeAprPct: number;
   /** Daily volume/TVL turnover ratio. */
   readonly volumeTurnover: number;
-  /** Composite rank: feeAprPct × liquidity factor. Higher = better. */
+  /** Composite rank. Higher = better. */
   readonly score: number;
   /** Why the pool was admitted (first N flags). */
   readonly notes: ReadonlyArray<string>;
@@ -92,6 +103,9 @@ function gateAndRankMarketGateMetrics(
   if (!Number.isFinite(pool.tvlUsd) || pool.tvlUsd < config.minTvlUsd) {
     return { reason: `tvl ${pool.tvlUsd} < ${config.minTvlUsd}` };
   }
+  if (config.maxTvlUsd > 0 && pool.tvlUsd > config.maxTvlUsd) {
+    return { reason: `tvl ${pool.tvlUsd} > ${config.maxTvlUsd} (mega book)` };
+  }
   if (!Number.isFinite(pool.fees24hUsd) || pool.fees24hUsd <= 0) {
     return { reason: "no 24h fees" };
   }
@@ -148,8 +162,75 @@ function gateAndRankMarketTokenSafety(
   return null;
 }
 
+/** Depth mode: deeper books score slightly higher (legacy large-LP bias). */
+export function depthLiquidityFactor(tvlUsd: number): number {
+  return Math.min(Math.max(Math.log10(Math.max(tvlUsd, 1)) / 6, 0.6), 1.4);
+}
+
+/**
+ * Capital-fit size curve: peaks near `targetTvlUsd`, decays for mega and
+ * dust books. A $20 wallet on an $8M book earns dust; on a $100k book the
+ * same APR yields visible fees.
+ */
+export function capitalFitSizeFactor(tvlUsd: number, targetTvlUsd: number): number {
+  const target = Math.max(targetTvlUsd, 1);
+  const tvl = Math.max(tvlUsd, 1);
+  const logDist = Math.abs(Math.log10(tvl / target));
+  return Math.min(Math.max(1.25 - 0.5 * logDist, 0.2), 1.35);
+}
+
+/**
+ * Prefer higher LP fee tiers (more $/volume for the same turnover). Uses the
+ * implied fee rate fees24h/volume24h when volume > 0.
+ */
+export function feeTierScoreFactor(pool: DiscoveredPool): { factor: number; note: string } {
+  const implied = pool.volume24hUsd > 0 ? pool.fees24hUsd / pool.volume24hUsd : 0;
+  if (implied >= 0.009) return { factor: 1.25, note: "fee-tier~1%" };
+  if (implied >= 0.0025) return { factor: 1.1, note: "fee-tier~0.3%" };
+  if (implied >= 0.0004) return { factor: 0.85, note: "fee-tier~0.05%" };
+  return { factor: 0.55, note: "fee-tier~0.01%" };
+}
+
+const STABLE_SYMBOLS = new Set(["USDC", "USDBC", "USDT", "DAI", "USD+", "USDG", "PYUSD"]);
+
+/** Mild boost for stable-leg books — more likely to pass token-risk + swap. */
+export function stableLegScoreFactor(pool: DiscoveredPool): {
+  factor: number;
+  note: string | null;
+} {
+  const x = (pool.tokenXSymbol ?? "").toUpperCase();
+  const y = (pool.tokenYSymbol ?? "").toUpperCase();
+  if (STABLE_SYMBOLS.has(x) || STABLE_SYMBOLS.has(y)) {
+    return { factor: 1.15, note: "stable-leg" };
+  }
+  return { factor: 1, note: null };
+}
+
+export function marketPoolScore(
+  pool: DiscoveredPool,
+  feeAprPct: number,
+  config: Pick<MarketGateConfig, "rankMode" | "targetTvlUsd">,
+): { score: number; notes: string[] } {
+  const sizeFactor =
+    config.rankMode === "depth"
+      ? depthLiquidityFactor(pool.tvlUsd)
+      : capitalFitSizeFactor(pool.tvlUsd, config.targetTvlUsd);
+  const fee = feeTierScoreFactor(pool);
+  const stable = stableLegScoreFactor(pool);
+  const score = feeAprPct * sizeFactor * fee.factor * stable.factor;
+  const notes = [
+    `fee APR ${feeAprPct.toFixed(1)}%`,
+    config.rankMode === "depth"
+      ? `depth×${sizeFactor.toFixed(2)}`
+      : `capitalFit×${sizeFactor.toFixed(2)}`,
+    fee.note,
+  ];
+  if (stable.note) notes.push(stable.note);
+  return { score, notes };
+}
+
 /** Gates and ranks one universe snapshot. Pure; callers feed it the adapter's
- *  `discoverPoolsTopPages` output. */
+ *  `discoverPoolsTopPages` output (or a Krystal-mapped universe). */
 export function gateAndRankMarketPools(
   pools: ReadonlyArray<DiscoveredPool>,
   config: MarketGateConfig,
@@ -172,15 +253,11 @@ export function gateAndRankMarketPools(
       continue;
     }
     const { feeAprPct, volumeTurnover } = gate;
-
-    // Composite rank: fee APR is the profit engine; TVL adds a liquidity
-    // factor (deeper pools → less IL per dollar and more stable fees), capped
-    // so a 5×-APR small pool still outranks a deep slow pool.
-    const liquidityFactor = Math.min(Math.max(Math.log10(pool.tvlUsd) / 6, 0.6), 1.4);
-    const score = feeAprPct * liquidityFactor;
-    const notes: string[] = [
-      `fee APR ${feeAprPct.toFixed(1)}%`,
+    const { score, notes: scoreNotes } = marketPoolScore(pool, feeAprPct, config);
+    const notes = [
+      scoreNotes[0] ?? `fee APR ${feeAprPct.toFixed(1)}%`,
       `turnover ${volumeTurnover.toFixed(2)}`,
+      ...scoreNotes.slice(1),
     ];
     ranked.push({ pool, feeAprPct, volumeTurnover, score, notes });
   }
