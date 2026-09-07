@@ -18,6 +18,10 @@ export type MarketScanRankMode = "capitalFit" | "depth";
 
 export interface MarketGateConfig {
   readonly minTvlUsd: number;
+  /** Hard dust floor — pools below this are always rejected (0/undefined = disabled). */
+  readonly absoluteMinTvlUsd?: number;
+  /** High-turnover bypass: admit TVL below minTvlUsd when turnover >= this (0/undefined = disabled). */
+  readonly highTurnoverBypass?: number;
   /** Soft/hard ceiling — pools above this are rejected (0 = disabled). */
   readonly maxTvlUsd: number;
   /** Peak of the capital-fit size curve (USD TVL). */
@@ -96,16 +100,41 @@ export function marketLegPasses(
   return leg.holders === undefined || leg.holders >= minHolders;
 }
 
+interface MarketTvlGate {
+  readonly admitted: boolean;
+  readonly reason?: string;
+}
+/** TVL admission: finite, above the dust floor, above the soft floor unless the high-turnover bypass is armed. */
+function gateMarketTvl(pool: DiscoveredPool, config: MarketGateConfig): MarketTvlGate {
+  if (!Number.isFinite(pool.tvlUsd))
+    return { admitted: false, reason: `tvl ${pool.tvlUsd} not finite` };
+  if ((config.absoluteMinTvlUsd ?? 0) > 0 && pool.tvlUsd < (config.absoluteMinTvlUsd ?? 0)) {
+    return {
+      admitted: false,
+      reason: `tvl ${pool.tvlUsd} < dust floor ${config.absoluteMinTvlUsd}`,
+    };
+  }
+  // Small-cap high-turnover bypass: a thin book with real flow earns like a
+  // big one for a small wallet — admit it despite the soft minTvlUsd floor.
+  // Token-risk + ENTER gates still apply; this only affects scan admission.
+  const bypassArmed =
+    (config.highTurnoverBypass ?? 0) > 0 &&
+    pool.volume24hUsd > 0 &&
+    pool.volume24hUsd / Math.max(pool.tvlUsd, 1) >= (config.highTurnoverBypass ?? 0);
+  if (pool.tvlUsd < config.minTvlUsd && !bypassArmed) {
+    return { admitted: false, reason: `tvl ${pool.tvlUsd} < ${config.minTvlUsd}` };
+  }
+  if (config.maxTvlUsd > 0 && pool.tvlUsd > config.maxTvlUsd) {
+    return { admitted: false, reason: `tvl ${pool.tvlUsd} > ${config.maxTvlUsd} (mega book)` };
+  }
+  return { admitted: true };
+}
 function gateAndRankMarketGateMetrics(
   pool: DiscoveredPool,
   config: MarketGateConfig,
 ): { feeAprPct: number; volumeTurnover: number } | { reason: string } {
-  if (!Number.isFinite(pool.tvlUsd) || pool.tvlUsd < config.minTvlUsd) {
-    return { reason: `tvl ${pool.tvlUsd} < ${config.minTvlUsd}` };
-  }
-  if (config.maxTvlUsd > 0 && pool.tvlUsd > config.maxTvlUsd) {
-    return { reason: `tvl ${pool.tvlUsd} > ${config.maxTvlUsd} (mega book)` };
-  }
+  const tvl = gateMarketTvl(pool, config);
+  if (!tvl.admitted) return { reason: tvl.reason ?? "tvl rejected" };
   if (!Number.isFinite(pool.fees24hUsd) || pool.fees24hUsd <= 0) {
     return { reason: "no 24h fees" };
   }
@@ -218,9 +247,27 @@ export function stableLegScoreFactor(pool: DiscoveredPool): StableLegScoreFactor
   return { factor: 1, note: null };
 }
 
+interface TurnoverScoreFactor {
+  readonly factor: number;
+  readonly note: string;
+}
+/**
+ * Capital-efficiency boost: high volume/TVL turnover means the book pays its
+ * LPs often — a small wallet rotating into high-turnover pools captures more
+ * fees per dollar than sitting in a deep low-turnover book at the same APR.
+ * Bounded 1.0–1.5; wash-level turnover is rejected upstream, not here.
+ */
+export function turnoverScoreFactor(volumeTurnover: number): TurnoverScoreFactor {
+  if (volumeTurnover >= 8) return { factor: 1.5, note: "turnover×1.50" };
+  if (volumeTurnover >= 4) return { factor: 1.35, note: "turnover×1.35" };
+  if (volumeTurnover >= 2) return { factor: 1.2, note: "turnover×1.20" };
+  if (volumeTurnover >= 0.5) return { factor: 1.1, note: "turnover×1.10" };
+  return { factor: 1, note: "turnover×1.00" };
+}
 export function marketPoolScore(
   pool: DiscoveredPool,
   feeAprPct: number,
+  volumeTurnover: number,
   config: Pick<MarketGateConfig, "rankMode" | "targetTvlUsd">,
 ): MarketPoolScore {
   const sizeFactor =
@@ -229,13 +276,15 @@ export function marketPoolScore(
       : capitalFitSizeFactor(pool.tvlUsd, config.targetTvlUsd);
   const fee = feeTierScoreFactor(pool);
   const stable = stableLegScoreFactor(pool);
-  const score = feeAprPct * sizeFactor * fee.factor * stable.factor;
+  const turnover = turnoverScoreFactor(volumeTurnover);
+  const score = feeAprPct * sizeFactor * fee.factor * stable.factor * turnover.factor;
   const notes = [
     `fee APR ${feeAprPct.toFixed(1)}%`,
     config.rankMode === "depth"
       ? `depth×${sizeFactor.toFixed(2)}`
       : `capitalFit×${sizeFactor.toFixed(2)}`,
     fee.note,
+    turnover.note,
   ];
   if (stable.note) notes.push(stable.note);
   return { score, notes };
@@ -265,7 +314,7 @@ export function gateAndRankMarketPools(
       continue;
     }
     const { feeAprPct, volumeTurnover } = gate;
-    const { score, notes: scoreNotes } = marketPoolScore(pool, feeAprPct, config);
+    const { score, notes: scoreNotes } = marketPoolScore(pool, feeAprPct, volumeTurnover, config);
     const notes = [
       scoreNotes[0] ?? `fee APR ${feeAprPct.toFixed(1)}%`,
       `turnover ${volumeTurnover.toFixed(2)}`,

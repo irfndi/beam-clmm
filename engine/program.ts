@@ -3236,6 +3236,8 @@ function buildMarketGateConfig(config: AppConfig): MarketGateConfig {
     minTvlUsd: config.marketScanMinTvlUsd ?? 250_000,
     maxTvlUsd: config.marketScanMaxTvlUsd ?? 1_000_000,
     targetTvlUsd: config.marketScanTargetTvlUsd ?? 150_000,
+    absoluteMinTvlUsd: config.marketScanAbsoluteMinTvlUsd ?? 0,
+    highTurnoverBypass: config.marketScanHighTurnoverBypass ?? 0,
     rankMode: config.marketScanRankMode === "depth" ? "depth" : "capitalFit",
     minFeeApr: config.marketScanMinFeeApr ?? 25,
     minHolders: config.marketScanMinHolders ?? 1000,

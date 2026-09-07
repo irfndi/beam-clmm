@@ -2,8 +2,10 @@ import { describe, it, expect } from "vitest";
 import {
   gateAndRankMarketPools,
   marketLegPasses,
+  marketPoolScore,
   capitalFitSizeFactor,
   feeTierScoreFactor,
+  turnoverScoreFactor,
   SOL_MINT,
   type MarketGateConfig,
 } from "../engine/market-gate.js";
@@ -229,5 +231,33 @@ describe("gateAndRankMarketPools", () => {
     const result = gateAndRankMarketPools([pool({})], config);
     expect(result.ranked).toHaveLength(1);
     expect(result.ranked[0]!.pool.tokenX).toBe(SOL_MINT);
+  });
+});
+describe("turnover-weighted capital efficiency", () => {
+  it("scores higher turnover higher holding APR and pool constant", () => {
+    const p = pool({});
+    const sleepy = marketPoolScore(p, 36.5, 0.6, config);
+    const busy = marketPoolScore(p, 36.5, 6, config);
+    expect(busy.score).toBeGreaterThan(sleepy.score);
+    expect(busy.notes.join(" ")).toContain("turnover×");
+    expect(turnoverScoreFactor(6).factor).toBeGreaterThan(turnoverScoreFactor(0.6).factor);
+  });
+  it("admits a sub-min-TVL pool when turnover clears the bypass", () => {
+    const small = pool({ address: "small", tvlUsd: 500, volume24hUsd: 5_000, fees24hUsd: 5 });
+    const bypassed = gateAndRankMarketPools([small], { ...config, highTurnoverBypass: 5 });
+    expect(bypassed.ranked.map((r) => r.pool.address)).toEqual(["small"]);
+    const blocked = gateAndRankMarketPools([small], config);
+    expect(blocked.ranked).toHaveLength(0);
+    expect(blocked.rejected[0]!.reason).toContain("tvl");
+  });
+  it("still rejects dust below the absolute floor even with high turnover", () => {
+    const dust = pool({ address: "dust", tvlUsd: 100, volume24hUsd: 5_000, fees24hUsd: 5 });
+    const result = gateAndRankMarketPools([dust], {
+      ...config,
+      highTurnoverBypass: 5,
+      absoluteMinTvlUsd: 500,
+    });
+    expect(result.ranked).toHaveLength(0);
+    expect(result.rejected[0]!.reason).toContain("dust floor");
   });
 });

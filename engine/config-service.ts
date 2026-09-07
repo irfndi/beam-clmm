@@ -221,6 +221,10 @@ export interface AppConfig {
   readonly marketScanTargetTvlUsd?: number;
   /** Rank mode: capitalFit (small-wallet default) or depth (legacy). */
   readonly marketScanRankMode?: "capitalFit" | "depth";
+  /** Hard dust floor for the market gate (0 = disabled). Pools below this are always rejected. */
+  readonly marketScanAbsoluteMinTvlUsd?: number;
+  /** High-turnover small-cap bypass: admit TVL below minTvlUsd when daily volume/TVL >= this (0 = disabled). */
+  readonly marketScanHighTurnoverBypass?: number;
   /** Minimum annualized fee/TVL percent for the market gate (fees24h × 365 /
    *  tvl × 100). Default 25 (a 25%+ fee APR beats the ~5-10% LP average). */
   readonly marketScanMinFeeApr?: number;
@@ -1709,6 +1713,16 @@ const loadConfig = Effect.gen(function* () {
   const marketScanRankMode =
     marketScanRankModeRaw === "depth" ? ("depth" as const) : ("capitalFit" as const);
   const marketScanMinFeeApr = yield* validatedNumber("MARKET_SCAN_MIN_FEE_APR", 0, 25);
+  const marketScanAbsoluteMinTvlUsd = yield* validatedNumber(
+    "MARKET_SCAN_ABSOLUTE_MIN_TVL_USD",
+    0,
+    0,
+  );
+  const marketScanHighTurnoverBypass = yield* validatedNumber(
+    "MARKET_SCAN_HIGH_TURNOVER_BYPASS",
+    0,
+    0,
+  );
   const marketScanTopK = yield* validatedNumber("MARKET_SCAN_TOP_K", 1, 30, 200);
   const marketScanMaxPools = yield* validatedNumber("MARKET_SCAN_MAX_POOLS", 1, 60, 500);
   const marketScanMinHolders = yield* validatedNumber("MARKET_SCAN_MIN_HOLDERS", 0, 1000);
@@ -1873,6 +1887,8 @@ const loadConfig = Effect.gen(function* () {
     marketScanTargetTvlUsd,
     marketScanRankMode,
     marketScanMinFeeApr,
+    marketScanAbsoluteMinTvlUsd,
+    marketScanHighTurnoverBypass,
     marketScanTopK,
     marketScanMaxPools,
     marketScanMinHolders,

@@ -64,7 +64,21 @@ module.exports = {
         AUTONOMOUS_TOKEN_MODE: "off",
         BEAM_PM2_AUTONOMOUS_TOKEN_MODE: "off",
         ENABLE_POOL_DISCOVERY: "false",
-        MARKET_SCAN_ENABLED: "false",
+        // Paper proves the turnover-weighted rotation: scan the universe for
+        // small-cap high-turnover books instead of sitting on the watchlist.
+        MARKET_SCAN_ENABLED: "true",
+        BEAM_PM2_MARKET_SCAN_ENABLED: "true",
+        MARKET_SCAN_RANK_MODE: "capitalFit",
+        MARKET_SCAN_MIN_TVL_USD: "15000",
+        MARKET_SCAN_ABSOLUTE_MIN_TVL_USD: "5000",
+        MARKET_SCAN_HIGH_TURNOVER_BYPASS: "5",
+        MARKET_SCAN_TARGET_TVL_USD: "100000",
+        MARKET_SCAN_MIN_FEE_APR: "25",
+        MARKET_SCAN_TOP_K: "15",
+        MARKET_SCAN_MAX_POOLS: "25",
+        // Faster paper rotation cadence (live keeps the 15m default).
+        ROTATION_COOLDOWN_MS: "300000",
+        BEAM_PM2_ROTATION_COOLDOWN_MS: "300000",
         CHALLENGE_MODE: "false",
         BEAM_PM2_CHALLENGE_MODE: "false",
         WATCHLIST_POOLS: PAPER_WATCHLIST,
