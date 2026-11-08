@@ -61,23 +61,23 @@ ln -s $(pwd)/skills/beam ~/.agents/skills/beam
 
 For the full status of all 10 target marketplaces (including the 6 that still need code packages — MCP server, AutoGPT, LangChain, CrewAI, Dify, Flowise), see [`../marketplaces/README.md`](../marketplaces/README.md).
 
-## Live Infrastructure (Already Deployed)
+## Infrastructure (self-hosted)
 
-Agents do **not** need to deploy Cloudflare workers. They are already running:
+Beam runs standalone. The hosted Beam Cloud control plane (Cloudflare Workers +
+D1) was retired when the project moved to a self-hosted VPS, so **there is no
+account layer**. Agents never register, log in, or hold an API key.
 
-| Resource     | URL / ID                                        |
-| ------------ | ----------------------------------------------- |
-| API Worker   | `https://beam-api.irfndi.workers.dev`          |
-| Telegram Bot | `https://beam-telegram-bot.irfndi.workers.dev` |
-| Bot username | `@beam_agent_bot`                              |
+| Layer | Status |
+| ----- | ------ |
+| CLI / engine | Local, required. State in SQLite, operator surface is the local status server |
+| Cloud API (accounts, keys, tiers) | Retired — removed with the control plane |
+| Telegram bot | Retired with the API layer it used for auth |
 
-## Quick Start for Agents (3-layer approach)
+Alerts are written to the audit log instead of being pushed to Telegram. Leave
+`BEAM_CLOUD_ENABLED` unset; setting it to `true` opts back into a hosted control
+plane and expects `BEAM_API_URL` to point at one you operate.
 
-Beam has 3 layers. The CLI is the operating boundary, and the API account is
-required before setup or agent execution so usage, error telemetry, and feedback
-have an owner. Telegram is optional. See [`install.md`](install.md) for details.
-
-### Layer 1: CLI (Local) — Required
+## Quick Start for Agents
 
 ```bash
 # Install the compiled bundle for your platform (auto-installs Bun if needed)
@@ -85,13 +85,8 @@ curl -fsSL https://raw.githubusercontent.com/irfndi/beam-clmm/main/scripts/insta
   | BEAM_SKIP_SETUP=1 bash
 export PATH="$HOME/.local/bin:$PATH"
 
-# Register before setup so telemetry and error capture are associated with this agent
-beam register
-
-# Setup (writes .env)
-beam setup --non-interactive \
-  --rpc-url="$ROBINHOOD_RPC_URL" \
-  --rpc-fallback-url="${ROBINHOOD_RPC_FALLBACK_URL:-}"
+# Setup (writes .env). No account or registration step.
+beam setup --non-interactive --rpc-url="$BEAM_BASE_RPC_URL"
 
 # Start trading
 beam dev
@@ -99,134 +94,35 @@ beam dev
 
 Validate: the agent starts scanning. Check `logs/audit-trail.jsonl` for decisions.
 
-### Layer 2: API (Cloud) — Required for agent operation
-
-Registration enables setup, dev telemetry, error capture, feedback, whoami,
-subscription, and Telegram linking:
-
-```bash
-# Register with the cloud API
-beam register
-
-# Validate
-beam whoami   # should show your user ID and tier
-```
-
-Do not start an agent without this layer; `beam setup` and `beam dev` validate it.
-
-### Layer 3: Telegram (Chat) — Optional
-
-Adds Telegram-based monitoring. Requires the API layer first:
-
-```bash
-beam link-telegram   # generates a 6-char code
-# User sends the code to @beam_agent_bot
-```
-
 ### Common Mistakes
 
-1. **Manually editing .env instead of using `beam setup`.** Postinstall writes a
-   default `.env` and `beam setup` is the supported way to update it. Editing
-   `.env` by hand works but skips validation.
+1. **Inventing a registration step.** `beam register`, `beam login`,
+   `beam whoami`, `beam link-telegram`, `beam subscription`, `beam referral`,
+   `beam issue` and `beam support` were removed with the control plane. Do not
+   script them; they fail with "command not found".
+2. **Setting `BEAM_CLOUD_ENABLED=true` without a control plane.** Alerts, status
+   reports and error telemetry then target a dead endpoint. Leave it unset.
+3. **Bypassing the `beam` wrapper.** Invoke `beam` so the install root and config
+   dirs resolve consistently. Developing on Beam itself? Use `bun run dev`.
+4. **Editing `.env` by hand after `beam setup`.** Re-run setup instead.
 
-2. **Running `bun run dev` instead of `beam dev`.** Both start the engine, but
-   `beam dev` goes through the CLI layer and respects credentials, config paths,
-   and update checks. `bun run dev` bypasses all of that. Always use `beam dev`.
+### Agent-Driven Onboarding
 
-3. **Skipping `beam register`.** Registration is required before setup and dev so
-   telemetry, errors, and feedback can be associated with the agent.
-
-4. **Expecting `LOG_LEVEL` to silence output.** The env var is loaded but never
-   checked. All log levels write to the audit trail regardless.
-
-5. **Editing the Beam checkout while operating the agent.** Use the installed
-   `beam` wrapper and `beam update` instead. `bun install`, `bun run dev`, and
-   source edits belong to Beam development work only.
-
-6. **Using `bun add --global beam`.** Beam is not published under that npm
-   name. The release installer is the supported global install and writes a
-   checksum-verified bundle under `~/.beam`.
-
-7. **Skipping `beam doctor`.** Run `beam doctor` before `beam dev`; use
-   `beam doctor --fix` only for missing directories or permissions.
-
-## Agent-Driven Onboarding Paths
-
-### Path A: Install first, link Telegram later
+There is one path now — install, setup, run:
 
 ```bash
-# Agent runs:
-beam register
-beam setup --non-interactive --rpc-url="$ROBINHOOD_RPC_URL" --rpc-fallback-url="${ROBINHOOD_RPC_FALLBACK_URL:-}"
-beam link-telegram
-# Returns: 6-char code (e.g., ABC123)
-
-# Agent tells user:
-# "Send code ABC123 to @beam_agent_bot on Telegram to link your account"
+curl -fsSL https://raw.githubusercontent.com/irfndi/beam-clmm/main/scripts/install.sh \
+  | BEAM_SKIP_SETUP=1 bash
+export PATH="$HOME/.local/bin:$PATH"
+beam setup --non-interactive --rpc-url="$BEAM_BASE_RPC_URL"
+beam dev &
+beam status --message
 ```
 
-### Path B: Telegram first, install later
+No HTTP registration API exists to call. For programmatic access use the CLI
+(`beam status`, `beam portfolio`, `beam config`) or the local status server
+(`AGENT_HTTP_PORT`, bound to 127.0.0.1, gated by `AGENT_PROPOSAL_TOKEN`).
 
-```bash
-# User starts Telegram bot first:
-# 1. User messages @beam_agent_bot
-# 2. Bot replies: /register → returns API key
-
-# Then agent runs:
-beam login $API_KEY_FROM_BOT
-beam setup --non-interactive --rpc-url="$ROBINHOOD_RPC_URL" --rpc-fallback-url="${ROBINHOOD_RPC_FALLBACK_URL:-}"
-```
-
-### Path C: Agent-driven full setup (most common)
-
-```bash
-# Agent runs (all non-interactive):
-beam register
-beam setup --non-interactive --rpc-url="$ROBINHOOD_RPC_URL" --rpc-fallback-url="${ROBINHOOD_RPC_FALLBACK_URL:-}"
-
-# User then uses the CLI directly:
-beam whoami  # see their account info
-```
-
-### Path D: CLI-only (no Telegram)
-
-```bash
-beam register
-beam setup --non-interactive --rpc-url="$ROBINHOOD_RPC_URL" --rpc-fallback-url="${ROBINHOOD_RPC_FALLBACK_URL:-}"
-beam wallet generate
-beam dev
-```
-
-## HTTP API (for agents that prefer HTTP over CLI)
-
-The Cloudflare API is the same one the CLI calls internally. Agents can call it directly:
-
-```bash
-# Register a new user
-curl -X POST https://beam-api.irfndi.workers.dev/v1/register \
-  -H "Content-Type: application/json" \
-  -d '{"telegram_id": "123456", "first_name": "Test"}'
-# Returns: { "user_id": "...", "api_key": "sk-beam-..." }
-
-# Login (validate API key)
-curl -X POST https://beam-api.irfndi.workers.dev/v1/login \
-  -H "Authorization: Bearer sk-beam-xxx" \
-  -H "Content-Type: application/json" \
-  -d '{}'
-# Returns: { "user_id": "...", "tier": "free" }
-
-# Whoami
-curl https://beam-api.irfndi.workers.dev/v1/whoami \
-  -H "Authorization: Bearer sk-beam-xxx"
-# Returns: { "user_id": "...", "telegram_id": "...", "tier": "free" }
-
-# Link Telegram (generate 6-char code)
-curl -X POST https://beam-api.irfndi.workers.dev/v1/link-telegram/start \
-  -H "Authorization: Bearer sk-beam-xxx" \
-  -H "Content-Type: application/json" \
-  -d '{}'
-# Returns: { "code": "ABC123", "expires_at": "..." }
-```
 
 ## Environment for Agents
 
@@ -349,10 +245,6 @@ acpx (Agent Command Protocol eXtended) can wrap Beam CLI commands:
 ```yaml
 # acpx.yaml
 commands:
-  beam-register:
-    cmd: beam register
-    description: Register with Beam and get an API key
-
   beam-setup:
     cmd: beam setup --non-interactive --rpc-url={{rpc_url}} --rpc-fallback-url={{rpc_fallback_url}}
     description: Configure Beam with private RPC providers
@@ -413,9 +305,7 @@ beam update
 | ----------------------------------- | ------------------- | ------------------------------------------------------- |
 | "RPC error"                          | RPC down           | Re-run `beam setup` with correct RPC URL            |
 | "No wallet configured"              | Missing private key | Add `WALLET_PRIVATE_KEY` to `.env` or use paper trading |
-| "API key expired"                   | Session expired     | Re-run `beam register`                                 |
 | "Pool not found"                    | Invalid watchlist   | Check pool addresses with `beam setup`                 |
-| "401 Unauthorized" on Telegram link | User not registered | User runs `beam register` first                        |
 
 ## Reference
 
@@ -423,5 +313,5 @@ beam update
 - Install guide: [`install.md`](install.md)
 - CLI reference: [`cli.md`](cli.md)
 - Cron examples: [`cron-examples.md`](cron-examples.md)
-- Cloudflare deploy (operators only): [`../cloudflare/README.md`](../cloudflare/README.md)
+- Deployment (pm2, operators only): [`../AGENTS.md`](../AGENTS.md) and `../pm2.ecosystem.config.cjs`
 - AGENTS.md: [`../AGENTS.md`](../AGENTS.md)

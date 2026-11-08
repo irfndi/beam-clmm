@@ -42,9 +42,13 @@ function makeReporter(overrides?: Partial<ErrorReporterConfig>): ErrorReporter {
 
 const ORIGINAL_ERROR_REPORTING = process.env.BEAM_ERROR_REPORTING;
 const ORIGINAL_ERROR_ENDPOINT = process.env.BEAM_ERROR_ENDPOINT;
+const ORIGINAL_CLOUD_ENABLED = process.env.BEAM_CLOUD_ENABLED;
 
 beforeEach(() => {
   mockFetch();
+  // Cloud reporting is opt-in since the control plane was retired; the suite
+  // covers the default-endpoint path, so opt in here.
+  process.env.BEAM_CLOUD_ENABLED = "true";
 });
 
 afterEach(() => {
@@ -58,6 +62,11 @@ afterEach(() => {
     delete process.env.BEAM_ERROR_ENDPOINT;
   } else {
     process.env.BEAM_ERROR_ENDPOINT = ORIGINAL_ERROR_ENDPOINT;
+  }
+  if (ORIGINAL_CLOUD_ENABLED === undefined) {
+    delete process.env.BEAM_CLOUD_ENABLED;
+  } else {
+    process.env.BEAM_CLOUD_ENABLED = ORIGINAL_CLOUD_ENABLED;
   }
 });
 
@@ -270,6 +279,28 @@ describe("no-op mode", () => {
     expect(r.getPending()).toHaveLength(0);
     void r.flushAsync();
     expect(vi.mocked(globalThis.fetch)).not.toHaveBeenCalled();
+    void r.dispose();
+  });
+
+  it("does nothing when BEAM_CLOUD_ENABLED=false and no explicit endpoint", () => {
+    process.env.BEAM_CLOUD_ENABLED = "false";
+    const r = createErrorReporter({ flushIntervalMs: 60_000 });
+    r.setAppVersion("1.0.0-test");
+    r.report(new Error("standalone agent"));
+    expect(r.getPending()).toHaveLength(0);
+    expect(vi.mocked(globalThis.fetch)).not.toHaveBeenCalled();
+    void r.dispose();
+  });
+
+  it("still reports to an explicitly configured endpoint when the cloud is off", () => {
+    process.env.BEAM_CLOUD_ENABLED = "false";
+    const r = createErrorReporter({
+      endpoint: "https://errors.test.local/report",
+      flushIntervalMs: 60_000,
+    });
+    r.setAppVersion("1.0.0-test");
+    r.report(new Error("self-hosted collector"));
+    expect(r.getPending()).toHaveLength(1);
     void r.dispose();
   });
 

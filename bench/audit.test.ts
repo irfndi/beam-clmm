@@ -40,12 +40,7 @@ describe("AuditService", () => {
 
   it("records a decision", () => {
     const layer = makeLayer();
-    const api = run(
-      Effect.gen(function* () {
-        return yield* AuditService;
-      }),
-      layer,
-    );
+    const api = run(AuditService, layer);
 
     run(api.recordDecision(makeRecord()), layer);
 
@@ -56,12 +51,7 @@ describe("AuditService", () => {
 
   it("returns recent decisions in reverse order", () => {
     const layer = makeLayer();
-    const api = run(
-      Effect.gen(function* () {
-        return yield* AuditService;
-      }),
-      layer,
-    );
+    const api = run(AuditService, layer);
 
     run(api.recordDecision(makeRecord({ action: "ENTER", timestamp: 1 })), layer);
     run(api.recordDecision(makeRecord({ action: "HOLD", timestamp: 2 })), layer);
@@ -74,12 +64,7 @@ describe("AuditService", () => {
 
   it("limits results", () => {
     const layer = makeLayer();
-    const api = run(
-      Effect.gen(function* () {
-        return yield* AuditService;
-      }),
-      layer,
-    );
+    const api = run(AuditService, layer);
 
     for (let i = 0; i < 5; i++) {
       run(api.recordDecision(makeRecord()), layer);
@@ -91,12 +76,7 @@ describe("AuditService", () => {
 
   it("keeps same-cycle same-millisecond decisions unique", () => {
     const layer = makeLayer();
-    const api = run(
-      Effect.gen(function* () {
-        return yield* AuditService;
-      }),
-      layer,
-    );
+    const api = run(AuditService, layer);
     const record = makeRecord({ timestamp: 1234 });
 
     run(api.recordDecision(record), layer);
@@ -107,12 +87,7 @@ describe("AuditService", () => {
 
   it("returns empty array when no records", () => {
     const layer = makeLayer();
-    const api = run(
-      Effect.gen(function* () {
-        return yield* AuditService;
-      }),
-      layer,
-    );
+    const api = run(AuditService, layer);
 
     const recent = run(api.getRecentDecisions(10), layer);
     expect(recent).toHaveLength(0);

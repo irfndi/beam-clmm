@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { Effect, Layer } from "effect";
 import { StrategyLive } from "../engine/strategy-service.js";
+import { DecisionLive } from "../engine/decision-service.js";
 import { program } from "../engine/program.js";
 import { DbLive } from "../engine/db-service.js";
 import { MemoryLive } from "../engine/memory-service.js";
@@ -114,6 +115,7 @@ describe("evaluatePool TVL-drop EXIT (integration)", () => {
       Layer.succeed(ConfigService, config),
       Layer.succeed(AdapterService, makeAdapter()),
       StrategyLive,
+      DecisionLive,
       Layer.provide(MemoryLive, dbLayer),
       RiskLive({
         confidenceThreshold: 0.65,
@@ -164,7 +166,7 @@ describe("evaluatePool TVL-drop EXIT (integration)", () => {
       AgentStateMutable({ maxPendingProposals: 50 }).layer,
       Layer.succeed(McpServerService, { start: () => Effect.void, stop: () => Effect.void }),
       Layer.succeed(HttpStatusServerService, { start: () => Effect.void, stop: () => Effect.void }),
-      Layer.succeed(EntryPrepService, { prepareEntryTokens: () => Effect.succeed(undefined) }),
+      Layer.succeed(EntryPrepService, { prepareEntryTokens: () => Effect.undefined }),
       Layer.succeed(KrystalService, {
         getPoolStats: () => Effect.succeed(null),
         getUniverse: () => Effect.succeed(new Map()),
@@ -209,7 +211,7 @@ describe("evaluatePool TVL-drop EXIT (integration)", () => {
       yield* db.saveSnapshot(previousSnapshot);
       // program loops forever on the scheduler; race it against a timer so the
       // first (immediate) scan cycle runs and then we interrupt it.
-      yield* Effect.raceFirst(program, Effect.sleep(2_000));
+      yield* Effect.timeoutOrElse(program, { duration: 2_000, orElse: () => Effect.void });
       const audit = yield* AuditService;
       return yield* audit.getRecentDecisions(50);
     });

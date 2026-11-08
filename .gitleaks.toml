@@ -30,5 +30,4 @@ paths = [
   'bench/helpers\.ts$',
   'ops/backtest\.ts$',
   'docs/agent-harness\.md$',
-  'cloudflare/README\.md$',
 ]

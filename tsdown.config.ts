@@ -20,9 +20,24 @@ export default defineConfig({
       "@clack/prompts",
       "semver",
       "viem",
+      // Subpath exports are separate resolutions: `alwaysBundle: ["viem"]` does
+      // not cover `viem/accounts`, which otherwise leaks as a bare import.
+      "viem/accounts",
       "@uniswap/sdk-core",
       "@uniswap/v3-sdk",
       "@uniswap/v4-sdk",
+      // viem's own runtime deps. Leaving these external ships a bundle that
+      // resolves them from bun's global cache, which fails on a clean machine
+      // ("Cannot find module '@noble/hashes/crypto'") — the same class of bug
+      // as issue #179.
+      "@noble/curves",
+      "@noble/hashes",
+      "@scure/bip32",
+      "@scure/bip39",
+      "abitype",
+      "isows",
+      "ox",
+      "ws",
     ],
   },
   // dist/ is consumed by scripts/build-bundle.ts (staged into the release

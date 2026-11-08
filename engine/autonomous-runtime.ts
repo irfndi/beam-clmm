@@ -234,10 +234,8 @@ export function loadDailyEquityBaseline(
 ): Effect.Effect<DailyEquityBaseline, never> {
   return Effect.gen(function* () {
     const keys = dailyBaselineKeys(scope);
-    const day = yield* db.getMetadata(keys.day).pipe(Effect.catch(() => Effect.succeed(null)));
-    const equity = yield* db
-      .getMetadata(keys.equity)
-      .pipe(Effect.catch(() => Effect.succeed(null)));
+    const day = yield* db.getMetadata(keys.day).pipe(Effect.orElseSucceed(() => null));
+    const equity = yield* db.getMetadata(keys.equity).pipe(Effect.orElseSucceed(() => null));
     const equityUsd = equity === null ? 0 : Number(equity);
     return {
       day: day ?? "",
@@ -257,7 +255,7 @@ export function persistDailyEquityBaseline(
       { key: keys.day, value: baseline.day },
       { key: keys.equity, value: String(baseline.equityUsd) },
     ])
-    .pipe(Effect.catch(() => Effect.void));
+    .pipe(Effect.ignore);
 }
 
 function atomicUsd(amountAtomic: bigint, decimals: number, priceUsd: number): number {
@@ -350,6 +348,7 @@ export function processSettlementJobs(
   return Effect.gen(function* () {
     if (input.mode === "off" || input.mode === "shadow") return input.jobs;
     const processed: SettlementJobRecord[] = [];
+    const unpersistedPositionIds = new Set<string>();
     for (const job of input.jobs) {
       if (job.status === "terminal" || (job.nextRetryAt !== null && job.nextRetryAt > input.now)) {
         processed.push(job);
@@ -574,7 +573,7 @@ export function processSettlementJobs(
         const evidence = input.adapter.getConfirmedSwapOutput
           ? yield* input.adapter
               .getConfirmedSwapOutput(signature)
-              .pipe(Effect.catch(() => Effect.succeed(null)))
+              .pipe(Effect.orElseSucceed(() => null))
           : null;
         if (evidence && evidence.outputAtomic > 0n) {
           confirmedOutputAtomic = evidence.outputAtomic;
@@ -621,13 +620,19 @@ export function processSettlementJobs(
       );
       const persisted = yield* input.db.saveSettlementJob(result).pipe(
         Effect.as(true),
-        Effect.catch(() => Effect.succeed(false)),
+        Effect.orElseSucceed(() => false),
       );
       if (persisted) processed.push(result);
+      else unpersistedPositionIds.add(result.positionId);
     }
 
     const byPosition = Map.groupBy(processed, (job) => job.positionId);
     for (const [positionId, jobs] of byPosition) {
+      // A position whose sibling write failed has an INCOMPLETE group here.
+      // Finalizing on the subset books a realized PnL that omits that leg's
+      // proceeds (and lets the late-confirming leg finalize it a second time).
+      // Leave the row open-with-NULL-PnL: the next cycle retries the group.
+      if (unpersistedPositionIds.has(positionId)) continue;
       const unfinalized = jobs.filter((job) => job.finalizedAt === null);
       if (unfinalized.length === 0) continue;
       if (jobs.some((job) => job.status !== "confirmed")) continue;
@@ -638,7 +643,7 @@ export function processSettlementJobs(
       if (completeJobs.length !== jobs.length) continue;
       const position = yield* input.db
         .getPosition(positionId)
-        .pipe(Effect.catch(() => Effect.succeed(null)));
+        .pipe(Effect.orElseSucceed(() => null));
       if (!position) continue;
       const outputUsd = completeJobs.reduce((sum, job) => sum + job.outputUsd, 0);
       const executionCostUsd = completeJobs.reduce((sum, job) => sum + job.executionCostUsd, 0);
@@ -658,7 +663,7 @@ export function processSettlementJobs(
           finalizedAt: input.now,
           signalSnapshotId: position.entrySignalSnapshotId,
         })
-        .pipe(Effect.catch(() => Effect.void));
+        .pipe(Effect.ignore);
     }
     return processed;
   });
@@ -697,9 +702,7 @@ export function sweepOrphanSettlements(
     const holdings = yield* input.adapter
       .getWalletHoldings()
       .pipe(
-        Effect.catch(() =>
-          Effect.succeed(new Map<string, { amountAtomic: bigint; decimals: number }>()),
-        ),
+        Effect.orElseSucceed(() => new Map<string, { amountAtomic: bigint; decimals: number }>()),
       );
     const candidates = [...holdings.entries()].filter(
       ([mint, holding]) =>
@@ -715,7 +718,7 @@ export function sweepOrphanSettlements(
     if (candidates.length === 0) return [];
     const existingJobs = yield* input.db
       .listSettlementJobs(input.walletAddress, input.agentInstanceId)
-      .pipe(Effect.catch(() => Effect.succeed([])));
+      .pipe(Effect.orElseSucceed(() => []));
     const backedMints = new Set<string>(
       existingJobs
         .filter((job) => job.status !== "terminal" && job.status !== "confirmed")
@@ -727,9 +730,7 @@ export function sweepOrphanSettlements(
     // live wallet's stranded tokens. The engine's model is one wallet per DB
     // (portfolio/equity math already assumes it), so remaining rows belong to
     // the current wallet.
-    const openPositions = yield* input.db
-      .getAllPositions()
-      .pipe(Effect.catch(() => Effect.succeed([])));
+    const openPositions = yield* input.db.getAllPositions().pipe(Effect.orElseSucceed(() => []));
     for (const poolAddress of new Set(
       openPositions
         .filter((position) => !position.positionId.startsWith("paper-"))
@@ -737,7 +738,7 @@ export function sweepOrphanSettlements(
     )) {
       const state = yield* input.adapter
         .getPoolState(poolAddress)
-        .pipe(Effect.catch(() => Effect.succeed(null)));
+        .pipe(Effect.orElseSucceed(() => null));
       if (state) {
         backedMints.add(state.tokenX);
         backedMints.add(state.tokenY);
@@ -777,10 +778,33 @@ export function sweepOrphanSettlements(
         )
         .map((job) => [job.tokenMint, job]),
     );
+    // A terminal row whose error is deterministic (unrecoverable route/quote)
+    // can never succeed on retry. Reviving it re-quotes the same doomed swap
+    // every cycle AND undoes an operator's manual terminalization; spawning a
+    // fresh job instead is the same loop with a new id. Skip the mint entirely
+    // — it stays in the wallet and `beam status` still classifies it as
+    // stranded, which is the operator's signal.
+    const unrecoverableMints = new Set(
+      [...terminalByMint.values()]
+        .filter((job) => isUnrecoverableSettlementError(job.error))
+        .map((job) => job.tokenMint),
+    );
     const jobs: SettlementJobRecord[] = [];
     for (const [mint, holding] of holdings) {
-      if (mint === NATIVE_MINT || mint === STABLECOIN_MINT || holding.amountAtomic <= 0n) continue;
+      // Lowercase-compare: the adapter emits lowercase holdings keys
+      // (adapter-service.ts), while NATIVE_MINT/STABLECOIN_MINT are literals.
+      // A case-sensitive compare swept the checksummed USDC address into a
+      // sell-to-ETH job — the exact outcome the filter above documents.
+      const mintKey = mint.toLowerCase();
+      if (
+        mintKey === NATIVE_MINT.toLowerCase() ||
+        mintKey === STABLECOIN_MINT.toLowerCase() ||
+        holding.amountAtomic <= 0n
+      ) {
+        continue;
+      }
       if (backedMints.has(mint)) continue;
+      if (unrecoverableMints.has(mint)) continue;
       const priceUsd = prices[mint] ?? 0;
       if (
         input.settlementDustUsd > 0 &&

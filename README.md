@@ -52,8 +52,7 @@ Fabricated (heuristic) stats never pass a gate: when only the heuristic is avail
 ```bash
 curl -fsSL https://raw.githubusercontent.com/irfndi/beam-clmm/main/scripts/install.sh | bash
 export PATH="$HOME/.local/bin:$PATH"   # if not already on PATH
-beam register
-beam setup --non-interactive --rpc-url=https://rpc.mainnet.chain.robinhood.com
+beam setup --non-interactive --rpc-url=https://mainnet.base.org
 beam dev                               # paper trading by default
 ```
 
@@ -66,8 +65,7 @@ beam dev                               # paper trading by default
 curl -fsSL https://raw.githubusercontent.com/irfndi/beam-clmm/main/scripts/install.sh \
   | BEAM_VERSION=1.2.3 bash
 export PATH="$HOME/.local/bin:$PATH"
-beam register
-beam setup --non-interactive --rpc-url=https://rpc.mainnet.chain.robinhood.com
+beam setup --non-interactive --rpc-url=https://mainnet.base.org
 beam dev
 ```
 
@@ -92,7 +90,6 @@ Agents operating Beam should use the installed `beam` wrapper as the product bou
 curl -fsSL https://raw.githubusercontent.com/irfndi/beam-clmm/main/scripts/install.sh \
   | BEAM_SKIP_SETUP=1 bash
 export PATH="$HOME/.local/bin:$PATH"
-beam register
 beam version
 beam setup --non-interactive --rpc-url=https://rpc.mainnet.chain.robinhood.com
 beam dev
@@ -129,16 +126,14 @@ export PATH="$HOME/.local/bin:$PATH"
 curl -fsSL https://raw.githubusercontent.com/irfndi/beam-clmm/main/scripts/install.sh | bash
 export PATH="$HOME/.local/bin:$PATH"
 
-beam register                                    # required — creates the agent account
-beam setup --non-interactive --rpc-url="$ROBINHOOD_RPC_URL"
+beam setup --non-interactive --rpc-url="$BEAM_BASE_RPC_URL"
 beam dev                                         # start paper trading
 ```
 
 If `beam` is not on `PATH` after the one-liner install, invoke the CLI directly:
 
 ```bash
-beam register
-beam setup --non-interactive --rpc-url="$ROBINHOOD_RPC_URL"
+beam setup --non-interactive --rpc-url="$BEAM_BASE_RPC_URL"
 beam dev
 ```
 
@@ -147,18 +142,13 @@ Common agent commands:
 | Command                                                          | Purpose                                                           |
 | ---------------------------------------------------------------- | ----------------------------------------------------------------- |
 | `beam setup` / `beam setup --non-interactive --rpc-url=...` | Write `.env` (RPC provider, watchlist, optional API key)       |
-| `beam register`                                                 | Create the required cloud account and store its API key          |
-| `beam login <key>`                                              | Validate an existing API key and store it locally                 |
-| `beam whoami`                                                   | Show current user / API key info (requires `register`)            |
-| `beam dev`                                                      | Start the registered trading agent (paper by default)             |
+| `beam dev`                                                      | Start the trading agent (paper by default)                        |
 | `beam backtest --days 7`                                        | Run a historical simulation against synthetic data                |
 | `beam backtest --source replay --days 7 --pools <addr>`         | Replay live on-chain snapshots through the strategy               |
 | `beam status --message`                                         | Chat-ready summary for agent runtimes                             |
 | `beam version`                                                  | Show the current version                                          |
 | `beam update`                                                   | Self-update from R2/GitHub releases (with smoke tests + rollback) |
-| `beam feedback "..."`                                          | Store structured feedback in Beam Cloud D1                      |
-| `beam issue "..."`                                             | Store an issue in Beam Cloud D1                                  |
-| `beam link-telegram`                                            | Issue a `LINK-<16 hex>` code to link `@beam_agent_bot` (optional)  |
+| `beam feedback "..."`                                          | Record structured feedback locally                              |
 | `beam telemetry`                                                | Inspect or control client error telemetry                         |
 | `beam config`                                                   | Inspect or edit DB-backed config (env > DB > defaults)            |
 
@@ -181,15 +171,11 @@ bun run backtest --source replay --db ./beam.db --days 7 --pools <addr>
 
 ## Telemetry
 
-The first `bun install` (postinstall) sends a single anonymous install ping — install id, platform, and package version — to
-`https://beam-api.irfndi.workers.dev/v1/installs/ping`. The ping is **opt-out**:
+The first `bun install` (postinstall) used to send a single anonymous install ping to the hosted API. That endpoint was retired with the Cloudflare control plane, and install telemetry is now **opt-in**: nothing is sent unless `BEAM_CLOUD_ENABLED=true` is set explicitly.
 
-- Set `BEAM_FEEDBACK_OPT_OUT=true` (or `1`/`true`/`yes`/`on`) in the environment **or** in `.env` to skip it entirely. The opt-out is read on every install run, so it also works retroactively.
+- `BEAM_FEEDBACK_OPT_OUT=true` (or `1`/`true`/`yes`/`on`) still forces the ping off, in the environment **or** in `.env`.
 
-Feedback and issue submissions (`beam feedback` / `beam issue`) use the registered Beam account and are not telemetry. Client error
-reporting is enabled by default for registered clients (`BEAM_ERROR_REPORTING=true`) and can be pointed at a private endpoint via
-`BEAM_ERROR_ENDPOINT`; `beam telemetry` inspects or controls it. Telegram alerts are a user-requested utility, not telemetry —
-`BEAM_FEEDBACK_OPT_OUT` does not affect them.
+`beam feedback` records feedback in local SQLite. Client error reporting is disabled by default (`BEAM_CLOUD_ENABLED` unset); set `BEAM_ERROR_ENDPOINT` to send it to a collector you control. `beam telemetry` inspects or controls it. Telegram alerts are a user-requested utility, not telemetry — `BEAM_FEEDBACK_OPT_OUT` does not affect them.
 
 ## Configuration
 
@@ -338,7 +324,7 @@ HOLD executes nothing, so it skips risk evaluation entirely. Deterministic EXIT 
 
 ## Stack
 
-- **Runtime**: Bun 1.4.0
+- **Runtime**: Bun 1.4.4
 - **Strategy**: Rule-based engine over Uniswap v3/v4 tick ranges
 - **Memory**: SQLite + sqlite-vec vector memory with automatic expiry
 - **On-chain**: viem + `@uniswap/v3-sdk` + `@uniswap/v4-sdk`, Robinhood Chain RPC

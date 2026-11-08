@@ -186,12 +186,16 @@ function enableCredentials(): void {
 
 beforeEach(() => {
   process.env.BEAM_CREDENTIALS_FILE = credentialsFile;
+  // Cloud submission is opt-in since the control plane was retired; this suite
+  // covers the cloud-D1 path, so opt in explicitly.
+  process.env.BEAM_CLOUD_ENABLED = "true";
 });
 
 afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
   delete process.env.BEAM_CREDENTIALS_FILE;
+  delete process.env.BEAM_CLOUD_ENABLED;
   try {
     unlinkSync(credentialsFile);
   } catch {}
@@ -261,6 +265,25 @@ describe("feedback service — cloud fallback", () => {
     if (result.kind === "cloud") {
       expect(result.id).toBe("cloud-test-id");
     }
+  });
+
+  it("stores feedback locally without the cloud and without an account when disabled", async () => {
+    process.env.BEAM_CLOUD_ENABLED = "false";
+    // Standalone mode must not require `beam register`: drop the credentials
+    // file the beforeEach points at.
+    delete process.env.BEAM_CREDENTIALS_FILE;
+    const fetchCalls = vi.fn(() => Promise.resolve(new Response(null, { status: 200 })));
+    vi.stubGlobal("fetch", fetchCalls);
+
+    const layer = buildLayer("");
+    const program = Effect.gen(function* () {
+      const fb = yield* FeedbackService;
+      return yield* fb.submit(makeFeedback({ summary: "Standalone mode feedback" }));
+    }).pipe(Effect.provide(layer));
+
+    const result = await Effect.runPromise(program);
+    expect(result.kind).toBe("local_only");
+    expect(fetchCalls).not.toHaveBeenCalled();
   });
 
   it("falls back to local storage when the cloud endpoint fails", async () => {

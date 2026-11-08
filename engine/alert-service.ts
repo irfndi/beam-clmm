@@ -6,6 +6,7 @@ import { ConfigService } from "./config-service.js";
 import { AlertService, DbService, type AlertApi, type EngineAlert } from "./services.js";
 import { createLogger } from "./logger.js";
 import { getBeamUserConfigDir } from "./paths.js";
+import { isCloudEnabled } from "./cloud-switch.js";
 
 const log = createLogger("alert-service");
 
@@ -114,9 +115,20 @@ export const AlertLive: Layer.Layer<AlertService, never, DbService | ConfigServi
         if (!config.alertsEnabled) return;
         const key = cooldownKey(alert);
         const now = Date.now();
-        const lastRaw = yield* db.getMetadata(key).pipe(Effect.catch(() => Effect.succeed(null)));
+        const lastRaw = yield* db.getMetadata(key).pipe(Effect.orElseSucceed(() => null));
         const lastSent = parseNumber(lastRaw);
         if (lastSent !== null && now - lastSent < cooldownMs) return;
+
+        if (!isCloudEnabled()) {
+          // Standalone mode: the cloud is what fans alerts out to Telegram, so
+          // record the alert in the log and skip delivery entirely.
+          log.info(`Alert (cloud disabled): ${alert.message}`, {
+            type: alert.type,
+            severity: alert.severity,
+            pool: alert.poolAddress,
+          });
+          return;
+        }
 
         const apiKey = readBeamApiKey();
         if (!apiKey) {
@@ -127,7 +139,7 @@ export const AlertLive: Layer.Layer<AlertService, never, DbService | ConfigServi
 
         // Mark the attempt before POSTing: a flaky API must not retrigger the
         // same alert on every scan cycle (throttle beats delivery here).
-        yield* db.setMetadata(key, String(now)).pipe(Effect.catch(() => Effect.void));
+        yield* db.setMetadata(key, String(now)).pipe(Effect.ignore);
 
         yield* postAlert(apiKey, readInstallId(), alert);
       });
@@ -139,13 +151,13 @@ export const AlertLive: Layer.Layer<AlertService, never, DbService | ConfigServi
 
         const totalRaw = yield* db
           .getMetadata(FEE_TOTAL_KEY)
-          .pipe(Effect.catch(() => Effect.succeed(null)));
+          .pipe(Effect.orElseSucceed(() => null));
         const total = (parseNumber(totalRaw) ?? 0) + feeUsd;
-        yield* db.setMetadata(FEE_TOTAL_KEY, String(total)).pipe(Effect.catch(() => Effect.void));
+        yield* db.setMetadata(FEE_TOTAL_KEY, String(total)).pipe(Effect.ignore);
 
         const nextRaw = yield* db
           .getMetadata(FEE_NEXT_MILESTONE_KEY)
-          .pipe(Effect.catch(() => Effect.succeed(null)));
+          .pipe(Effect.orElseSucceed(() => null));
         const nextMilestone = parseNumber(nextRaw) ?? config.alertFeeMilestoneUsd;
         if (total < nextMilestone) return;
 
@@ -155,9 +167,7 @@ export const AlertLive: Layer.Layer<AlertService, never, DbService | ConfigServi
         }
         const lastCrossed = following - config.alertFeeMilestoneUsd;
         const crossedCount = (following - nextMilestone) / config.alertFeeMilestoneUsd;
-        yield* db
-          .setMetadata(FEE_NEXT_MILESTONE_KEY, String(following))
-          .pipe(Effect.catch(() => Effect.void));
+        yield* db.setMetadata(FEE_NEXT_MILESTONE_KEY, String(following)).pipe(Effect.ignore);
 
         yield* sendAlert({
           type: "fee_milestone",

@@ -1,5 +1,7 @@
-// Fallback is default: @xenova/transformers crashes in Node when
-// serializing BigInt. Set EMBEDDINGS_BACKEND=onnx to opt back into ONNX.
+// Fallback is default: the ONNX backend pulls a large native runtime and
+// previously crashed in Node on BigInt serialization. Set
+// EMBEDDINGS_BACKEND=onnx to opt into @huggingface/transformers (the
+// maintained successor to @xenova/transformers).
 import { Effect } from "effect";
 import { createLogger } from "./logger.js";
 
@@ -14,7 +16,7 @@ let onnxCache: Effect.Effect<[Effect.Effect<Embedder, Error>, Effect.Effect<void
 function loadOnnxUncached(): Effect.Effect<Embedder, Error> {
   return Effect.gen(function* () {
     const mod = yield* Effect.tryPromise({
-      try: () => import("@xenova/transformers"),
+      try: () => import("@huggingface/transformers"),
       catch: (cause) => (cause instanceof Error ? cause : new Error(String(cause))),
     });
     const extractor = yield* Effect.tryPromise({

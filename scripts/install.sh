@@ -8,6 +8,7 @@ SHELL_NAME="${SHELL##*/}"
 SHELL_NAME="${SHELL_NAME:-sh}"
 
 REPO="${BEAM_REPO:-irfndi/beam-clmm}"
+GITHUB_RELEASES_LATEST="https://github.com/${REPO}/releases/latest"
 BIN_DIR="${BEAM_BIN_DIR:-$HOME/.local/bin}"
 INSTALL_DIR="${BEAM_INSTALL_DIR:-$HOME/.beam}"
 CONFIG_DIR="${BEAM_CONFIG_DIR:-$HOME/.config/beam}"
@@ -19,6 +20,12 @@ SKIP_SETUP="${BEAM_SKIP_SETUP:-}"
 IS_OPTED_OUT=0
 case "$(printf '%s' "${BEAM_FEEDBACK_OPT_OUT:-}" | tr '[:upper:]' '[:lower:]')" in
   1|true|yes|on) IS_OPTED_OUT=1 ;;
+esac
+# The Cloudflare control plane was retired; BEAM_CLOUD_ENABLED is opt-in, so an
+# unset switch must not POST install telemetry to an endpoint that no longer exists.
+IS_CLOUD_ENABLED=0
+case "$(printf '%s' "${BEAM_CLOUD_ENABLED:-}" | tr '[:upper:]' '[:lower:]')" in
+  1|true|yes|on) IS_CLOUD_ENABLED=1 ;;
 esac
 
 log_step()  { printf "→ %s\n" "$*"; }
@@ -126,8 +133,8 @@ ensure_bun() {
 
   local current
   current="$("$BUN_BIN" --version 2>/dev/null || echo "unknown")"
-  if ! version_gte "$current" "1.4.0"; then
-    log_error "Bun $current is installed but >= 1.4.0 is required."
+  if ! version_gte "$current" "1.4.4"; then
+    log_error "Bun $current is installed but >= 1.4.4 is required."
     log_error "Upgrade with:  curl -fsSL https://bun.sh/install | bash"
     return 1
   fi
@@ -248,6 +255,11 @@ sha256_of() {
 PLATFORM="$(detect_platform)"
 EXT_SUFFIX="$(extension_suffix "$PLATFORM")"
 
+# Release artifacts are served from two places: the R2 mirror (primary) and the
+# GitHub release (fallback). R2 has been unavailable, so a dead mirror must not
+# block installation — GitHub is the system of record for the binaries.
+USE_GITHUB=0
+
 if [ -z "$VERSION" ]; then
   log_step "Detecting latest ${CHANNEL} release..."
   LATEST_URL="${R2_BASE_URL}/releases/latest.json"
@@ -256,7 +268,27 @@ if [ -z "$VERSION" ]; then
   fi
   VERSION="$(curl -fsSL "$LATEST_URL" 2>/dev/null | grep '"version":' | sed -E 's/.*"version": *"([^"]+)".*/\1/' || true)"
   if [ -z "$VERSION" ]; then
-    log_error "Could not detect latest version from ${LATEST_URL}"
+    log_warn "R2 mirror unavailable (${LATEST_URL}); falling back to GitHub releases"
+    if [ "$CHANNEL" = "stable" ]; then
+      # Read the tag from the /releases/latest redirect instead of the REST API:
+      # unauthenticated API calls are capped at 60/hour per IP, so a rate-limited
+      # client would otherwise be unable to install at all. The redirect is free.
+      tag="$(curl -sI "$GITHUB_RELEASES_LATEST" 2>/dev/null \
+        | tr -d '\r' | sed -n 's|^[Ll]ocation:.*/tag/v\{0,1\}\(.*\)$|\1|p' | head -n 1)"
+      VERSION="${tag#v}"
+    else
+      # Non-stable channels track prereleases; the list endpoint returns newest first.
+      VERSION="$(curl -fsSL "https://api.github.com/repos/${REPO}/releases" 2>/dev/null \
+        | grep -oE '"tag_name":[[:space:]]*"v?[^"]+"' \
+        | head -n 1 \
+        | sed -E 's/.*"v?([^"]+)"$/\1/' || true)"
+    fi
+    if [ -n "$VERSION" ]; then
+      USE_GITHUB=1
+    fi
+  fi
+  if [ -z "$VERSION" ]; then
+    log_error "Could not detect latest version from ${LATEST_URL} or GitHub (${REPO})"
     exit 1
   fi
   log_step "Latest ${CHANNEL}: v${VERSION}"
@@ -269,7 +301,12 @@ if [ -n "${VERSION:-}" ] && ! printf '%s' "$VERSION" | grep -qE '^[0-9][0-9a-zA-
 fi
 
 TARBALL_NAME="beam-v${VERSION}-${PLATFORM}.tar.gz"
-TARBALL_URL="${R2_BASE_URL}/releases/v${VERSION}/${TARBALL_NAME}"
+GITHUB_DOWNLOAD_URL="https://github.com/${REPO}/releases/download/v${VERSION}"
+if [ "$USE_GITHUB" -eq 1 ]; then
+  TARBALL_URL="${GITHUB_DOWNLOAD_URL}/${TARBALL_NAME}"
+else
+  TARBALL_URL="${R2_BASE_URL}/releases/v${VERSION}/${TARBALL_NAME}"
+fi
 SHA256_URL="${TARBALL_URL}.sha256"
 
 TMP_DIR="$(mktemp -d -t beam-install-XXXXXX)"
@@ -277,8 +314,18 @@ trap 'rm -rf "$TMP_DIR"' EXIT
 
 log_step "Downloading ${TARBALL_NAME}"
 if ! curl -fsSL "$TARBALL_URL" -o "${TMP_DIR}/${TARBALL_NAME}"; then
-  log_error "Failed to download ${TARBALL_URL}"
-  exit 1
+  # The R2 mirror can resolve a version and still refuse the object; GitHub
+  # hosts the same artifact, so retry there before failing the install.
+  if [ "$USE_GITHUB" -eq 0 ]; then
+    log_warn "Primary download failed; retrying from GitHub releases"
+    TARBALL_URL="${GITHUB_DOWNLOAD_URL}/${TARBALL_NAME}"
+    SHA256_URL="${TARBALL_URL}.sha256"
+    USE_GITHUB=1
+  fi
+  if ! curl -fsSL "$TARBALL_URL" -o "${TMP_DIR}/${TARBALL_NAME}"; then
+    log_error "Failed to download ${TARBALL_URL}"
+    exit 1
+  fi
 fi
 
 log_step "Verifying SHA-256 checksum..."
@@ -426,7 +473,7 @@ if [ ! -s "$INSTALL_ID_FILE" ]; then
   fi
 fi
 INSTALL_ID="$(cat "$INSTALL_ID_FILE" 2>/dev/null || echo "")"
-if [ -n "$INSTALL_ID" ] && [ "$IS_OPTED_OUT" -eq 0 ]; then
+if [ -n "$INSTALL_ID" ] && [ "$IS_OPTED_OUT" -eq 0 ] && [ "$IS_CLOUD_ENABLED" -eq 1 ]; then
   BEAM_PLATFORM="$(uname -s | tr A-Z a-z)"
   BEAM_PAYLOAD="{\"installId\":\"$INSTALL_ID\",\"event\":\"install\",\"channel\":\"$CHANNEL\",\"platform\":\"$BEAM_PLATFORM\",\"version\":\"$VERSION\"}"
   curl -fsS --max-time 5 -X POST "${BEAM_API_URL:-https://beam-api.irfndi.workers.dev}/v1/installs/ping" \

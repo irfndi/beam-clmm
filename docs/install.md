@@ -11,14 +11,15 @@ Beam has 3 layers. The CLI is the operating boundary, and the API account is req
    `beam setup`, `beam wallet`, `beam backtest`, `beam update`.
    **REQUIRED.**
 
-2. **API (Cloud)** — A Cloudflare Worker that handles user accounts, API keys,
-   and subscription tiers. Commands that need it: `beam register`, `beam whoami`,
-   `beam login`, `beam link-telegram`, `beam subscription`.
-   **REQUIRED for setup and agent operation.** `beam register` stores the account key locally.
+2. **API (Cloud)** — RETIRED. This layer was a Cloudflare Worker handling user
+   accounts, API keys, and subscription tiers. It was removed when Beam moved to
+   a self-hosted VPS: there is no account to register and no cloud login.
+   Commands that used it (`beam register`, `beam login`, `beam whoami`,
+   `beam link-telegram`, `beam subscription`, `beam referral`, `beam issue`,
+   `beam support`) no longer exist. State lives in local SQLite.
 
-3. **Telegram (Chat)** — A Telegram bot (`@beam_agent_bot`) for monitoring and
-   control from your phone. Requires the API layer for auth.
-   **OPTIONAL.** Skip if you don't use Telegram.
+3. **Telegram (Chat)** — RETIRED with the API layer it depended on for auth.
+   Alerts are written to the audit log instead.
 
 ### Quickstart by Layer
 
@@ -29,8 +30,7 @@ Pick the option that matches your use case:
 ```bash
 curl -fsSL https://raw.githubusercontent.com/irfndi/beam-clmm/main/scripts/install.sh | bash
 export PATH="$HOME/.local/bin:$PATH"
-beam register
-beam setup --non-interactive --rpc-url="$ROBINHOOD_RPC_URL"
+beam setup --non-interactive --rpc-url="$BEAM_BASE_RPC_URL"
 beam dev                                                  # start paper trading
 ```
 
@@ -40,15 +40,12 @@ support, and Telegram monitoring.
 ```bash
 curl -fsSL https://raw.githubusercontent.com/irfndi/beam-clmm/main/scripts/install.sh | bash
 export PATH="$HOME/.local/bin:$PATH"
-beam register                                              # get API key from cloud
-beam setup --non-interactive --rpc-url="$ROBINHOOD_RPC_URL"
+beam setup --non-interactive --rpc-url="$BEAM_BASE_RPC_URL"
 beam dev
 ```
 
 ```bash
 # Same as Standard, then:
-beam link-telegram   # generates 6-char code
-# Send the code to @beam_agent_bot on Telegram
 ```
 
 ### Feature Matrix
@@ -70,7 +67,7 @@ beam link-telegram   # generates 6-char code
 
 ## Prerequisites
 
-- **Bun 1.4.0+** — [Install Bun](https://bun.sh/docs/installation) (the one-liner installer can do this for you)
+- **Bun 1.4.4+** — [Install Bun](https://bun.sh/docs/installation) (the one-liner installer can do this for you)
 - **Git** — only for contributor source installs
 - **EVM wallet** (optional) — only needed for live trading; paper trading works without one
 - **Robinhood Chain RPC URL** — required for reliable live trading; the public mainnet RPC works too
@@ -96,8 +93,6 @@ Then:
 ```bash
 export PATH="$HOME/.local/bin:$PATH"   # if not already on PATH
 
-beam register                          # required before setup/dev
-
 # Required for reliable live trading:
 beam setup --non-interactive --rpc-url=https://your-paid-rpc.example.com
 beam dev                               # start paper trading
@@ -113,7 +108,6 @@ Choose your path based on the architecture above. The recommended path is the on
 # One-liner installer (recommended)
 curl -fsSL https://raw.githubusercontent.com/irfndi/beam-clmm/main/scripts/install.sh | bash
 export PATH="$HOME/.local/bin:$PATH"
-beam register
 beam setup     # interactive RPC/.env wizard
 beam dev       # start paper trading
 ```
@@ -124,7 +118,6 @@ beam dev       # start paper trading
 # One-liner installer (recommended)
 curl -fsSL https://raw.githubusercontent.com/irfndi/beam-clmm/main/scripts/install.sh | bash
 export PATH="$HOME/.local/bin:$PATH"
-beam register  # get API key from Cloudflare API
 beam setup     # configure RPC providers + watchlist
 
 beam dev       # start paper trading
@@ -165,7 +158,6 @@ If the postinstall hook is disabled (`bun install --ignore-scripts`), run
 ### 2. Register (Get API Key) — REQUIRED
 
 ```bash
-beam register
 ```
 
 Creates your identity with Beam's Cloudflare Worker and returns an API key. Store it

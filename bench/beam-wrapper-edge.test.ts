@@ -69,7 +69,7 @@ function runBeam(
   // SAFETY: process.env is copied into a child-process environment whose values are strings.
   const env = {
     ...(process.env as Record<string, string>),
-    FAKE_BUN_VERSION: "1.4.0",
+    FAKE_BUN_VERSION: "1.4.4",
     PATH: opts.path ?? `${stubDir}:/usr/bin:/bin`,
     HOME: opts.home ?? noHomeDir,
   } satisfies Record<string, string>;
@@ -123,7 +123,7 @@ describe("scripts/beam.sh edge cases", () => {
     writeFileSync(path.join(scriptsDir, "beam.sh"), readFileSync(BEAM_SH, "utf8"));
     writeFileSync(
       path.join(broken, "package.json"),
-      JSON.stringify({ engines: { bun: ">=1.4.0" } }, null, 2),
+      JSON.stringify({ engines: { bun: ">=1.4.4" } }, null, 2),
     );
     const res = runBeam(["--help"], { script: path.join(scriptsDir, "beam.sh") });
     expect(res.status).toBe(1);

@@ -568,7 +568,7 @@ function latestPrices(
     for (const pos of positions) {
       const price = yield* db
         .getLatestSnapshotPrice(pos.poolAddress)
-        .pipe(Effect.catch(() => Effect.succeed(null)));
+        .pipe(Effect.orElseSucceed(() => null));
       if (price != null) prices.set(pos.poolAddress, price);
     }
     return prices;

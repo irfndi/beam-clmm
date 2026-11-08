@@ -1,6 +1,6 @@
 /* oxlint-disable anti-slop/require-safety-comment-for-type-assertion, anti-slop/no-runtime-typeof, anti-slop/no-conditional-empty-object-spread */
 
-import { Config, Effect, Fiber, Layer } from "effect";
+import { Cause, Config, Effect, Fiber, Layer } from "effect";
 import { ConfigService, ConfigLive, type AppConfig } from "./config-service.js";
 import { AdapterLive, usdToAtomic, WETH9 } from "./adapter-service.js";
 import { StrategyLive } from "./strategy-service.js";
@@ -12,7 +12,6 @@ import {
   evaluateAgentProposal,
   evaluateAgentRebalanceCapitalGates,
   evaluateGasGate,
-  evaluateCompoundGate,
   evaluatePerPoolAllocation,
   evaluatePaperValidation,
   type PerPoolAllocationResult,
@@ -36,6 +35,7 @@ import { BlacklistLive } from "./blacklist-service.js";
 import { AuditLive } from "./audit-service.js";
 import { ScreenerLive } from "./screener-service.js";
 import { DbLive } from "./db-service.js";
+import { DecisionLive } from "./decision-service.js";
 import { RevenueConfigServiceLive } from "./revenue-config-service.js";
 import { AgentStateMutable, initialSnapshot, type PositionSnapshot } from "./state-service.js";
 import { McpServerLive } from "./mcp-server.js";
@@ -47,21 +47,37 @@ import {
   type MarketGateConfig,
   type MarketPoolRank,
 } from "./market-gate.js";
-import { transitionCandidate } from "./candidate-policy.js";
+import { positionGoneEvent, transitionCandidate } from "./candidate-policy.js";
 import { getBeamUserConfigDir } from "./paths.js";
+import { isCloudEnabled } from "./cloud-switch.js";
 
 import { checkForAutoUpdate } from "./update-check.js";
 import { existsSync, readFileSync } from "fs";
 import { join } from "path";
 import type { PositionRecord } from "./db-service.js";
+import { compareDecisions } from "./decision-journal.js";
+import { adoptRuleDecision, type AdoptionResult } from "./decision-adoption.js";
 import {
-  applyCompoundToCostBasis,
+  baseCandidateViolation,
+  entrySizeFromConfig,
+  evaluateEntryGates,
+  feeGasFloorViolation,
+  feeIlFloorViolation,
+  type EntryGateInput,
+} from "./entry-gates.js";
+import {
+  buildDecideInput,
+  type EconomicsVerdict,
+  type ShadowInput,
+  type ShadowOutput,
+} from "./decision-shadow.js";
+import {
   computeClmmValueUsd,
   computeHodlValueUsd,
   computeRealizedPnlUsd,
   computeNetRealizedPnlUsd,
 } from "./pnl.js";
-import { buildRewardClaimMetadata, summarizeRewardClaim, type ClaimedReward } from "./rewards.js";
+import type { ClaimedReward } from "./rewards.js";
 import { errorReporter } from "./error-reporter.js";
 import {
   BlacklistError,
@@ -84,6 +100,7 @@ import {
 } from "./entry-sizing.js";
 import {
   AdapterService,
+  DecisionService,
   StrategyService,
   MemoryService,
   RiskService,
@@ -111,10 +128,10 @@ import {
   type DecisionRecord,
   type StrategyApi,
   type RevenueConfigApi,
-  type RevenueConfig,
   type AgentStateApi,
 } from "./services.js";
 import { GeckoTerminalLive, enrichPoolFromGecko } from "./gecko-terminal-service.js";
+import { enrichPoolFromDefiLlama, getDefiLlamaPoolStats } from "./defillama-service.js";
 import {
   KrystalLive,
   enrichPoolFromKrystal,
@@ -141,7 +158,6 @@ import {
 } from "./challenge-strategy.js";
 import { applyMinRangePct, floorRangeToMinPct } from "./range-floor.js";
 import { entryBudgetWei } from "./gas-reserve.js";
-import { shouldHarvest } from "./harvest-gate.js";
 import { feePersistence } from "./fee-persistence.js";
 import { createTokenRiskProber, type TokenRiskVerdict } from "./evm-token-risk.js";
 import {
@@ -184,6 +200,15 @@ import type {
 import { randomUUID } from "crypto";
 import { AgentLive, AgentNoOp } from "./agent-service.js";
 import { createLogger } from "./logger.js";
+import { createFeeExecution, type FeeExecutionAdapter } from "./fee-execution.js";
+import { createScanCycle, type IdleRedeployCandidate } from "./scan-cycle.js";
+import {
+  buildOperatorStatus,
+  portfolioStatusFromPositions,
+  positionStatusesFromRecords,
+  type OperatorStatus,
+} from "./operator-status.js";
+import { getCurrentVersion } from "./version.js";
 import {
   isInsufficientTokenBalanceError,
   nextEntryFailureBackoff,
@@ -249,6 +274,8 @@ type CredentialsFile = { apiKey?: unknown };
 const logger = createLogger("program");
 const idleRedeployLogger = createLogger("idle-redeploy");
 const statusLogger = createLogger("engine-status");
+/** Last successful schedule of a running heartbeat (throttle cloud D1 writes). */
+let lastEngineStatusReportAt = 0;
 
 /**
  * Run a DB persistence effect, logging (not swallowing) failures so a desync
@@ -324,9 +351,24 @@ function postEngineStatus(
   // surface can show equity vs peak in one number.
   equityUsd?: number,
   peakEquityUsd?: number,
+  // Canonical operator snapshot (same model the local HTTP server and CLI
+  // serve). Stored inside the cloud report's details JSON; legacy scalar
+  // fields above stay for older bot/API consumers.
+  snapshot?: OperatorStatus,
 ): Effect.Effect<void> {
   const DEFAULT_API_BASE_URL = "https://beam-api.irfndi.workers.dev";
   const TIMEOUT_MS = 5_000;
+  // Standalone mode: no cloud control plane, so nothing to report to. Checked
+  // before the throttle so a disabled agent never touches the credentials file.
+  if (!isCloudEnabled()) return Effect.void;
+  // Cap cloud heartbeats: per-cycle POSTs were the main D1/CPU cost driver on
+  // the API worker. Stopped reports always go through so Telegram sees halt.
+  const MIN_RUNNING_REPORT_INTERVAL_MS = 5 * 60 * 1000;
+  const now = Date.now();
+  if (status === "running" && now - lastEngineStatusReportAt < MIN_RUNNING_REPORT_INTERVAL_MS) {
+    return Effect.void;
+  }
+  lastEngineStatusReportAt = now;
   return Effect.gen(function* () {
     const baseUrl = process.env.BEAM_API_URL ?? DEFAULT_API_BASE_URL;
     const apiKey = yield* Effect.sync(readEngineStatusApiKey);
@@ -346,6 +388,7 @@ function postEngineStatus(
           trades,
           equityUsd,
           challengePeakEquityUsd: peakEquityUsd,
+          ...(snapshot !== undefined ? { snapshot } : {}),
         }),
         signal: AbortSignal.timeout(TIMEOUT_MS),
       }),
@@ -460,7 +503,7 @@ export const finalizeAppliedProposal = (
   action: ActionType,
 ): Effect.Effect<void> =>
   appliedQueuedProposalId !== undefined && (executed || action === "HOLD")
-    ? agentState.dequeueProposals([appliedQueuedProposalId]).pipe(Effect.catch(() => Effect.void))
+    ? agentState.dequeueProposals([appliedQueuedProposalId]).pipe(Effect.ignore)
     : Effect.void;
 
 /**
@@ -591,9 +634,7 @@ export const recordAppliedProposalRiskDenial = (
   if (args.appliedQueuedProposalId === undefined) {
     return Effect.void;
   }
-  return agentState
-    .rejectProposal(args.appliedQueuedProposalId)
-    .pipe(Effect.catch(() => Effect.void));
+  return agentState.rejectProposal(args.appliedQueuedProposalId).pipe(Effect.ignore);
 };
 
 /** True when the agent runtime can actually send a sync proposal prompt. */
@@ -861,34 +902,6 @@ export function computeIdleRedeployConfidence(args: {
 }
 
 /**
- * A pool that passed this cycle's ENTER candidate conditions + weighted entry
- * score in-pool but whose normal ENTER did not consume the slot — eligible
- * for the opt-in idle-capital redeploy pass after the pools loop. The pass
- * re-runs evaluatePerPoolAllocation and the full risk tail verbatim before
- * executing, so the candidate record carries no authority to bypass anything;
- * it only seeds the pass's score-ranked choice.
- */
-interface IdleRedeployCandidate {
-  readonly poolAddress: string;
-  readonly pool: PoolState;
-  readonly metrics: PoolMetrics;
-  readonly entryScore: number;
-  readonly feeIlRatio: number;
-  /**
-   * The size the normal conservative path chose (or proposed) for this pool.
-   * Mutable on purpose: when the normal ENTER for the pool actually executes,
-   * the in-slot tail overwrites this with the FINAL executed size
-   * (post-overlay, post-risk-adjustment) so the widened-size guard compares
-   * against the position really opened, not a stale pre-overlay figure
-   * (follow-up 3655404934). Candidates whose pool did not enter keep the
-   * pre-computed size.
-   */
-  normalEntrySizeUsd: number;
-  readonly volatilityStddev: number;
-  readonly netDriftBins: number;
-}
-
-/**
  * The position a decision acts on. Explicit positionId wins; an untargeted
  * decision resolves to the pool's position only when exactly one exists —
  * with several, ambiguity fails closed (undefined) rather than hitting the
@@ -1023,7 +1036,7 @@ export function reconcilePositions(
             content: `Position ${positionId} on ${pos.poolAddress} was closed externally or is an empty shell (liquidity 0). Removed from tracking.`,
             poolAddress: pos.poolAddress,
           })
-          .pipe(Effect.catch(() => Effect.void));
+          .pipe(Effect.ignore);
       }
     }
 
@@ -1058,7 +1071,7 @@ export function reconcilePositions(
               content: `Position ${onChainPos.positionPubKey} on ${onChainPos.poolAddress} range synced to on-chain state (${onChainPos.lowerBinId}-${onChainPos.upperBinId}).`,
               poolAddress: onChainPos.poolAddress,
             })
-            .pipe(Effect.catch(() => Effect.void));
+            .pipe(Effect.ignore);
         }
         continue;
       }
@@ -1129,7 +1142,7 @@ export function reconcilePositions(
               content: `External position ${onChainPos.positionPubKey} detected in ${onChainPos.poolAddress} and added to tracking.`,
               poolAddress: onChainPos.poolAddress,
             })
-            .pipe(Effect.catch(() => Effect.void));
+            .pipe(Effect.ignore);
         }
       }
     }
@@ -1147,6 +1160,7 @@ export function reconcilePositions(
 type AllServices =
   | ConfigService
   | AdapterService
+  | DecisionService
   | StrategyService
   | MemoryService
   | RiskService
@@ -1164,6 +1178,32 @@ type AllServices =
   | PythPriceService
   | AlertService
   | CopySignalService;
+
+interface EconomicsGateResult {
+  readonly blocked: boolean;
+  readonly reason: string | null;
+}
+
+function evaluateEconomicsGate(
+  mode: AppConfig["unitEconomicsGate"],
+  verdict: EconomicsVerdict | null,
+  riskApproved: boolean,
+): EconomicsGateResult {
+  if (mode !== "enforce" || verdict === null || !verdict.blocked || !riskApproved) {
+    return { blocked: false, reason: null };
+  }
+  return { blocked: true, reason: `[unit-economics] ${verdict.reason}` };
+}
+
+function logWarnOnlyEconomics(
+  mode: AppConfig["unitEconomicsGate"],
+  pool: string,
+  action: string,
+  reason: string,
+): void {
+  if (mode !== "warn") return;
+  logger.warn("Unit economics below hurdle (warn-only)", { pool, action, reason });
+}
 
 function parseJsonOr<T>(raw: string | null, fallback: T): T {
   if (raw === null) return fallback;
@@ -1256,8 +1296,9 @@ export function buildLayer(
   const merged6 = Layer.merge(merged5, audit);
   const merged7 = Layer.merge(merged6, screener);
   const merged8 = Layer.merge(merged7, configLayer);
-  const merged11 = Layer.merge(merged8, revenueConfig);
-  const merged11b = Layer.merge(merged11, KrystalLive);
+  const merged11 = Layer.merge(merged8, DecisionLive);
+  const merged11a = Layer.merge(merged11, revenueConfig);
+  const merged11b = Layer.merge(merged11a, KrystalLive);
   const merged11c = Layer.merge(merged11b, GeckoTerminalLive);
   const merged11d = Layer.merge(merged11c, pythPrice);
 
@@ -1380,7 +1421,7 @@ function executePaperEnter(
         },
         createdAt: Date.now(),
       })
-      .pipe(Effect.catch(() => Effect.void));
+      .pipe(Effect.ignore);
   });
 }
 
@@ -1434,7 +1475,7 @@ function executePaperExit(
           metadata: { realizedPnlUsd },
           createdAt: Date.now(),
         })
-        .pipe(Effect.catch(() => Effect.void));
+        .pipe(Effect.ignore);
       yield* persist(
         `closePosition ${pos.positionId}`,
         db.closePosition(pos.positionId, realizedPnlUsd),
@@ -1442,7 +1483,7 @@ function executePaperExit(
       if (pos.entrySignalSnapshotId != null) {
         yield* db
           .recordSignalOutcome(pos.entrySignalSnapshotId, realizedPnlUsd)
-          .pipe(Effect.catch(() => Effect.void));
+          .pipe(Effect.ignore);
       }
       yield* persist(`markPaperExited ${pos.positionId}`, db.markPaperExited(pos.positionId));
       trackedPositions.delete(pos.positionId);
@@ -1485,7 +1526,7 @@ function executePaperRebalance(
           },
           createdAt: Date.now(),
         })
-        .pipe(Effect.catch(() => Effect.void));
+        .pipe(Effect.ignore);
     }
   });
 }
@@ -1686,7 +1727,7 @@ export function recoverStaleExecutionOperations(
   return Effect.gen(function* () {
     const operations = yield* db
       .listExecutionOperations(context.walletAddress, context.agentInstanceId)
-      .pipe(Effect.catch(() => Effect.succeed([] as ReadonlyArray<ExecutionOperationRecord>)));
+      .pipe(Effect.orElseSucceed(() => [] as ReadonlyArray<ExecutionOperationRecord>));
     let recovered = 0;
     for (const operation of operations) {
       if (operation.status !== "planned" || operation.createdAt >= processStartedAt) continue;
@@ -1697,7 +1738,7 @@ export function recoverStaleExecutionOperations(
           error: "abandoned planned operation from a previous process",
           updatedAt: processStartedAt,
         })
-        .pipe(Effect.catch(() => Effect.void));
+        .pipe(Effect.ignore);
       recovered += 1;
     }
     return recovered;
@@ -1751,7 +1792,7 @@ function updateExecutionOperation(
       ...update,
       updatedAt: Date.now(),
     })
-    .pipe(Effect.catch(() => Effect.void));
+    .pipe(Effect.ignore);
 }
 
 function failPlannedEntryOp(
@@ -1766,7 +1807,7 @@ function failPlannedEntryOp(
       error,
       updatedAt: Date.now(),
     })
-    .pipe(Effect.catch(() => Effect.void));
+    .pipe(Effect.ignore);
 }
 
 function planLiveEntryOperation(
@@ -1797,7 +1838,7 @@ function planLiveEntryOperation(
     });
     const persisted = yield* db.saveExecutionOperation(entryOperation).pipe(
       Effect.as(true),
-      Effect.catch(() => Effect.succeed(false)),
+      Effect.orElseSucceed(() => false),
     );
     if (!persisted) {
       return { error: "Unable to persist entry operation before execution" };
@@ -1828,7 +1869,7 @@ function topUpNativeForEntry(
     const entryReserveWei = minNativeForEntryWei ?? NATIVE_GAS_TOP_UP_THRESHOLD_WEI;
     const preSwapNativeWei = yield* adapter
       .getNativeBalance()
-      .pipe(Effect.catch(() => Effect.succeed(null)));
+      .pipe(Effect.orElseSucceed(() => null));
     if (preSwapNativeWei !== null && preSwapNativeWei < entryReserveWei) {
       const deficitWei = entryReserveWei - preSwapNativeWei;
       // Prefer a live NATIVE price from the adapter's price chain over the static
@@ -1840,7 +1881,7 @@ function topUpNativeForEntry(
         .getTokenPrices([NATIVE_MINT], { useFallback: false })
         .pipe(
           Effect.map((prices) => prices[NATIVE_MINT]),
-          Effect.catch(() => Effect.succeed(undefined)),
+          Effect.orElseSucceed(() => undefined),
         );
       const effectiveNativePrice =
         typeof liveNativePrice === "number" && liveNativePrice > 0
@@ -1851,9 +1892,7 @@ function topUpNativeForEntry(
         effectiveNativePrice > 0
           ? Math.max(GAS_TOP_UP_STABLECOIN, Math.ceil(deficitEth * effectiveNativePrice * 1.2))
           : GAS_TOP_UP_STABLECOIN;
-      yield* adapter
-        .swapUSDCForNative(entryReserveWei, topUpUsdc)
-        .pipe(Effect.catch(() => Effect.void));
+      yield* adapter.swapUSDCForNative(entryReserveWei, topUpUsdc).pipe(Effect.ignore);
     }
   });
 }
@@ -2059,7 +2098,7 @@ function persistLiveEnterSuccess(
         },
         createdAt: Date.now(),
       })
-      .pipe(Effect.catch(() => Effect.void));
+      .pipe(Effect.ignore);
     if (entryOperation) {
       yield* db
         .saveExecutionOperation({
@@ -2069,7 +2108,7 @@ function persistLiveEnterSuccess(
           txSignature: minted.txSignature,
           updatedAt: Date.now(),
         })
-        .pipe(Effect.catch(() => Effect.void));
+        .pipe(Effect.ignore);
     }
   });
 }
@@ -2190,7 +2229,7 @@ function planLiveExitOperation(
     });
     const persisted = yield* db.saveExecutionOperation(exitOperation).pipe(
       Effect.as(true),
-      Effect.catch(() => Effect.succeed(false)),
+      Effect.orElseSucceed(() => false),
     );
     if (!persisted) {
       return { error: "Unable to persist exit operation before execution" };
@@ -2223,7 +2262,7 @@ function probeMinedExit(
     if (walletAddress === null) return null;
     const livePositions = yield* adapter
       .getAllWalletPositions(walletAddress)
-      .pipe(Effect.catch(() => Effect.succeed([])));
+      .pipe(Effect.orElseSucceed(() => []));
     const stillOpen = livePositions.some((p) => p.positionPubKey === positionPubKey);
     if (stillOpen) return null;
     // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
@@ -2263,7 +2302,7 @@ function runLiveExitAttempt(
       const exitGasFloorWei = minNativeForGasWei ?? MIN_NATIVE_FOR_GAS_WEI;
       const nativeBeforeExit = yield* adapter
         .getNativeBalance()
-        .pipe(Effect.catch(() => Effect.succeed(null)));
+        .pipe(Effect.orElseSucceed(() => null));
       if (nativeBeforeExit !== null && nativeBeforeExit < exitGasFloorWei) {
         logger.warn("Live EXIT blocked: native balance below exit gas floor", {
           pool: decision.poolAddress,
@@ -2311,7 +2350,7 @@ function runLiveExitAttempt(
           txSignature: exitResult.result.txSignature,
           updatedAt: Date.now(),
         };
-        yield* db.saveExecutionOperation(operation).pipe(Effect.catch(() => Effect.void));
+        yield* db.saveExecutionOperation(operation).pipe(Effect.ignore);
       }
       if (!exited) {
         // A receipt-wait timeout can fire AFTER the tx mined: the EXIT
@@ -2445,7 +2484,7 @@ function recordExitSettlements(
             triggeredAt: now,
             resolvedAt: null,
           })
-          .pipe(Effect.catch(() => Effect.void));
+          .pipe(Effect.ignore);
         break;
       }
     }
@@ -2482,7 +2521,7 @@ function recordExitSweepEvents(
           metadata: { kind: "exit_sweep" },
           createdAt: now,
         })
-        .pipe(Effect.catch(() => Effect.void));
+        .pipe(Effect.ignore);
     }
     if ((exitResultData.sweptRewards ?? []).length > 0) {
       yield* db
@@ -2502,7 +2541,7 @@ function recordExitSweepEvents(
           metadata: { kind: "exit_sweep_reward" },
           createdAt: now,
         })
-        .pipe(Effect.catch(() => Effect.void));
+        .pipe(Effect.ignore);
     }
   });
 }
@@ -2550,7 +2589,7 @@ function closeExitedPosition(
         },
         createdAt: Date.now(),
       })
-      .pipe(Effect.catch(() => Effect.void));
+      .pipe(Effect.ignore);
   });
 }
 
@@ -2599,7 +2638,7 @@ function creditSweptRewards(
           },
           createdAt: Date.now(),
         })
-        .pipe(Effect.catch(() => Effect.void));
+        .pipe(Effect.ignore);
     }
     return pricedSweptRewardUsd;
   });
@@ -2646,7 +2685,7 @@ function warnUnpricedExit(
             content: `EXIT on ${poolAddress} closed without USD pricing (price feeds unresolved) — realized PnL recorded as n/a; raw amounts in event metadata`,
             poolAddress,
           })
-          .pipe(Effect.catch(() => Effect.void))
+          .pipe(Effect.ignore)
       : Effect.void;
   });
 }
@@ -2684,7 +2723,7 @@ function creditExitSweep(
             reportedToApi: false,
             createdAt: Date.now(),
           })
-          .pipe(Effect.catch(() => Effect.void));
+          .pipe(Effect.ignore);
         // CLAIM event mirrors every other fee booking (a CLAIM row beside
         // the fee_claims record), tagged kind exit_sweep so the swept-fee
         // leg is distinguishable from periodic claims in the event log.
@@ -2701,7 +2740,7 @@ function creditExitSweep(
             metadata: { kind: "exit_sweep", txSignature: sweepTxSignature },
             createdAt: Date.now(),
           })
-          .pipe(Effect.catch(() => Effect.void));
+          .pipe(Effect.ignore);
       }
     }
     yield* creditSweptRewards(db, pos, decision, pool, exitResultData?.sweptRewards ?? []);
@@ -2757,9 +2796,7 @@ function settleUnresolvedExit(
       db.closePosition(pos.positionId, realizedPnlUsd),
     );
     if (pos.entrySignalSnapshotId != null && realizedPnlUsd != null) {
-      yield* db
-        .recordSignalOutcome(pos.entrySignalSnapshotId, realizedPnlUsd)
-        .pipe(Effect.catch(() => Effect.void));
+      yield* db.recordSignalOutcome(pos.entrySignalSnapshotId, realizedPnlUsd).pipe(Effect.ignore);
     }
     // 5. EXIT event: withdrawn USD (or null) + post-credit lifetime fees.
     const exitMetadata = buildExitMetadata(pos, exitResultData, realizedPnlUsd, pricingUnresolved);
@@ -2776,7 +2813,7 @@ function settleUnresolvedExit(
         metadata: exitMetadata,
         createdAt: Date.now(),
       })
-      .pipe(Effect.catch(() => Effect.void));
+      .pipe(Effect.ignore);
     if (pricingUnresolved && !(unpricedExitWarnedPools?.has(decision.poolAddress) ?? false)) {
       yield* warnUnpricedExit(memory, unpricedExitWarnedPools, pos, decision.poolAddress);
     }
@@ -2806,7 +2843,7 @@ function claimFeesForRebalance(
         revenueConfigResult.revenueShareOperatorPct,
         revenueConfigResult.feeWalletAddress,
       )
-      .pipe(Effect.catch(() => Effect.succeed(null)));
+      .pipe(Effect.orElseSucceed(() => null));
     if (claimResult && (claimResult.feeX > 0 || claimResult.feeY > 0)) {
       yield* db
         .saveFeeClaim({
@@ -2826,7 +2863,7 @@ function claimFeesForRebalance(
           reportedToApi: false,
           createdAt: Date.now(),
         })
-        .pipe(Effect.catch(() => Effect.void));
+        .pipe(Effect.ignore);
       // Mint-based net-fee USD priced inside the adapter (mirrors
       // simulateRebalance). Null → 0 fails closed so an unpriceable claim
       // never inflates cumulative fees or the compound gate.
@@ -2845,7 +2882,7 @@ function claimFeesForRebalance(
           metadata: { txSignature: claimResult.txSignature },
           createdAt: Date.now(),
         })
-        .pipe(Effect.catch(() => Effect.void));
+        .pipe(Effect.ignore);
       yield* reportCollectedFees(
         adapter,
         decision.poolAddress,
@@ -2938,7 +2975,7 @@ function executeAtomicRebalance(
           },
           createdAt: Date.now(),
         })
-        .pipe(Effect.catch(() => Effect.void));
+        .pipe(Effect.ignore);
       return { ok: true as const };
     }
     // Atomic failure leaves the on-chain position untouched — unless the
@@ -2950,11 +2987,9 @@ function executeAtomicRebalance(
 }
 
 type ClaimFeesResult = Effect.Success<ReturnType<AdapterApi["claimFees"]>>;
-type ClaimRewardsResult = Effect.Success<ReturnType<AdapterApi["claimRewards"]>>;
-type PendingFeesResult = Effect.Success<ReturnType<NonNullable<AdapterApi["getPendingFees"]>>>;
 
 function reportCollectedFees(
-  adapter: AdapterApi,
+  adapter: FeeExecutionAdapter,
   poolAddress: string,
   positionPubKey: string | null,
   claimed: ClaimFeesResult,
@@ -3827,7 +3862,7 @@ function shouldAccruePaperFees(
 ): boolean {
   if (!paperTrading) return false;
   if (positionPubKey != null) return false;
-  return statsSource === "datapi" || statsSource === "krystal";
+  return statsSource === "datapi" || statsSource === "krystal" || statsSource === "defillama";
 }
 /** Challenge-mode volatility signals: range override, trailing yield, rotation. */
 type ChallengePoolSignals = {
@@ -3880,6 +3915,7 @@ export const program = Effect.gen(function* () {
         }
       : null;
   const strategy = yield* StrategyService;
+  const decisionSvc = yield* DecisionService;
   const memory = yield* MemoryService;
   const risk = yield* RiskService;
   const blacklist = yield* BlacklistService;
@@ -3898,7 +3934,7 @@ export const program = Effect.gen(function* () {
 
   // Load persisted positions at startup (keyed by position identity — a pool
   // may hold several positions).
-  const allPositions = yield* db.getAllPositions().pipe(Effect.catch(() => Effect.succeed([])));
+  const allPositions = yield* db.getAllPositions().pipe(Effect.orElseSucceed(() => []));
   const trackedPositions = new Map<string, PositionRecord>();
   for (const pos of allPositions) {
     trackedPositions.set(pos.positionId, pos);
@@ -3909,7 +3945,7 @@ export const program = Effect.gen(function* () {
       ? null
       : yield* db
           .getSafetyPause(autonomousExecution.walletAddress, autonomousExecution.agentInstanceId)
-          .pipe(Effect.catch(() => Effect.succeed(null)));
+          .pipe(Effect.orElseSucceed(() => null));
   let consecutiveCoreDataFailures = 0;
   let consecutiveExecutionFailures = 0;
   // Execution failures recorded in the CURRENT scan cycle (reset at cycle
@@ -4010,12 +4046,10 @@ export const program = Effect.gen(function* () {
     if (!config.paperTrading) return 0;
     const lastDay = yield* db
       .getMetadata(PAPER_DAYS_LAST_KEY)
-      .pipe(Effect.catch(() => Effect.succeed(null)));
+      .pipe(Effect.orElseSucceed(() => null));
     const today = todayIso();
     if (lastDay === today) return 0;
-    const stored = yield* db
-      .getMetadata(PAPER_DAYS_KEY)
-      .pipe(Effect.catch(() => Effect.succeed("0")));
+    const stored = yield* db.getMetadata(PAPER_DAYS_KEY).pipe(Effect.orElseSucceed(() => "0"));
     const current = Number(stored) || 0;
     const next = current + 1;
     yield* db
@@ -4023,7 +4057,7 @@ export const program = Effect.gen(function* () {
         { key: PAPER_DAYS_KEY, value: String(next) },
         { key: PAPER_DAYS_LAST_KEY, value: today },
       ])
-      .pipe(Effect.catch(() => Effect.void));
+      .pipe(Effect.ignore);
     if (next % 7 === 0) {
       console.info(`[paper-validation] ${next} paper days accumulated`);
     }
@@ -4031,9 +4065,7 @@ export const program = Effect.gen(function* () {
   });
 
   const readPaperDays = Effect.gen(function* () {
-    const stored = yield* db
-      .getMetadata(PAPER_DAYS_KEY)
-      .pipe(Effect.catch(() => Effect.succeed("0")));
+    const stored = yield* db.getMetadata(PAPER_DAYS_KEY).pipe(Effect.orElseSucceed(() => "0"));
     return Number(stored) || 0;
   });
 
@@ -4046,7 +4078,7 @@ export const program = Effect.gen(function* () {
   };
 
   const loadEvolvedThresholds = Effect.gen(function* () {
-    const stored = yield* db.getEvolvedThresholds().pipe(Effect.catch(() => Effect.succeed(null)));
+    const stored = yield* db.getEvolvedThresholds().pipe(Effect.orElseSucceed(() => null));
     if (stored) {
       evolvedThresholds = stored;
     }
@@ -4057,14 +4089,12 @@ export const program = Effect.gen(function* () {
   const tryEvolveThresholds = Effect.gen(function* () {
     const countStr = yield* db
       .getMetadata(EVOLUTION_COUNT_KEY)
-      .pipe(Effect.catch(() => Effect.succeed("0")));
+      .pipe(Effect.orElseSucceed(() => "0"));
     const count = Number(countStr) || 0;
 
     if (count < config.evolutionInterval) return;
 
-    const outcomes = yield* db
-      .getClosedPositionOutcomes(1000)
-      .pipe(Effect.catch(() => Effect.succeed([])));
+    const outcomes = yield* db.getClosedPositionOutcomes(1000).pipe(Effect.orElseSucceed(() => []));
 
     const result = evolveThresholds(outcomes, evolvedThresholds, {
       maxChangePct: config.evolutionMaxChangePct,
@@ -4073,7 +4103,7 @@ export const program = Effect.gen(function* () {
 
     if (result.changed) {
       evolvedThresholds = result.thresholds;
-      yield* db.saveEvolvedThresholds(result.thresholds).pipe(Effect.catch(() => Effect.void));
+      yield* db.saveEvolvedThresholds(result.thresholds).pipe(Effect.ignore);
       console.info("[threshold-evolution] Evolved thresholds", {
         minFeeIlRatio: result.thresholds.minFeeIlRatio.toFixed(3),
         volumeAuthThreshold: result.thresholds.volumeAuthThreshold.toFixed(3),
@@ -4090,7 +4120,7 @@ export const program = Effect.gen(function* () {
       });
       if (newWeights.updatedAt !== signalWeights.updatedAt) {
         signalWeights = newWeights;
-        yield* db.saveSignalWeights(newWeights).pipe(Effect.catch(() => Effect.void));
+        yield* db.saveSignalWeights(newWeights).pipe(Effect.ignore);
         console.info("[signal-weights] Recomputed weights", {
           feeIlRatio: newWeights.feeIlRatio.toFixed(3),
           volumeAuthenticity: newWeights.volumeAuthenticity.toFixed(3),
@@ -4100,17 +4130,15 @@ export const program = Effect.gen(function* () {
         });
       }
     }
-    yield* db.setMetadata(EVOLUTION_COUNT_KEY, "0").pipe(Effect.catch(() => Effect.void));
+    yield* db.setMetadata(EVOLUTION_COUNT_KEY, "0").pipe(Effect.ignore);
   });
 
   const incrementEvolutionCount = Effect.gen(function* () {
     const countStr = yield* db
       .getMetadata(EVOLUTION_COUNT_KEY)
-      .pipe(Effect.catch(() => Effect.succeed("0")));
+      .pipe(Effect.orElseSucceed(() => "0"));
     const count = Number(countStr) || 0;
-    yield* db
-      .setMetadata(EVOLUTION_COUNT_KEY, String(count + 1))
-      .pipe(Effect.catch(() => Effect.void));
+    yield* db.setMetadata(EVOLUTION_COUNT_KEY, String(count + 1)).pipe(Effect.ignore);
   });
 
   // ─── Signal weights state ─────────────────────────────────────────────
@@ -4125,7 +4153,7 @@ export const program = Effect.gen(function* () {
   let signalWeights: SignalWeights = DEFAULT_SIGNAL_WEIGHTS;
 
   const loadSignalWeights = Effect.gen(function* () {
-    const stored = yield* db.getSignalWeights().pipe(Effect.catch(() => Effect.succeed(null)));
+    const stored = yield* db.getSignalWeights().pipe(Effect.orElseSucceed(() => null));
     if (stored) {
       signalWeights = stored;
     }
@@ -4136,9 +4164,7 @@ export const program = Effect.gen(function* () {
   const prunePaperExitedPositions = (): Effect.Effect<void, never, never> =>
     Effect.gen(function* () {
       if (config.paperTrading) return;
-      const paperExited = yield* db
-        .getPaperExitedPositions()
-        .pipe(Effect.catch(() => Effect.succeed([])));
+      const paperExited = yield* db.getPaperExitedPositions().pipe(Effect.orElseSucceed(() => []));
       if (paperExited.length > 0) {
         console.warn(
           `Found ${paperExited.length} paper-exited position(s) from a previous paper-trading run. ` +
@@ -4172,7 +4198,7 @@ export const program = Effect.gen(function* () {
       if (config.autonomousTokenMode === "off") return;
       const persistedCandidates = yield* db
         .listTokenCandidates(autonomousCandidateWallet, config.agentInstanceId)
-        .pipe(Effect.catch(() => Effect.succeed([])));
+        .pipe(Effect.orElseSucceed(() => []));
       for (const candidate of persistedCandidates) {
         autonomousCandidates.set(candidate.id, candidate);
         autonomousCandidatePools.add(candidate.poolAddress);
@@ -4313,7 +4339,7 @@ export const program = Effect.gen(function* () {
       const sinceMs = now - 4 * 24 * 3_600_000;
       const pools = yield* db
         .getTopSnapshotPools(STRESS_UNIVERSE, sinceMs)
-        .pipe(Effect.catch(() => Effect.succeed([] as ReadonlyArray<string>)));
+        .pipe(Effect.orElseSucceed(() => [] as ReadonlyArray<string>));
       if (pools.length < 3) return;
       const endMs = now;
       const startMs = now - (STRESS_WINDOW_HOURS + 2) * 3_600_000;
@@ -4321,7 +4347,7 @@ export const program = Effect.gen(function* () {
       for (const pool of pools) {
         const snaps = yield* db
           .getSnapshots(pool, startMs, endMs)
-          .pipe(Effect.catch(() => Effect.succeed([] as ReadonlyArray<PoolSnapshot>)));
+          .pipe(Effect.orElseSucceed(() => [] as ReadonlyArray<PoolSnapshot>));
         seriesByPool.set(
           pool,
           snaps.map((s) => ({ timestamp: s.timestamp, price: s.currentPrice })),
@@ -4337,7 +4363,7 @@ export const program = Effect.gen(function* () {
       // Trailing baseline of prior assessments (oldest first), capped at 168.
       const baselineRaw = yield* db
         .getMetadata(STRESS_META_KEY)
-        .pipe(Effect.catch(() => Effect.succeed(null)));
+        .pipe(Effect.orElseSucceed(() => null));
       const baseline: number[] = parseJsonOr(baselineRaw, []);
       const zScore = assessStressZScore(assessment.meanCorrelation, baseline);
       logger.info("Market stress assessed", {
@@ -4349,10 +4375,8 @@ export const program = Effect.gen(function* () {
       });
       baseline.push(assessment.meanCorrelation);
       while (baseline.length > 168) baseline.shift();
-      yield* db
-        .setMetadata(STRESS_META_KEY, JSON.stringify(baseline))
-        .pipe(Effect.catch(() => Effect.void));
-    }).pipe(Effect.catch(() => Effect.void));
+      yield* db.setMetadata(STRESS_META_KEY, JSON.stringify(baseline)).pipe(Effect.ignore);
+    }).pipe(Effect.ignore);
 
   // ─── LVR edge estimator (logging-only) ────────────────────────────────────
   // Di Nosse & Lillo (arXiv 2606.23070) Eq.17 normalized: a v3 position's
@@ -4432,13 +4456,13 @@ export const program = Effect.gen(function* () {
       lastLvrAssessAt = now;
       const pools = yield* db
         .getTopSnapshotPools(LVR_UNIVERSE, now - 7 * 24 * 3_600_000)
-        .pipe(Effect.catch(() => Effect.succeed([] as ReadonlyArray<string>)));
+        .pipe(Effect.orElseSucceed(() => [] as ReadonlyArray<string>));
       if (pools.length === 0) return;
       const results: LvrEdgeResult[] = [];
       for (const pool of pools) {
         const snaps = yield* db
           .getSnapshots(pool, now - (LVR_WINDOW_HOURS + 2) * 3_600_000, now)
-          .pipe(Effect.catch(() => Effect.succeed([] as ReadonlyArray<PoolSnapshot>)));
+          .pipe(Effect.orElseSucceed(() => [] as ReadonlyArray<PoolSnapshot>));
         const poolEdge = computeLvrPoolEdge(pool, snaps, now);
         if (poolEdge === null) continue;
         results.push(poolEdge);
@@ -4447,15 +4471,11 @@ export const program = Effect.gen(function* () {
       results.sort((a, b) => b.edge - a.edge);
       logger.info("LVR edge assessed", formatLvrEdgeSummary(results));
       // Persist per-pool history for later validation against closed trades.
-      const historyRaw = yield* db
-        .getMetadata(LVR_META_KEY)
-        .pipe(Effect.catch(() => Effect.succeed(null)));
+      const historyRaw = yield* db.getMetadata(LVR_META_KEY).pipe(Effect.orElseSucceed(() => null));
       const history: Record<string, LvrHistoryEntry[]> = parseJsonOr(historyRaw, {});
       appendLvrHistory(history, results, now);
-      yield* db
-        .setMetadata(LVR_META_KEY, JSON.stringify(history))
-        .pipe(Effect.catch(() => Effect.void));
-    }).pipe(Effect.catch(() => Effect.void));
+      yield* db.setMetadata(LVR_META_KEY, JSON.stringify(history)).pipe(Effect.ignore);
+    }).pipe(Effect.ignore);
 
   const refreshHarvestBook = (): Effect.Effect<void, never, never> =>
     Effect.gen(function* () {
@@ -4582,6 +4602,15 @@ export const program = Effect.gen(function* () {
   // a single noisy snapshot read cannot churn a position out. Session-local.
   const stopLossBreachCount = new Map<string, number>();
 
+  // Frozen-feed detector, per position: the last distinct mark and how many
+  // consecutive cycles it has not moved. A dead price feed marks a position at
+  // a constant value, so the stop-loss never sees a drawdown and the position
+  // rides to zero unmanaged. Measured on the live books: trades whose feed
+  // produced <=3 distinct prices over the whole hold averaged -$10.08, versus
+  // -$3.37 for live feeds. Zero positions are exempt (launch-rug floor).
+  const frozenMarkState = new Map<string, { lastMark: number; cycles: number }>();
+  const FROZEN_MARK_MAX_CYCLES = 10;
+
   // ─── Market-scan state (universe-driven trading, no manual watchlist) ────
   // The ranked universe snapshot from the last gate refresh, the addresses of
   // the top-K pools actively scanned this cycle, and the last refresh time.
@@ -4683,7 +4712,7 @@ export const program = Effect.gen(function* () {
       const nonSolMints = mints.filter((mint) => mint !== NATIVE_MINT);
       const prices = yield* adapter
         .getTokenPrices([NATIVE_MINT], { useFallback: false })
-        .pipe(Effect.catch(() => Effect.succeed<Record<string, number>>({})));
+        .pipe(Effect.orElseSucceed((): Record<string, number> => ({})));
       const nativePrice = prices[NATIVE_MINT] ?? 0;
       const tokenPrices = new Map(
         priceEvidence.map((evidence) => [evidence.mint, evidence.priceUsd]),
@@ -4692,7 +4721,7 @@ export const program = Effect.gen(function* () {
       for (const mint of nonSolMints) {
         const decimals = yield* adapter
           .getTokenDecimals(mint)
-          .pipe(Effect.catch(() => Effect.succeed(null)));
+          .pipe(Effect.orElseSucceed(() => null));
         if (decimals !== null) decimalsByMint.set(mint, decimals);
       }
       const routeProbes = nonSolMints.map((mint) => {
@@ -4711,7 +4740,7 @@ export const program = Effect.gen(function* () {
               slippageBps: config.maxSwapSlippageBps,
             }).pipe(
               Effect.as(true),
-              Effect.catch(() => Effect.succeed(false)),
+              Effect.orElseSucceed(() => false),
             ),
             quoteSwap({
               inputMint: mint,
@@ -4720,7 +4749,7 @@ export const program = Effect.gen(function* () {
               slippageBps: config.maxSwapSlippageBps,
             }).pipe(
               Effect.as(true),
-              Effect.catch(() => Effect.succeed(false)),
+              Effect.orElseSucceed(() => false),
             ),
           ],
           { concurrency: 4 },
@@ -4754,7 +4783,31 @@ export const program = Effect.gen(function* () {
           );
           if (advancedCandidate !== candidate) {
             autonomousCandidates.set(advancedCandidate.id, advancedCandidate);
-            yield* db.saveTokenCandidate(advancedCandidate).pipe(Effect.catch(() => Effect.void));
+            yield* db.saveTokenCandidate(advancedCandidate).pipe(Effect.ignore);
+          }
+          continue;
+        }
+        // An `entered` candidate whose position is gone (external close,
+        // liquidation, a reconcile delete) has no lifecycle event to advance
+        // it: `recordScan` keeps `entered`, so its pool drops out of
+        // autonomousCandidatePools for the rest of the process lifetime. Start
+        // the ordinary post-exit cooldown so entry eligibility returns.
+        if (
+          candidate.state === "entered" &&
+          positionsForPool(trackedPositions, candidate.poolAddress).length === 0
+        ) {
+          const goneEvent = positionGoneEvent(candidate, now, config.oorCooldownMs);
+          if (goneEvent !== null) {
+            const coolingCandidate = transitionCandidate(
+              candidate,
+              goneEvent,
+              {
+                minHealthyScans: config.candidateMinHealthyScans,
+                minObservationMs: config.candidateMinObservationMs,
+              },
+            );
+            autonomousCandidates.set(coolingCandidate.id, coolingCandidate);
+            yield* db.saveTokenCandidate(coolingCandidate).pipe(Effect.ignore);
           }
         }
       }
@@ -4770,9 +4823,7 @@ export const program = Effect.gen(function* () {
       const priceEvidence =
         adapter.getTokenPriceEvidence === undefined
           ? []
-          : yield* adapter
-              .getTokenPriceEvidence(mints)
-              .pipe(Effect.catch(() => Effect.succeed([])));
+          : yield* adapter.getTokenPriceEvidence(mints).pipe(Effect.orElseSucceed(() => []));
       const routeAvailableMints = yield* resolveRouteAvailableMints(mints, priceEvidence);
       const advanced = advanceScreenedCandidates({
         walletAddress: autonomousCandidateWallet,
@@ -4825,7 +4876,7 @@ export const program = Effect.gen(function* () {
       const discovered = yield* adapter
         .discoverPools(scanOrdinal)
         // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
-        .pipe(Effect.catch(() => Effect.succeed([] as ReadonlyArray<DiscoveredPool>)));
+        .pipe(Effect.orElseSucceed(() => [] as ReadonlyArray<DiscoveredPool>));
       if (discovered.length === 0) return;
 
       const rugcheckCache = new Map<string, RugCheckReport | null>();
@@ -4909,11 +4960,11 @@ export const program = Effect.gen(function* () {
   // immediately after startup (not just after the first scan cycle).
   yield* agentState
     .updateSnapshot({ positions: buildPositionSnapshots(trackedPositions.values()) })
-    .pipe(Effect.catch(() => Effect.void));
+    .pipe(Effect.ignore);
 
   // Start agent-facing servers (MCP and HTTP fallback)
-  yield* mcpServer.start().pipe(Effect.catch(() => Effect.void));
-  yield* httpStatusServer.start().pipe(Effect.catch(() => Effect.void));
+  yield* mcpServer.start().pipe(Effect.ignore);
+  yield* httpStatusServer.start().pipe(Effect.ignore);
 
   warnIfSupervisedWithoutToken();
 
@@ -4923,7 +4974,7 @@ export const program = Effect.gen(function* () {
     Effect.gen(function* () {
       const snapshot = yield* agentState
         .getSnapshot()
-        .pipe(Effect.catch(() => Effect.succeed(initialSnapshot)));
+        .pipe(Effect.orElseSucceed(() => initialSnapshot));
       const positions = buildPositionSnapshots(trackedPositions.values());
       const positionsValueUsd = positions.reduce((sum, p) => sum + p.currentValueUsd, 0);
       const unrealizedPnlUsd = positions.reduce(
@@ -4932,7 +4983,7 @@ export const program = Effect.gen(function* () {
       );
       const recentDecisions = yield* audit
         .getRecentDecisions(20)
-        .pipe(Effect.catch(() => Effect.succeed([])));
+        .pipe(Effect.orElseSucceed(() => []));
 
       const now = Date.now();
       let badProposalBackoffUntil: number | null = null;
@@ -5081,7 +5132,7 @@ export const program = Effect.gen(function* () {
           executed: false,
           paperTrading: config.paperTrading,
         })
-        .pipe(Effect.catch(() => Effect.void));
+        .pipe(Effect.ignore);
 
   const gateRedeployCandidate = (
     candidate: IdleRedeployCandidate,
@@ -5115,7 +5166,7 @@ export const program = Effect.gen(function* () {
             executed: false,
             paperTrading: config.paperTrading,
           })
-          .pipe(Effect.catch(() => Effect.void));
+          .pipe(Effect.ignore);
         return { outcome: "skip" };
       }
       // P2 (3654054425, entry backoff): if this pool's normal ENTER failed with
@@ -5262,7 +5313,7 @@ export const program = Effect.gen(function* () {
           recentDecisions: overlayRecentDecisions,
           hasOpenPosition: overlayHasOpenPosition,
         })
-        .pipe(Effect.catch(() => Effect.succeed(null)));
+        .pipe(Effect.orElseSucceed(() => null));
       if (enhanced) {
         idleRedeployLogger.info("Agent veto override on idle-redeploy", {
           pool: overlayPoolAddress,
@@ -5306,14 +5357,12 @@ export const program = Effect.gen(function* () {
       // a different lifecycle action).
       if (!agentProposal && proposalMode !== "supervised") {
         const agentStatus = yield* agent.getStatus().pipe(
-          Effect.catch(() =>
-            Effect.succeed({
-              connected: false,
-              transport: null,
-              lastPromptAt: null,
-              errorCount: 0,
-            }),
-          ),
+          Effect.orElseSucceed(() => ({
+            connected: false,
+            transport: null,
+            lastPromptAt: null,
+            errorCount: 0,
+          })),
         );
         const latencySkipped = yield* agent.shouldSkipSyncProposal();
         if (
@@ -5344,7 +5393,7 @@ export const program = Effect.gen(function* () {
                     ),
                   ),
               }),
-              Effect.catch(() => Effect.succeed(null)),
+              Effect.orElseSucceed(() => null),
             );
           if (syncProposal && isAgentProposal(syncProposal)) {
             agentProposal = syncProposal;
@@ -5458,9 +5507,7 @@ export const program = Effect.gen(function* () {
       );
       getPoolCircuitBreaker(overlayPoolAddress).recordFailure(now);
       if (proposalSource === "queue" && agentProposal.proposalId) {
-        yield* agentState
-          .rejectProposal(agentProposal.proposalId)
-          .pipe(Effect.catch(() => Effect.void));
+        yield* agentState.rejectProposal(agentProposal.proposalId).pipe(Effect.ignore);
       }
       return { skipped: false, decision, overlay: emptyRedeployOverlay };
     });
@@ -5544,10 +5591,10 @@ export const program = Effect.gen(function* () {
         positionsForPool(trackedPositions, overlayPoolAddress).length > 0;
       const overlayWarnings = yield* memory
         .getRelevantContext(`warnings for pool ${overlayPoolAddress}`, 3, overlayPoolAddress)
-        .pipe(Effect.catch(() => Effect.succeed([])));
+        .pipe(Effect.orElseSucceed(() => []));
       const overlayRecentDecisions = yield* audit
         .getRecentDecisions(10)
-        .pipe(Effect.catch(() => Effect.succeed([])));
+        .pipe(Effect.orElseSucceed(() => []));
       let nextDecision = decision;
       let overlay = emptyRedeployOverlay;
       if (proposalMode === "veto") {
@@ -5642,7 +5689,7 @@ export const program = Effect.gen(function* () {
       // when the window has <4 samples.
       const observedRange = yield* db
         .getObservedPriceRange(candidate.poolAddress, Date.now() - 86_400_000, Date.now())
-        .pipe(Effect.catch(() => Effect.succeed(null)));
+        .pipe(Effect.orElseSucceed(() => null));
       const riskCtx = {
         openPositions: ctx.openPositions,
         portfolioValueUsd: ctx.portfolioValueUsd,
@@ -5700,7 +5747,7 @@ export const program = Effect.gen(function* () {
             executed: false,
             paperTrading: config.paperTrading,
           })
-          .pipe(Effect.catch(() => Effect.void));
+          .pipe(Effect.ignore);
         // Follow-up 3655404920: mirror the in-slot tail — a deterministic risk
         // denial after an applied full/supervised proposal rejects the queued
         // proposal and arms backoff / circuit breaker, so the same approved
@@ -5900,7 +5947,7 @@ export const program = Effect.gen(function* () {
       if (solFundedEntryMode) {
         entrySolBudgetLamports = yield* adapter.getNativeBalance().pipe(
           Effect.map((lamports) => freeEntrySolLamports(lamports)),
-          Effect.catch(() => Effect.succeed(0n)),
+          Effect.orElseSucceed(() => 0n),
         );
         entrySolBudgetKnown = true;
       }
@@ -6012,7 +6059,7 @@ export const program = Effect.gen(function* () {
               },
             );
             autonomousCandidates.set(enteredCandidate.id, enteredCandidate);
-            yield* db.saveTokenCandidate(enteredCandidate).pipe(Effect.catch(() => Effect.void));
+            yield* db.saveTokenCandidate(enteredCandidate).pipe(Effect.ignore);
           }
         }
       }
@@ -6056,7 +6103,7 @@ export const program = Effect.gen(function* () {
           error: executionError,
           paperTrading: config.paperTrading,
         })
-        .pipe(Effect.catch(() => Effect.void));
+        .pipe(Effect.ignore);
       cycle.decisions.push(decision);
     });
 
@@ -6145,7 +6192,7 @@ export const program = Effect.gen(function* () {
             action: decision.action,
             confidence: decision.confidence,
           })
-          .pipe(Effect.catch(() => Effect.succeed(null)));
+          .pipe(Effect.orElseSucceed(() => null));
 
         const snapshotId = signalSnapshotId ?? undefined;
         const exec = yield* dispatchRedeployExecution(
@@ -6189,7 +6236,7 @@ export const program = Effect.gen(function* () {
       if (adapter.discoverPoolsTopPages !== undefined) {
         discovered = yield* adapter
           .discoverPoolsTopPages(config.marketScanUniversePages ?? 3)
-          .pipe(Effect.catch(() => Effect.succeed([] as ReadonlyArray<DiscoveredPool>)));
+          .pipe(Effect.orElseSucceed(() => [] as ReadonlyArray<DiscoveredPool>));
       }
       // EVM path: Krystal universe carries measured fees/TVL; adapter log-scan
       // discovery returns zeroed economics and cannot feed the market gate.
@@ -6246,7 +6293,7 @@ export const program = Effect.gen(function* () {
             autonomousExecution.walletAddress,
             autonomousExecution.agentInstanceId,
           )
-          .pipe(Effect.catch(() => Effect.succeed([])))),
+          .pipe(Effect.orElseSucceed(() => []))),
       ];
       // Issue #166: sweep wallet tokens with no backing position or active
       // settlement job (dead rollback settlements, failed swap-funded
@@ -6263,7 +6310,7 @@ export const program = Effect.gen(function* () {
           now: settlementNow,
         });
         for (const job of orphanJobs) {
-          yield* db.saveSettlementJob(job).pipe(Effect.catch(() => Effect.void));
+          yield* db.saveSettlementJob(job).pipe(Effect.ignore);
         }
         settlementJobs.push(...orphanJobs);
       }
@@ -6288,7 +6335,7 @@ export const program = Effect.gen(function* () {
           triggeredAt: settlementNow,
           resolvedAt: null,
         };
-        yield* db.saveSafetyPause(activeSafetyPause).pipe(Effect.catch(() => Effect.void));
+        yield* db.saveSafetyPause(activeSafetyPause).pipe(Effect.ignore);
       } else if (
         activeSafetyPause?.resolvedAt === null &&
         activeSafetyPause.reason === "settlement_overdue" &&
@@ -6299,11 +6346,11 @@ export const program = Effect.gen(function* () {
         // retries finally sold the token, or the orphan sweep recovered
         // it), auto-resolve instead of latching until `beam resume`.
         activeSafetyPause = { ...activeSafetyPause, resolvedAt: settlementNow };
-        yield* db.saveSafetyPause(activeSafetyPause).pipe(Effect.catch(() => Effect.void));
+        yield* db.saveSafetyPause(activeSafetyPause).pipe(Effect.ignore);
       }
       activeSafetyPause = yield* db
         .getSafetyPause(autonomousExecution.walletAddress, autonomousExecution.agentInstanceId)
-        .pipe(Effect.catch(() => Effect.succeed(activeSafetyPause)));
+        .pipe(Effect.orElseSucceed(() => activeSafetyPause));
       return oldestSettlementAgeMs;
     });
 
@@ -6330,7 +6377,7 @@ export const program = Effect.gen(function* () {
         })
       ) {
         activeSafetyPause = { ...activeSafetyPause, resolvedAt: Date.now() };
-        yield* db.saveSafetyPause(activeSafetyPause).pipe(Effect.catch(() => Effect.void));
+        yield* db.saveSafetyPause(activeSafetyPause).pipe(Effect.ignore);
       }
     });
 
@@ -6405,7 +6452,7 @@ export const program = Effect.gen(function* () {
       if (config.challengeMode === true && challengePeakEquityUsd <= 0) {
         const persistedPeak = yield* db
           .getMetadata("challenge_peak_equity_usd")
-          .pipe(Effect.catch(() => Effect.succeed(null)));
+          .pipe(Effect.orElseSucceed(() => null));
         const parsed = persistedPeak !== null ? Number(persistedPeak) : 0;
         challengePeakEquityUsd = Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
         // Paper-era pollution guard: the peak tracker also ran during PAPER
@@ -6431,7 +6478,7 @@ export const program = Effect.gen(function* () {
           challengePeakEquityUsd = lastWalletBalanceUsd;
           yield* db
             .setMetadata("challenge_peak_equity_usd", String(Math.round(lastWalletBalanceUsd)))
-            .pipe(Effect.catch(() => Effect.void));
+            .pipe(Effect.ignore);
         }
       }
       if (config.challengeMode === true) {
@@ -6444,7 +6491,7 @@ export const program = Effect.gen(function* () {
           challengePeakEquityUsd = portfolioUsd;
           yield* db
             .setMetadata("challenge_peak_equity_usd", String(Math.round(challengePeakEquityUsd)))
-            .pipe(Effect.catch(() => Effect.void));
+            .pipe(Effect.ignore);
         }
       }
     });
@@ -6460,20 +6507,22 @@ export const program = Effect.gen(function* () {
       if (config.challengeMode !== true || challengeLossCooldownUntil.size > 0) return;
       const persistedCooldowns = yield* db
         .getMetadata("challenge_loss_cooldowns")
-        .pipe(Effect.catch(() => Effect.succeed(null)));
+        .pipe(Effect.orElseSucceed(() => null));
       if (persistedCooldowns === null) return;
-      try {
-        for (const [pool, until] of Object.entries(
-          parseJsonOr<Record<string, number>>(persistedCooldowns, {}),
-        )) {
-          const untilMs = typeof until === "number" ? until : Number(until);
-          if (Number.isFinite(untilMs) && untilMs > Date.now()) {
-            challengeLossCooldownUntil.set(pool.toLowerCase(), untilMs);
+      yield* Effect.try({
+        try: () => {
+          for (const [pool, until] of Object.entries(
+            parseJsonOr<Record<string, number>>(persistedCooldowns, {}),
+          )) {
+            const untilMs = typeof until === "number" ? until : Number(until);
+            if (Number.isFinite(untilMs) && untilMs > Date.now()) {
+              challengeLossCooldownUntil.set(pool.toLowerCase(), untilMs);
+            }
           }
-        }
-      } catch {
+        },
         // Malformed blob — start with an empty cooldown map.
-      }
+        catch: () => undefined,
+      }).pipe(Effect.ignore);
     });
 
   const hydrateChallengeFirstSeen = (): Effect.Effect<void, never, never> =>
@@ -6484,20 +6533,22 @@ export const program = Effect.gen(function* () {
       if (config.challengeMode !== true || poolFirstSeenAt.size > 0) return;
       const persistedFirstSeen = yield* db
         .getMetadata("challenge_pool_first_seen")
-        .pipe(Effect.catch(() => Effect.succeed(null)));
+        .pipe(Effect.orElseSucceed(() => null));
       if (persistedFirstSeen === null) return;
-      try {
-        for (const [pool, seenAt] of Object.entries(
-          parseJsonOr<Record<string, number>>(persistedFirstSeen, {}),
-        )) {
-          const seenMs = typeof seenAt === "number" ? seenAt : Number(seenAt);
-          if (Number.isFinite(seenMs) && seenMs > 0) {
-            poolFirstSeenAt.set(pool.toLowerCase(), seenMs);
+      yield* Effect.try({
+        try: () => {
+          for (const [pool, seenAt] of Object.entries(
+            parseJsonOr<Record<string, number>>(persistedFirstSeen, {}),
+          )) {
+            const seenMs = typeof seenAt === "number" ? seenAt : Number(seenAt);
+            if (Number.isFinite(seenMs) && seenMs > 0) {
+              poolFirstSeenAt.set(pool.toLowerCase(), seenMs);
+            }
           }
-        }
-      } catch {
+        },
         // Malformed blob — start with an empty first-seen map.
-      }
+        catch: () => undefined,
+      }).pipe(Effect.ignore);
     });
 
   const hydrateChallengeRotations = (): Effect.Effect<void, never, never> =>
@@ -6506,14 +6557,13 @@ export const program = Effect.gen(function* () {
       // counts per exit|enter pair, loaded once so a restart cannot re-arm
       // rotation on a single good cycle.
       if (config.challengeMode !== true || rotationConfirmations.size > 0) return;
-      const persisted = yield* db.getRotationObservations().pipe(
-        Effect.catch(() =>
-          Effect.succeed(
-            // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
-            [] as ReadonlyArray<{ pairKey: string; obsCount: number; updatedAt: number }>,
+      const persisted = yield* db
+        .getRotationObservations()
+        .pipe(
+          Effect.orElseSucceed(
+            () => [] as ReadonlyArray<{ pairKey: string; obsCount: number; updatedAt: number }>,
           ),
-        ),
-      );
+        );
       for (const row of persisted) {
         if (Number.isInteger(row.obsCount) && row.obsCount >= 0) {
           rotationConfirmations.set(row.pairKey, row.obsCount);
@@ -6544,19 +6594,19 @@ export const program = Effect.gen(function* () {
         // fund the next attempt instead of idling with the capital split.
         // Fail-open: a recover failure leaves the budget as-is (fail closed).
         if (adapter.unwrapWethToNative !== undefined) {
-          yield* adapter.unwrapWethToNative().pipe(Effect.catch(() => Effect.void));
+          yield* adapter.unwrapWethToNative().pipe(Effect.ignore);
         }
         const nativeSol = yield* adapter.getNativeBalance().pipe(
           // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
           Effect.map((lamports) => ({ ok: true as const, lamports })),
           // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
-          Effect.catch(() => Effect.succeed({ ok: false as const, lamports: 0n })),
+          Effect.orElseSucceed(() => ({ ok: false as const, lamports: 0n })),
         );
         const liveNativePrice = yield* adapter
           .getTokenPrices([NATIVE_MINT], { useFallback: false })
           .pipe(
             Effect.map((prices) => prices[NATIVE_MINT]),
-            Effect.catch(() => Effect.succeed(undefined)),
+            Effect.orElseSucceed(() => undefined),
           );
         const priceOk =
           typeof liveNativePrice === "number" &&
@@ -6594,8 +6644,8 @@ export const program = Effect.gen(function* () {
         yield* Effect.forkChild(
           Effect.gen(function* () {
             const raw = yield* Effect.all([
-              adapter.getWalletHoldings().pipe(Effect.catch(() => Effect.succeed(null))),
-              adapter.getNativeBalance().pipe(Effect.catch(() => Effect.succeed(null))),
+              adapter.getWalletHoldings().pipe(Effect.orElseSucceed(() => null)),
+              adapter.getNativeBalance().pipe(Effect.orElseSucceed(() => null)),
             ]);
             const [holdings, nativeSolLamports] = raw;
             if (holdings === null || nativeSolLamports === null) {
@@ -6626,7 +6676,7 @@ export const program = Effect.gen(function* () {
                 scanCount,
               });
             }
-          }).pipe(Effect.catch(() => Effect.void)),
+          }).pipe(Effect.ignore),
         );
       }
     });
@@ -6638,6 +6688,17 @@ export const program = Effect.gen(function* () {
     getPrefetched: (poolAddress: string) => { state: PoolState; bins: BinArray | null } | undefined,
   ): Effect.Effect<void, never, never> =>
     Effect.gen(function* () {
+      // Warm the pool-stats cache for the WHOLE scan set with one batched
+      // GeckoTerminal request (≤30 addresses per call, live-verified) before the
+      // per-pool loop. Without this every pool spends its own request, and the
+      // keyless 30 req/min budget is per IP — several agents on one host trip
+      // 429 on each other even though each paces its own requests. Batching also
+      // makes the per-pool 2.1s pacing irrelevant to wall-clock cycle time.
+      const prefetchGecko = gecko.prefetchPools;
+      if (config.geckoTerminalEnabled !== false && prefetchGecko !== undefined) {
+        yield* prefetchGecko(poolsToScan).pipe(Effect.ignore);
+      }
+
       for (const poolAddress of poolsToScan) {
         // A pool yields one decision per held position plus at most one ENTER.
         const decisions = yield* evaluatePool(
@@ -6725,7 +6786,7 @@ export const program = Effect.gen(function* () {
             triggeredAt: Date.now(),
             resolvedAt: null,
           };
-          yield* db.saveSafetyPause(activeSafetyPause).pipe(Effect.catch(() => Effect.void));
+          yield* db.saveSafetyPause(activeSafetyPause).pipe(Effect.ignore);
         }
       }
     });
@@ -6750,14 +6811,14 @@ export const program = Effect.gen(function* () {
         },
       });
       // Prune expired memories after each cycle
-      yield* memory.pruneExpired().pipe(Effect.catch(() => Effect.void));
+      yield* memory.pruneExpired().pipe(Effect.ignore);
       // Prune pool_snapshots past the retention window (they grow every
       // cycle). Runs at most once per day; the first cycle prunes immediately.
       const nowForPrune = Date.now();
       if (nowForPrune - lastSnapshotPruneAt > SNAPSHOT_PRUNE_INTERVAL_MS) {
         lastSnapshotPruneAt = nowForPrune;
         const cutoff = nowForPrune - config.snapshotRetentionDays * 86_400_000;
-        const pruned = yield* db.pruneSnapshots(cutoff).pipe(Effect.catch(() => Effect.succeed(0)));
+        const pruned = yield* db.pruneSnapshots(cutoff).pipe(Effect.orElseSucceed(() => 0));
         if (pruned > 0) {
           console.info("[snapshot-retention] Pruned old pool snapshots", {
             pruned,
@@ -6772,14 +6833,39 @@ export const program = Effect.gen(function* () {
       // formula in engine/pnl.ts. Forked fire-and-forget so a transient report
       // never blocks the cycle.
       {
+        const positionRows = Array.from(trackedPositions.values());
         let pnl = 0;
-        for (const p of trackedPositions.values()) {
+        for (const p of positionRows) {
           pnl +=
             p.currentValueUsd +
             p.cumulativeFeesClaimedUsd +
             p.cumulativeRewardsClaimedUsd -
             p.depositedUsd;
         }
+        const positionsValueUsd = positionRows.reduce((sum, p) => sum + p.currentValueUsd, 0);
+        const equityUsd = lastWalletBalanceUsd + positionsValueUsd;
+        const statusSnapshot = buildOperatorStatus({
+          source: "cloud",
+          running: true,
+          version: getCurrentVersion(),
+          dbPath: process.env.SQLITE_DB_PATH ?? null,
+          uptimeMs: Date.now() - programStartTime,
+          scanCount,
+          lastCycleAt: Date.now(),
+          portfolio: portfolioStatusFromPositions(positionRows, lastWalletBalanceUsd),
+          positions: positionStatusesFromRecords(positionRows, new Map()),
+          decisions: cycle.decisions.map((decision) => ({
+            timestamp: Date.now(),
+            cycleId: cycle.cycleId,
+            poolAddress: decision.poolAddress,
+            action: decision.action,
+            confidence: decision.confidence,
+            reasoning: decision.reasoning,
+            executed: false,
+            paperTrading: config.paperTrading,
+            error: null,
+          })),
+        });
         yield* Effect.forkChild(
           postEngineStatus(
             "running",
@@ -6798,7 +6884,7 @@ export const program = Effect.gen(function* () {
             // operator surface (API /portfolio, Telegram /portfolio) serves the
             // same trade-level P&L the local DB shows. Replaced wholesale every
             // cycle; the report stores it inside the snapshot's details JSON.
-            Array.from(trackedPositions.values()).map((p) => ({
+            positionRows.map((p) => ({
               id: p.positionId,
               poolAddress: p.poolAddress,
               side: p.paperExitedAt != null || p.closedAt != null ? "closed" : "open",
@@ -6818,134 +6904,58 @@ export const program = Effect.gen(function* () {
               exitedAt: p.paperExitedAt ?? p.closedAt,
             })),
             // Wallet equity = cash + position marks (the compounding baseline).
-            lastWalletBalanceUsd +
-              Array.from(trackedPositions.values()).reduce((sum, p) => sum + p.currentValueUsd, 0),
+            equityUsd,
             // Hard-floor peak — the operator surface shows equity vs peak.
             challengePeakEquityUsd > 0 ? challengePeakEquityUsd : undefined,
+            statusSnapshot,
           ),
         ).pipe(Effect.asVoid);
       }
       scanCount += 1;
-      yield* maybeSendAgentCheckin("periodic").pipe(Effect.catch(() => Effect.void));
+      yield* maybeSendAgentCheckin("periodic").pipe(Effect.ignore);
       yield* refreshAgentState();
     });
 
-  const runScanCycle = (): Effect.Effect<void, never, never> =>
-    Effect.gen(function* () {
+  const { runScanCycle } = createScanCycle({
+    config,
+    db,
+    adapter,
+    getScanCount: () => scanCount,
+    getPoolsToScan: () => poolsToScan,
+    resetCoreDataFailures: () => {
       coreDataFailuresThisCycle = 0;
-      const cycle: AgentCycle = {
-        cycleId: randomUUID(),
-        startedAt: Date.now(),
-        poolsScanned: 0,
-        poolsDecided: 0,
-        poolsExecuted: 0,
-        poolsFailed: 0,
-        decisions: [],
-        totalGasCostSol: 0,
-        paperTrading: config.paperTrading,
-      };
-
-      console.info("Scan cycle started", { cycleId: cycle.cycleId });
-
-      closedPositionsThisCycle = yield* db
-        .getClosedPositions()
-        // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
-        .pipe(Effect.catch(() => Effect.succeed([] as ReadonlyArray<PositionRecord>)));
+    },
+    setClosedPositions: (positions) => {
+      closedPositionsThisCycle = positions;
+    },
+    resetPositionValues: () => {
       positionValuesThisCycle = null;
-
-      yield* refreshAutonomousCandidates(scanCount);
-      yield* refreshFallenAngelCandidates(scanCount);
-      yield* refreshHarvestBook();
-      yield* refreshMarketUniverse(Date.now());
-      // The universe refresh may have rebuilt the market top-K — make the
-      // fresh active set visible to the "no pools" check and the scan loop.
-      rebuildPoolsToScan();
-      const oldestSettlementAgeMs = yield* processSettlementPhase();
-
-      // Issue #182: an armed execution_failures pause must not outlive the
-      // failure spike that raised it. Runs at the TOP of the cycle, before
-      // any pool is decided — a resolved latch must not block the very cycle
-      // that clears it (the daily_drawdown analog resolves per-pool before
-      // that pool's decisions for the same reason). The counter is decayed
-      // to 0 after every quiet cycle (see the end-of-cycle decay below), so
-      // "below the threshold" is the recovery signal for restarts AND
-      // mid-run spikes; the end-of-cycle arm block re-arms only when a cycle
-      // genuinely breaches again. `beam resume` remains an operator override.
-      yield* resolveCycleExecutionFailuresPause();
-
-      if (poolsToScan.length === 0) {
-        console.info("No pools configured — skipping cycle");
-        // Issue #182: a skipped cycle is a quiet cycle — no execution failure
-        // was possible, so the consecutive counter decays like any other
-        // quiet cycle (otherwise recovery lags behind skipped cycles).
-        executionFailuresThisCycle = 0;
-        consecutiveExecutionFailures = decayExecutionFailureCounter(
-          consecutiveExecutionFailures,
-          executionFailuresThisCycle,
-        );
-        cycle.completedAt = Date.now();
-        return;
-      }
-
-      yield* refreshCycleWallet();
-
-      yield* hydrateChallengePeak();
-
-      yield* hydrateChallengeCooldowns();
-
-      yield* hydrateChallengeFirstSeen();
-
-      yield* hydrateChallengeRotations();
-      // Issue #170: batch wallet-reserve gate — refresh the per-cycle native
-      // SOL budget for SOL-funded entries. One read, reused by every ENTER
-      // gate this cycle; a failed read leaves the budget UNKNOWN and the gate
-      // skips entries fail-closed (never commit SOL the engine cannot confirm).
-      // The USD→lamports estimate keys off the LIVE NATIVE price read fresh
-      // every cycle (the static NATIVE_PRICE_USD config was a Solana-era $150
-      // fallback that floored the real ~$1880 ETH price and over-reserved
-      // every entry ~12x, silently skipping all live ENTERs on a small
-      // wallet). Live-first: the feed is the freshest price available and
-      // entry-prep sizes swaps at live prices; a failed live price read fails
-      // closed with the balance read (price-cache hit when the cycle-top
-      // wallet snapshot already priced SOL).
-      yield* refreshCycleSolBudget();
-      yield* logWalletComposition();
-      // Qualified-but-unconsumed ENTER candidates for the opt-in idle-capital
-      // redeploy pass (empty and never read when the feature is off).
-      const idleRedeployCandidates: IdleRedeployCandidate[] = [];
-      // Follow-up 3655404926: every pool whose EXIT actually executes this cycle
-      // (paper + live, deterministic or agent-adjusted). The redeploy pass
-      // excludes these so an exit can never be followed by a same-cycle re-entry
-      // — the no-exit-and-reenter invariant (AGENTS.md §multiple-positions).
-      const executedExitPools = new Set<string>();
-      // Reset AFTER the issue #182 resolve block above: the resolver reads the
-      // PREVIOUS cycle's failure count, and this cycle's failures start counting
-      // from here (recordExecutionOutcome increments it during the pool loop).
+    },
+    resetExecutionFailures: () => {
       executionFailuresThisCycle = 0;
-
-      // One batched state+bins read for the whole scan (when the adapter
-      // exposes it): per-pool getPoolState+getBinArray cost 3-6 round trips
-      // each with duplicate slot0/tickSpacing reads; the batched path is ~2
-      // per pool total. Pools missing from the map fall back to the
-      // sequential per-pool read inside evaluatePool.
-      const prefetched =
-        adapter.getPoolStatesWithBins !== undefined
-          ? yield* adapter
-              .getPoolStatesWithBins([...poolsToScan])
-              .pipe(Effect.catch(() => Effect.succeed(null)))
-          : null;
-      const getPrefetched = (poolAddress: string) => prefetched?.get(poolAddress.toLowerCase());
-      yield* runPoolScanLoop(cycle, idleRedeployCandidates, executedExitPools, getPrefetched);
-
-      yield* runRedeployAndDecay(
-        cycle,
-        idleRedeployCandidates,
-        executedExitPools,
-        oldestSettlementAgeMs,
-      );
-
-      yield* pruneAndReportCycle(cycle);
-    });
+    },
+    getConsecutiveExecutionFailures: () => consecutiveExecutionFailures,
+    setConsecutiveExecutionFailures: (value) => {
+      consecutiveExecutionFailures = value;
+    },
+    refreshAutonomousCandidates,
+    refreshFallenAngelCandidates,
+    refreshHarvestBook,
+    refreshMarketUniverse,
+    rebuildPoolsToScan,
+    processSettlementPhase,
+    resolveCycleExecutionFailuresPause,
+    refreshCycleWallet,
+    hydrateChallengePeak,
+    hydrateChallengeCooldowns,
+    hydrateChallengeFirstSeen,
+    hydrateChallengeRotations,
+    refreshCycleSolBudget,
+    logWalletComposition,
+    runPoolScanLoop,
+    runRedeployAndDecay,
+    pruneAndReportCycle,
+  });
 
   // ─── Agent check-ins ────────────────────────────────────────────────────────
 
@@ -6955,11 +6965,11 @@ export const program = Effect.gen(function* () {
     Effect.gen(function* () {
       const recentDecisions = yield* audit
         .getRecentDecisions(20)
-        .pipe(Effect.catch(() => Effect.succeed([])));
+        .pipe(Effect.orElseSucceed(() => []));
       const warnings = config.agentCheckinIncludeHistory
         ? yield* memory
             .getRelevantContext("recent warnings", 10)
-            .pipe(Effect.catch(() => Effect.succeed([])))
+            .pipe(Effect.orElseSucceed(() => []))
         : [];
       const positions = Array.from(trackedPositions.values())
         .sort((a, b) => b.currentValueUsd - a.currentValueUsd)
@@ -7029,7 +7039,7 @@ export const program = Effect.gen(function* () {
         return;
       }
       const checkin = yield* buildAgentCheckin(trigger);
-      yield* agent.sendCheckin(checkin).pipe(Effect.catch(() => Effect.void));
+      yield* agent.sendCheckin(checkin).pipe(Effect.ignore);
       lastAgentCheckinAt = Date.now();
     });
 
@@ -7068,7 +7078,7 @@ export const program = Effect.gen(function* () {
         },
         ...(position ? { position } : {}),
       };
-      yield* agent.sendAlert(alert).pipe(Effect.catch(() => Effect.void));
+      yield* agent.sendAlert(alert).pipe(Effect.ignore);
     });
 
   const proposalBackoff = new Map<string, ProposalBackoff>();
@@ -7137,7 +7147,7 @@ export const program = Effect.gen(function* () {
                 "challenge_pool_first_seen",
                 JSON.stringify(Object.fromEntries(poolFirstSeenAt)),
               )
-              .pipe(Effect.catch(() => Effect.void));
+              .pipe(Effect.ignore);
           }
         });
       yield* ensureFirstSeenStage();
@@ -7177,11 +7187,34 @@ export const program = Effect.gen(function* () {
         Effect.gen(function* () {
           const krystalStats =
             config.krystalEnabled !== false ? yield* krystal.getPoolStats(poolAddress) : null;
+          // Krystal 403s from datacenter IPs (Cloudflare), so DefiLlama is the
+          // measured-fee tier behind it: measured fee income + volume + TVL for
+          // Base Uniswap v3 pools, with the pool-integrity checks living in the
+          // service (unique pair+tier row, TVL cross-check, v3-only).
+          // Opt-in (`=== true`, not `!== false`) so test fixtures that omit the
+          // field never touch the network; loadConfig defaults it to true.
+          const defiLlamaStats =
+            krystalStats === null && config.defillamaEnabled === true
+              ? yield* Effect.promise(() =>
+                  getDefiLlamaPoolStats(
+                    {
+                      poolAddress,
+                      tokenX: rawPool.tokenX,
+                      tokenY: rawPool.tokenY,
+                      tickSpacing: rawPool.binStep,
+                    },
+                    { endpoint: config.defillamaEndpoint },
+                  ),
+                ).pipe(Effect.orElseSucceed(() => null))
+              : null;
           const geckoStats =
-            krystalStats === null && config.geckoTerminalEnabled !== false
+            krystalStats === null &&
+            defiLlamaStats === null &&
+            config.geckoTerminalEnabled !== false
               ? yield* gecko.getPoolStats(poolAddress, 0.0025 + rawPool.binStep / 10_000)
               : null;
           if (krystalStats !== null) return enrichPoolFromKrystal(rawPool, krystalStats);
+          if (defiLlamaStats !== null) return enrichPoolFromDefiLlama(rawPool, defiLlamaStats);
           if (geckoStats !== null) return enrichPoolFromGecko(rawPool, geckoStats);
           return rawPool;
         });
@@ -7207,7 +7240,7 @@ export const program = Effect.gen(function* () {
                 "challenge_pool_first_seen",
                 JSON.stringify(Object.fromEntries(poolFirstSeenAt)),
               )
-              .pipe(Effect.catch(() => Effect.void));
+              .pipe(Effect.ignore);
           }
         });
       yield* backdateLaunchRugStage(pool);
@@ -7233,7 +7266,7 @@ export const program = Effect.gen(function* () {
               snapshotTimestamp - 1,
             )
             // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
-            .pipe(Effect.catch(() => Effect.succeed([] as ReadonlyArray<PoolSnapshot>)));
+            .pipe(Effect.orElseSucceed(() => [] as ReadonlyArray<PoolSnapshot>));
           const previousSnapshot =
             previousSnapshots.length > 0
               ? previousSnapshots[previousSnapshots.length - 1]
@@ -7328,13 +7361,61 @@ export const program = Effect.gen(function* () {
       // 4. Freeze authority screening: a freeze-enabled untrusted leg is
       //    adjudicated by the lazy Jupiter/Data-API token-risk overlay.
       const recordSafetyWarning = (content: string) =>
-        memory
-          .upsert({ category: "warning", content, poolAddress })
-          .pipe(Effect.catch(() => Effect.void));
+        memory.upsert({ category: "warning", content, poolAddress }).pipe(Effect.ignore);
 
       const rejectForSafety = (reason: string): Effect.Effect<ReadonlyArray<AgentDecision>> =>
         Effect.gen(function* () {
           logger.warn("Pool rejected by safety screening", { pool: poolAddress, reason });
+          // AN ENTER-ONLY REJECTION MUST NOT ORPHAN HELD POSITIONS. The safety
+          // stages below run before the per-position EXIT phase, so returning
+          // here skipped stop-loss / trailing / dust / time exits entirely for
+          // any pool that had a position open. Observed cost: a post-entry
+          // token-risk flip left a $130 position unmanaged until it went to
+          // $0 (−100%, 588 min) because no stop was ever evaluated.
+          // Rejection still blocks ENTER; it no longer suppresses EXIT.
+          const held = positionsForPool(trackedPositions, poolAddress);
+          for (const pos of held) {
+            if (pos.depositedUsd > 0) {
+              // Re-mark from the pool price first: the sync stage that normally
+              // refreshes currentValueUsd runs AFTER these halts, so the in-memory
+              // mark would otherwise be stale and the stop would compare against
+              // an old value.
+              const fresh = estimatePositionValue(pos, pool);
+              if (Number.isFinite(fresh) && fresh >= 0) pos.currentValueUsd = fresh;
+              const lossPct = (pos.currentValueUsd - pos.depositedUsd) / pos.depositedUsd;
+              const breached = lossPct < -config.stopLossPct;
+              const breaches = breached ? (stopLossBreachCount.get(pos.positionId) ?? 0) + 1 : 0;
+              if (breached) stopLossBreachCount.set(pos.positionId, breaches);
+              else stopLossBreachCount.delete(pos.positionId);
+              if (breached && breaches >= config.trailingStopConfirmCycles) {
+                yield* audit
+                  .recordDecision({
+                    timestamp: Date.now(),
+                    cycleId,
+                    poolAddress,
+                    action: "EXIT",
+                    confidence: 1,
+                    reasoning: `Stop-loss on safety-halted pool: position loss ${(Math.abs(lossPct) * 100).toFixed(1)}% exceeds ${(config.stopLossPct * 100).toFixed(0)}% — capital protection exit (${reason})`,
+                    riskResult: { approved: true, reason: "stop-loss capital protection" },
+                    executed: false,
+                    paperTrading: config.paperTrading,
+                  })
+                  .pipe(Effect.ignore);
+                yield* recordSafetyWarning(
+                  `Stop-loss EXIT on safety-halted pool ${poolAddress}: ${(Math.abs(lossPct) * 100).toFixed(1)}% loss (${reason})`,
+                );
+                return [
+                  {
+                    action: "EXIT" as const,
+                    poolAddress,
+                    positionId: pos.positionId,
+                    confidence: 1,
+                    reasoning: `Stop-loss: position loss ${(Math.abs(lossPct) * 100).toFixed(1)}% exceeds ${(config.stopLossPct * 100).toFixed(0)}% (${breaches}/${config.trailingStopConfirmCycles} cycles) — capital protection exit on a safety-halted pool`,
+                  },
+                ];
+              }
+            }
+          }
           yield* audit
             .recordDecision({
               timestamp: Date.now(),
@@ -7347,7 +7428,7 @@ export const program = Effect.gen(function* () {
               executed: false,
               paperTrading: config.paperTrading,
             })
-            .pipe(Effect.catch(() => Effect.void));
+            .pipe(Effect.ignore);
           yield* recordSafetyWarning(`Safety screening rejected ${poolAddress}: ${reason}`);
           return [];
         });
@@ -7680,7 +7761,7 @@ export const program = Effect.gen(function* () {
           // Check memory for warnings
           const warnings = yield* memory
             .getRelevantContext(`warnings for pool ${poolAddress}`, 3, poolAddress)
-            .pipe(Effect.catch(() => Effect.succeed([])));
+            .pipe(Effect.orElseSucceed(() => []));
           const hasRecentWarning = warnings.some(
             (w) => w.category === "warning" && w.createdAt > Date.now() - 7 * 24 * 60 * 60 * 1000,
           );
@@ -7815,7 +7896,7 @@ export const program = Effect.gen(function* () {
                         content: `Position ${pos.positionId} on ${poolAddress} was closed externally during this cycle. Removed from tracking.`,
                         poolAddress,
                       })
-                      .pipe(Effect.catch(() => Effect.void));
+                      .pipe(Effect.ignore);
                   } else {
                     survivors.push(pos);
                   }
@@ -7948,7 +8029,7 @@ export const program = Effect.gen(function* () {
               if (adapter.getPositionValueUsd != null) {
                 return yield* adapter
                   .getPositionValueUsd(poolAddress, pos.positionPubKey)
-                  .pipe(Effect.catch(() => Effect.succeed(null)));
+                  .pipe(Effect.orElseSucceed(() => null));
               }
               return null;
             });
@@ -8000,7 +8081,7 @@ export const program = Effect.gen(function* () {
                     metadata: { kind: "paper_accrual" },
                     createdAt: now,
                   })
-                  .pipe(Effect.catch(() => Effect.void));
+                  .pipe(Effect.ignore);
               }
             });
           for (const pos of poolPositions) {
@@ -8011,6 +8092,19 @@ export const program = Effect.gen(function* () {
             // price-anchored mark.
             const estimatedValue = realMark !== null ? realMark : estimatePositionValue(pos, pool);
             pos.currentValueUsd = estimatedValue;
+            // Frozen-feed detection: count consecutive cycles where the mark has
+            // not moved at all. A dead feed reports a constant value, so no stop
+            // can ever see a drawdown (observed: 3 distinct prices across a
+            // 588-minute hold that ended at -100%). Tracked but not acted on
+            // here — the EXIT decision belongs to the phase below.
+            if (estimatedValue > 0) {
+              const prior = frozenMarkState.get(pos.positionId);
+              if (prior === undefined || Math.abs(prior.lastMark - estimatedValue) > 1e-9) {
+                frozenMarkState.set(pos.positionId, { lastMark: estimatedValue, cycles: 0 });
+              } else {
+                prior.cycles++;
+              }
+            }
             const highest = pos.highestValueUsd ?? pos.depositedUsd;
             if (estimatedValue > highest) {
               pos.highestValueUsd = estimatedValue;
@@ -8066,7 +8160,7 @@ export const program = Effect.gen(function* () {
                     content: outcome.memoryWarning,
                     poolAddress,
                   })
-                  .pipe(Effect.catch(() => Effect.void));
+                  .pipe(Effect.ignore);
               }
               if (outcome.agentAlert !== null) {
                 yield* sendAgentAlert(
@@ -8174,6 +8268,33 @@ export const program = Effect.gen(function* () {
                 }
               }
             }
+
+            // Frozen-feed EXIT: a mark that has not changed for many consecutive
+            // cycles is not a position that is flat, it is a position whose price
+            // feed died. Every drawdown-based stop reads that constant mark, so
+            // without this the position is unmanaged until it settles at zero.
+            // Exiting on a dead feed is the capital-preserving choice; the alert
+            // says why so it is not mistaken for a strategy signal.
+            const applyExitFrozenFeed = (): Effect.Effect<void, Error> =>
+              Effect.gen(function* () {
+                if (decision || pos.depositedUsd <= 0) return;
+                const state = frozenMarkState.get(pos.positionId);
+                if (state === undefined || state.cycles < FROZEN_MARK_MAX_CYCLES) return;
+                decision = {
+                  action: "EXIT",
+                  poolAddress,
+                  positionId: pos.positionId,
+                  confidence: 1,
+                  reasoning: `Frozen price feed: mark unchanged at $${state.lastMark.toFixed(2)} for ${state.cycles} consecutive cycles — exiting rather than holding an unpriceable position`,
+                };
+                yield* sendAgentAlert(
+                  "critical",
+                  "frozen_feed",
+                  `Frozen price feed on ${pool.tokenXSymbol}/${pool.tokenYSymbol}: mark stuck at $${state.lastMark.toFixed(2)} for ${state.cycles} cycles — capital protection exit`,
+                  { pool, metrics, position: pos },
+                );
+              });
+            yield* applyExitFrozenFeed();
 
             // Hard stop-loss (in-range capital floor): entry-based and independent
             // of the trailing stop's peak. The trailing stop only protects peak
@@ -8287,7 +8408,7 @@ export const program = Effect.gen(function* () {
 
           const existingCooldown = yield* db
             .getPoolCooldown(poolAddress)
-            .pipe(Effect.catch(() => Effect.succeed(null)));
+            .pipe(Effect.orElseSucceed(() => null));
           const existingOorCount = existingCooldown?.consecutiveOorExits ?? 0;
           const isOorExit =
             exitDecision.reasoning.includes("volatility") ||
@@ -8446,7 +8567,7 @@ export const program = Effect.gen(function* () {
             })
           ) {
             activeSafetyPause = { ...activeSafetyPause, resolvedAt: Date.now() };
-            yield* db.saveSafetyPause(activeSafetyPause).pipe(Effect.catch(() => Effect.void));
+            yield* db.saveSafetyPause(activeSafetyPause).pipe(Effect.ignore);
           }
           if (
             autonomousExecution &&
@@ -8456,7 +8577,7 @@ export const program = Effect.gen(function* () {
             consecutiveCoreDataFailures < 2
           ) {
             activeSafetyPause = { ...activeSafetyPause, resolvedAt: Date.now() };
-            yield* db.saveSafetyPause(activeSafetyPause).pipe(Effect.catch(() => Effect.void));
+            yield* db.saveSafetyPause(activeSafetyPause).pipe(Effect.ignore);
           }
         });
       yield* autoResolvePausesStage();
@@ -8475,7 +8596,7 @@ export const program = Effect.gen(function* () {
               triggeredAt: Date.now(),
               resolvedAt: null,
             };
-            yield* db.saveSafetyPause(activeSafetyPause).pipe(Effect.catch(() => Effect.void));
+            yield* db.saveSafetyPause(activeSafetyPause).pipe(Effect.ignore);
           }
         });
       yield* armDrawdownPauseStage();
@@ -8577,7 +8698,7 @@ export const program = Effect.gen(function* () {
                     content: `Volatility-gate EXIT for ${poolAddress}: stddev=${volatilityStddev.toFixed(2)} over ${volatilityBins.length} snapshots`,
                     poolAddress,
                   })
-                  .pipe(Effect.catch(() => Effect.void));
+                  .pipe(Effect.ignore);
               }
               yield* sendAgentAlert(
                 "warning",
@@ -8599,7 +8720,7 @@ export const program = Effect.gen(function* () {
                     content: `Gas-aware rebalance gate held ${poolAddress}: ${hold.reason}`,
                     poolAddress,
                   })
-                  .pipe(Effect.catch(() => Effect.void));
+                  .pipe(Effect.ignore);
                 yield* audit
                   .recordDecision({
                     timestamp: Date.now(),
@@ -8613,7 +8734,7 @@ export const program = Effect.gen(function* () {
                     executed: false,
                     paperTrading: config.paperTrading,
                   })
-                  .pipe(Effect.catch(() => Effect.void));
+                  .pipe(Effect.ignore);
               } else {
                 console.info(
                   `[recovery-gate] Holding ${poolAddress} — recovery prob ${hold.recoveryProb.toFixed(2)} >= ${hold.holdThreshold}`,
@@ -8624,7 +8745,7 @@ export const program = Effect.gen(function* () {
                     content: `OOR recovery prediction held ${poolAddress}: probability ${hold.recoveryProb.toFixed(2)}`,
                     poolAddress,
                   })
-                  .pipe(Effect.catch(() => Effect.void));
+                  .pipe(Effect.ignore);
                 yield* audit
                   .recordDecision({
                     timestamp: Date.now(),
@@ -8641,7 +8762,7 @@ export const program = Effect.gen(function* () {
                     executed: false,
                     paperTrading: config.paperTrading,
                   })
-                  .pipe(Effect.catch(() => Effect.void));
+                  .pipe(Effect.ignore);
               }
             });
 
@@ -8660,7 +8781,7 @@ export const program = Effect.gen(function* () {
                     content: `Rebalance simulation unavailable for ${poolAddress} — rebalance skipped this cycle`,
                     poolAddress,
                   })
-                  .pipe(Effect.catch(() => Effect.void));
+                  .pipe(Effect.ignore);
                 return null;
               }
               // Adopted EXTERNAL positions (pubkey set, no engine deposit) are
@@ -8924,6 +9045,37 @@ export const program = Effect.gen(function* () {
         return null;
       };
 
+      /**
+       * The deterministic ENTER gate stack, shared with `DECISION_ENGINE=rules`
+       * (`engine/entry-gates.ts`). Built per call so every gate sees the values
+       * the legacy branch sees at that point in the cycle.
+       */
+      const entryGateInput = (): EntryGateInput => {
+        const ownBook = ownBookPositionCounts(trackedPositions, poolAddress, config.paperTrading);
+        return {
+          config,
+          poolAddress,
+          poolTvlUsd: pool.tvlUsd,
+          poolFees24hUsd: pool.fees24hUsd,
+          metrics,
+          feeIlRatio,
+          volumeAuth,
+          binUtilization,
+          signalWeights,
+          minFeeIlRatio: evolvedThresholds.minFeeIlRatio,
+          volumeAuthThreshold: evolvedThresholds.volumeAuthThreshold,
+          proposedSizeUsd: entrySizeFromConfig(config, {
+            walletBalanceUsd,
+            portfolioValueUsd,
+            poolTvlUsd: pool.tvlUsd,
+          }),
+          portfolioValueUsd,
+          openPositions,
+          ownBookOpenPositions: ownBook.open,
+          ownBookPoolPositions: ownBook.pool,
+        };
+      };
+
       // ── ENTER slot: one per pool per cycle, under the per-pool cap ──────
       // A pool already exiting this cycle never re-enters in the same cycle;
       // the count cap (MAX_POSITIONS_PER_POOL) bounds stacked positions while
@@ -8976,7 +9128,7 @@ export const program = Effect.gen(function* () {
                         executed: false,
                         paperTrading: config.paperTrading,
                       })
-                      .pipe(Effect.catch(() => Effect.void));
+                      .pipe(Effect.ignore);
                     enterGateRejected = true;
                   }
                 });
@@ -9010,7 +9162,7 @@ export const program = Effect.gen(function* () {
                         executed: false,
                         paperTrading: config.paperTrading,
                       })
-                      .pipe(Effect.catch(() => Effect.void));
+                      .pipe(Effect.ignore);
                     enterGateRejected = true;
                   }
                 });
@@ -9042,14 +9194,14 @@ export const program = Effect.gen(function* () {
                         executed: false,
                         paperTrading: config.paperTrading,
                       })
-                      .pipe(Effect.catch(() => Effect.void));
+                      .pipe(Effect.ignore);
                     yield* memory
                       .upsert({
                         category: "warning",
                         content: `Entry suppressed for ${poolAddress} after insufficient token balance; retry in ${Math.ceil(retryAfterMs / 60_000)} minutes.`,
                         poolAddress,
                       })
-                      .pipe(Effect.catch(() => Effect.void));
+                      .pipe(Effect.ignore);
                     enterGateRejected = true;
                   }
                 });
@@ -9061,7 +9213,7 @@ export const program = Effect.gen(function* () {
                   if (!enterGateRejected) {
                     const cooldown = yield* db
                       .getPoolCooldown(poolAddress)
-                      .pipe(Effect.catch(() => Effect.succeed(null)));
+                      .pipe(Effect.orElseSucceed(() => null));
                     if (cooldown && Date.now() < cooldown.cooldownUntil) {
                       const remainingH = (
                         (cooldown.cooldownUntil - Date.now()) /
@@ -9076,7 +9228,7 @@ export const program = Effect.gen(function* () {
                           content: `Pool cooldown blocked ENTER on ${poolAddress}: ${cooldown.reason} (cooldown for ${remainingH}h more)`,
                           poolAddress,
                         })
-                        .pipe(Effect.catch(() => Effect.void));
+                        .pipe(Effect.ignore);
                       yield* audit
                         .recordDecision({
                           timestamp: Date.now(),
@@ -9093,7 +9245,7 @@ export const program = Effect.gen(function* () {
                           executed: false,
                           paperTrading: config.paperTrading,
                         })
-                        .pipe(Effect.catch(() => Effect.void));
+                        .pipe(Effect.ignore);
                       enterGateRejected = true;
                     }
                   }
@@ -9179,7 +9331,7 @@ export const program = Effect.gen(function* () {
                           executed: false,
                           paperTrading: config.paperTrading,
                         })
-                        .pipe(Effect.catch(() => Effect.void));
+                        .pipe(Effect.ignore);
                       enterGateRejected = true;
                     } else if (faLadder !== null) {
                       rawDecisions.push({
@@ -9219,12 +9371,7 @@ export const program = Effect.gen(function* () {
                   // still ENTER via the measured candidate conditions below (its volume
                   // IS real → volumeAuthenticityKnown=true). A heuristic pool still cannot
                   // enter (volume-unknown blocks the candidate gate).
-                  if (
-                    !enterGateRejected &&
-                    config.ilProtectionEnabled === true &&
-                    metrics.feeIlRatioKnown &&
-                    feeIlRatio < config.minFeeIlRatio
-                  ) {
+                  if (!enterGateRejected && feeIlFloorViolation(entryGateInput()) !== null) {
                     yield* audit
                       .recordDecision({
                         timestamp: Date.now(),
@@ -9241,7 +9388,7 @@ export const program = Effect.gen(function* () {
                         executed: false,
                         paperTrading: config.paperTrading,
                       })
-                      .pipe(Effect.catch(() => Effect.void));
+                      .pipe(Effect.ignore);
                     enterGateRejected = true;
                   }
                 });
@@ -9257,45 +9404,29 @@ export const program = Effect.gen(function* () {
                   // measured fee signal does not vote either way. Config knobs
                   // ENTER_ROUND_TRIP_GAS_USD (default $0.15) × ENTER_MIN_7D_FEE_OVER_GAS
                   // (default 1.0).
-                  if (
-                    !enterGateRejected &&
-                    (pool.fees24hUsd ?? 0) > 0 &&
-                    (pool.tvlUsd ?? 0) > 0 &&
-                    (config.enterRoundTripGasUsd ?? 0) > 0
-                  ) {
-                    const feeGasEntrySizeUsd = computeEntrySizeUsd({
-                      walletBalanceUsd,
-                      portfolioValueUsd,
-                      equityFractionUsd: config.entrySizeEquityFraction,
-                      tvlUsd: pool.tvlUsd,
-                      maxSizeUsd: config.maxEntrySizeUsd,
-                      tvlFractionUsd: config.entrySizeTvlFraction,
-                      floorUsd: config.entrySizeFloorUsd,
-                    });
-                    const expected7dFeesUsd =
-                      (pool.fees24hUsd ?? 0) * (feeGasEntrySizeUsd / pool.tvlUsd) * 7;
-                    const gasCostUsd =
-                      (config.enterRoundTripGasUsd ?? 0) * (config.enterMin7dFeeOverGas ?? 1);
-                    if (expected7dFeesUsd < gasCostUsd) {
-                      yield* audit
-                        .recordDecision({
-                          timestamp: Date.now(),
-                          cycleId,
-                          poolAddress,
-                          action: "ENTER",
-                          confidence: 0,
-                          reasoning: `[fee-gas-gate] expected 7d fees $${expected7dFeesUsd.toFixed(3)} < round-trip gas $${gasCostUsd.toFixed(3)} — entry cannot pay for itself`,
-                          metrics,
-                          riskResult: {
-                            approved: false,
-                            reason: `[fee-gas-gate] 7d fees $${expected7dFeesUsd.toFixed(3)} < gas $${gasCostUsd.toFixed(3)}`,
-                          },
-                          executed: false,
-                          paperTrading: config.paperTrading,
-                        })
-                        .pipe(Effect.catch(() => Effect.void));
-                      enterGateRejected = true;
-                    }
+                  const gasFloor = enterGateRejected
+                    ? null
+                    : feeGasFloorViolation(entryGateInput());
+                  if (gasFloor !== null) {
+                    const { expected7dFeesUsd, gasCostUsd } = gasFloor;
+                    yield* audit
+                      .recordDecision({
+                        timestamp: Date.now(),
+                        cycleId,
+                        poolAddress,
+                        action: "ENTER",
+                        confidence: 0,
+                        reasoning: `[fee-gas-gate] expected 7d fees $${expected7dFeesUsd.toFixed(3)} < round-trip gas $${gasCostUsd.toFixed(3)} — entry cannot pay for itself`,
+                        metrics,
+                        riskResult: {
+                          approved: false,
+                          reason: `[fee-gas-gate] 7d fees $${expected7dFeesUsd.toFixed(3)} < gas $${gasCostUsd.toFixed(3)}`,
+                        },
+                        executed: false,
+                        paperTrading: config.paperTrading,
+                      })
+                      .pipe(Effect.ignore);
+                    enterGateRejected = true;
                   }
                 });
               yield* runEnterFeeGasGate();
@@ -9439,7 +9570,7 @@ export const program = Effect.gen(function* () {
                         executed: false,
                         paperTrading: config.paperTrading,
                       })
-                      .pipe(Effect.catch(() => Effect.void));
+                      .pipe(Effect.ignore);
                     enterGateRejected = true;
                   }
                 });
@@ -9463,7 +9594,7 @@ export const program = Effect.gen(function* () {
                         executed: false,
                         paperTrading: config.paperTrading,
                       })
-                      .pipe(Effect.catch(() => Effect.void));
+                      .pipe(Effect.ignore);
                     enterGateRejected = true;
                   } else if (
                     !enterGateRejected &&
@@ -9489,28 +9620,17 @@ export const program = Effect.gen(function* () {
                         executed: false,
                         paperTrading: config.paperTrading,
                       })
-                      .pipe(Effect.catch(() => Effect.void));
+                      .pipe(Effect.ignore);
                     enterGateRejected = true;
                   }
                 });
               yield* runEnterLiquidityFundingGates();
               const runEnterCandidate = (): Effect.Effect<void, Error> =>
                 Effect.gen(function* () {
+                  // Same predicates the rule core runs (engine/entry-gates.ts), so a
+                  // rules ENTER cannot accept a pool this branch would refuse.
                   const isBaseEnterEligible = (): boolean =>
-                    !enterGateRejected &&
-                    (metrics.feeIlRatioKnown
-                      ? feeIlRatio > evolvedThresholds.minFeeIlRatio * 1.5
-                      : true) &&
-                    metrics.volumeAuthenticityKnown &&
-                    // Gecko-modeled fees skip the fee-rate band of volume
-                    // authenticity (strategy-service), so modeled-fee pools score
-                    // lower by construction — holding them to the measured 0.8
-                    // bar is a dead path. Env threshold still applies.
-                    volumeAuth >=
-                      (metrics.feeIlRatioKnown ? 0.8 : evolvedThresholds.volumeAuthThreshold) &&
-                    metrics.binUtilizationKnown &&
-                    binUtilization > 0.4 &&
-                    pool.tvlUsd > config.minPoolTvlUsd * 2;
+                    !enterGateRejected && baseCandidateViolation(entryGateInput()) === null;
                   const isChallengeYieldEligible = (): boolean =>
                     (config.challengeMode !== true ||
                       challengePoolScore(pool).score >= (config.challengeMinScore ?? 4)) &&
@@ -9575,19 +9695,15 @@ export const program = Effect.gen(function* () {
                               executed: false,
                               paperTrading: config.paperTrading,
                             })
-                            .pipe(Effect.catch(() => Effect.void));
+                            .pipe(Effect.ignore);
                           enterGateRejected = true;
                         });
                       yield* rejectLowScoreEnter();
                     } else {
-                      const proposedSizeUsd = computeEntrySizeUsd({
+                      const proposedSizeUsd = entrySizeFromConfig(config, {
                         walletBalanceUsd,
                         portfolioValueUsd,
-                        equityFractionUsd: config.entrySizeEquityFraction,
-                        tvlUsd: pool.tvlUsd,
-                        maxSizeUsd: config.maxEntrySizeUsd,
-                        tvlFractionUsd: config.entrySizeTvlFraction,
-                        floorUsd: config.entrySizeFloorUsd,
+                        poolTvlUsd: pool.tvlUsd,
                       });
 
                       // F5: per-pool allocation cap — aggregate across the pool's
@@ -9627,7 +9743,7 @@ export const program = Effect.gen(function* () {
                                 content: `Allocation gate skipped ENTER on ${poolAddress}: ${allocation.reason}`,
                                 poolAddress,
                               })
-                              .pipe(Effect.catch(() => Effect.void));
+                              .pipe(Effect.ignore);
                             yield* audit
                               .recordDecision({
                                 timestamp: Date.now(),
@@ -9644,7 +9760,7 @@ export const program = Effect.gen(function* () {
                                 executed: false,
                                 paperTrading: config.paperTrading,
                               })
-                              .pipe(Effect.catch(() => Effect.void));
+                              .pipe(Effect.ignore);
                             const captureAllocBlockedCandidate = (): Effect.Effect<void, Error> =>
                               Effect.gen(function* () {
                                 // Idle-redeploy capture: candidate conditions + score passed
@@ -9748,7 +9864,7 @@ export const program = Effect.gen(function* () {
                                     executed: false,
                                     paperTrading: config.paperTrading,
                                   })
-                                  .pipe(Effect.catch(() => Effect.void));
+                                  .pipe(Effect.ignore);
                                 enterGateRejected = true;
                               }
                             }
@@ -9902,7 +10018,7 @@ export const program = Effect.gen(function* () {
                             warnings,
                             recentDecisions: yield* audit
                               .getRecentDecisions(10)
-                              .pipe(Effect.catch(() => Effect.succeed([]))),
+                              .pipe(Effect.orElseSucceed(() => [])),
                             hasOpenPosition,
                             ...(pos !== undefined
                               ? { position: toAgentPositionState(pos, Date.now()) }
@@ -9976,7 +10092,7 @@ export const program = Effect.gen(function* () {
                               content: `Agent veto fetch failed for ${poolAddress}`,
                               poolAddress,
                             })
-                            .pipe(Effect.catch(() => Effect.void));
+                            .pipe(Effect.ignore);
                         }
                       });
                     yield* resolveTailVeto();
@@ -10005,14 +10121,12 @@ export const program = Effect.gen(function* () {
                       Effect.gen(function* () {
                         if (!agentProposal && proposalMode !== "supervised") {
                           const agentStatus = yield* agent.getStatus().pipe(
-                            Effect.catch(() =>
-                              Effect.succeed({
-                                connected: false,
-                                transport: null,
-                                lastPromptAt: null,
-                                errorCount: 0,
-                              }),
-                            ),
+                            Effect.orElseSucceed(() => ({
+                              connected: false,
+                              transport: null,
+                              lastPromptAt: null,
+                              errorCount: 0,
+                            })),
                           );
                           if (!hasSyncProposalTransport(agentStatus)) {
                             // No local runtime / AgentNoOp: skip sync without recording failure.
@@ -10050,7 +10164,7 @@ export const program = Effect.gen(function* () {
                                           warnings,
                                           recentDecisions: yield* audit
                                             .getRecentDecisions(10)
-                                            .pipe(Effect.catch(() => Effect.succeed([]))),
+                                            .pipe(Effect.orElseSucceed(() => [])),
                                           hasOpenPosition,
                                           ...(pos !== undefined
                                             ? { position: toAgentPositionState(pos, Date.now()) }
@@ -10201,7 +10315,7 @@ export const program = Effect.gen(function* () {
                                       content: `Advisory suggestion for ${poolAddress}: ${adjusted.action} (confidence ${adjusted.confidence.toFixed(2)})`,
                                       poolAddress,
                                     })
-                                    .pipe(Effect.catch(() => Effect.void));
+                                    .pipe(Effect.ignore);
 
                                   proposalBackoff.delete(poolAddress);
                                   poolCircuitBreaker.recordSuccess();
@@ -10209,7 +10323,7 @@ export const program = Effect.gen(function* () {
                                   if (proposalSource === "queue" && queueProposalId) {
                                     yield* agentState
                                       .dequeueProposals([queueProposalId])
-                                      .pipe(Effect.catch(() => Effect.void));
+                                      .pipe(Effect.ignore);
                                   }
                                 });
                               yield* recordTailSuggestion(
@@ -10271,7 +10385,7 @@ export const program = Effect.gen(function* () {
                             }
                             yield* agentState
                               .setAgentPolicy({ lastProposalAt: now })
-                              .pipe(Effect.catch(() => Effect.void));
+                              .pipe(Effect.ignore);
                           } else {
                             const rejectTailAgentProposal = (
                               queueProposalId: string | undefined,
@@ -10296,16 +10410,16 @@ export const program = Effect.gen(function* () {
                                     content: `Agent proposal rejected for ${poolAddress}: ${validation.reason}`,
                                     poolAddress,
                                   })
-                                  .pipe(Effect.catch(() => Effect.void));
+                                  .pipe(Effect.ignore);
 
                                 if (proposalSource === "queue" && queueProposalId) {
                                   yield* agentState
                                     .rejectProposal(queueProposalId)
-                                    .pipe(Effect.catch(() => Effect.void));
+                                    .pipe(Effect.ignore);
                                 }
                                 yield* agentState
                                   .setAgentPolicy({ lastProposalAt: now })
-                                  .pipe(Effect.catch(() => Effect.void));
+                                  .pipe(Effect.ignore);
                               });
                             yield* rejectTailAgentProposal(agentProposal.proposalId);
                           }
@@ -10327,7 +10441,7 @@ export const program = Effect.gen(function* () {
                               content: `Agent proposal fetch failed for ${poolAddress}`,
                               poolAddress,
                             })
-                            .pipe(Effect.catch(() => Effect.void));
+                            .pipe(Effect.ignore);
                         }
                       });
                     yield* applyTailAgentProposal();
@@ -10456,7 +10570,7 @@ export const program = Effect.gen(function* () {
             // when the window has <4 samples — a fresh pool has no history yet.
             const observedRange = yield* db
               .getObservedPriceRange(poolAddress, Date.now() - 86_400_000, Date.now())
-              .pipe(Effect.catch(() => Effect.succeed(null)));
+              .pipe(Effect.orElseSucceed(() => null));
             const riskCtx = {
               openPositions,
               portfolioValueUsd,
@@ -10493,7 +10607,331 @@ export const program = Effect.gen(function* () {
                 }
                 return riskResult;
               });
-            const riskResult: RiskResult = yield* evaluateTailRisk();
+            const buildDecisionTelemetryInput = (
+              legacy: AgentDecision,
+              riskApproved: boolean,
+            ): ShadowInput => {
+              const positionId = legacy.positionId ?? pos?.positionId;
+              const poolExposureUsd = openPositions
+                .filter((p) => p.poolAddress === poolAddress)
+                .reduce((sum, p) => sum + p.currentValueUsd, 0);
+              return {
+                now: Date.now(),
+                cycleId,
+                config,
+                pool,
+                metrics,
+                // An ENTER targets a NEW position: evaluating it against the
+                // pool's existing position would make every entry rule
+                // position-scoped and silently emit HOLD for a second slot.
+                position: legacy.action === "ENTER" ? null : (pos ?? null),
+                portfolio: {
+                  valueUsd: portfolioValueUsd,
+                  openPositions: openPositions.length,
+                  poolPositions: positionsForPool(trackedPositions, poolAddress).length,
+                  poolExposureUsd,
+                  dailyDrawdownPct,
+                  stopLossBreachCycles:
+                    positionId === undefined ? 0 : (stopLossBreachCount.get(positionId) ?? 0),
+                  trailingStopBreachCycles:
+                    positionId === undefined ? 0 : (trailingStopBreachCount.get(positionId) ?? 0),
+                },
+                volatilityStddev,
+                netDriftBins,
+                observedRangePct:
+                  observedRange !== null && observedRange.samples >= 4
+                    ? observedRange.rangePct
+                    : null,
+                candidateSizeUsd:
+                  legacy.action === "ENTER"
+                    ? (legacy.positionSizeUsd ?? 0)
+                    : (pos?.currentValueUsd ?? 0),
+                legacyDecision: legacy,
+                riskApproved,
+                legacyJournalId: randomUUID(),
+                shadowJournalId: randomUUID(),
+              };
+            };
+
+            // Snapshot before any adoption: the journal must record what the
+            // branch table decided, not the verb the rule core replaced it with,
+            // and the risk gates cap the size of the ORIGINAL decision.
+            const legacyDecision = decision;
+
+            /**
+             * A rules-initiated ENTER must clear the same gate stack as the
+             * legacy branch before it can carry a size. Challenge mode is
+             * refused outright: fee persistence, the exit-route proof and the
+             * pool-age gates are I/O this planner does not model, and skipping
+             * them is exactly how the BROKERS profile got funded.
+             *
+             * Split into three small checks so each stays readable: which slot
+             * the pool may use, whether the wallet/token side is safe, and the
+             * stateful gates (cooldown).
+             */
+            const ruleEntryEligibilityRefusal = (): string | null => {
+              if (config.challengeMode === true) {
+                return "challenge mode — proofs and pool-age gates are not modelled here";
+              }
+              // Capital recycling: the legacy slot never re-enters a pool that
+              // exited this cycle, and the rule core must not either.
+              if (poolExitFired) return "pool already exited this cycle";
+              if (!preFilterPassed) return "pool failed pre-filter";
+              if (unresolvedPoolAddresses.has(poolAddress)) return "pool address unresolved";
+              if (
+                !approvedPoolAddresses.includes(poolAddress) &&
+                !autonomousCandidatePools.has(poolAddress) &&
+                !marketScanPools.has(poolAddress)
+              ) {
+                return "pool is not managed";
+              }
+              if (
+                openPositions.filter((p) => p.poolAddress === poolAddress).length >=
+                config.maxPositionsPerPool
+              ) {
+                return "per-pool position cap reached";
+              }
+              return null;
+            };
+
+            /**
+             * The advisor/human boundary owns some decisions. A supervised hold
+             * or an applied proposal must never be overridden by the rule core,
+             * or the approval gate is decorative.
+             */
+            const ruleEntryOwnershipRefusal = (): string | null => {
+              if (appliedAgentProposal) return "advisor proposal owns this decision";
+              if (
+                config.agentiveMode === true &&
+                config.agentProposalMode === "supervised" &&
+                appliedQueuedProposalId === undefined
+              ) {
+                return "supervised mode — awaiting an approved proposal";
+              }
+              return null;
+            };
+
+            const ruleEntryChainRefusal = (): string | null => {
+              if (
+                config.entryV4Enabled === false &&
+                !config.paperTrading &&
+                poolAddress.length === 66
+              ) {
+                return "v4 entries disabled on this chain fork";
+              }
+              if (pool.liquidity !== undefined && pool.liquidity <= 0n) {
+                return "zero on-chain liquidity";
+              }
+              if (config.liveEntryNativeLegOnly === true && !config.paperTrading) {
+                const wethLeg =
+                  pool.tokenX?.toLowerCase() === WETH9.toLowerCase() ||
+                  pool.tokenY?.toLowerCase() === WETH9.toLowerCase();
+                if (!hasNativeSolLeg(pool) && !wethLeg) {
+                  return "non-native pool excluded by LIVE_ENTRY_NATIVE_LEG_ONLY";
+                }
+              }
+              return null;
+            };
+
+            const ruleEntryWalletRefusal = (): string | null => {
+              if (!config.paperTrading && !walletEverReadSuccessfully) {
+                return "no successful wallet read yet";
+              }
+              if (!config.paperTrading && liveEntriesBlockedRestOfCycle) {
+                return "wallet refresh failed earlier this cycle";
+              }
+              const backoff = entryFailureBackoff.get(poolAddress);
+              if (backoff !== undefined && backoff.nextAttemptAt > Date.now()) {
+                return "entry backoff active";
+              }
+              return null;
+            };
+
+            const planRuleEntry = (): Effect.Effect<
+              { readonly positionSizeUsd: number } | null,
+              Error
+            > =>
+              Effect.gen(function* () {
+                const refuse = (reason: string): null => {
+                  logger.info("Rules ENTER refused", { pool: poolAddress, reason });
+                  return null;
+                };
+                const ineligible = ruleEntryEligibilityRefusal();
+                if (ineligible !== null) return refuse(ineligible);
+                const ownershipRefusal = ruleEntryOwnershipRefusal();
+                if (ownershipRefusal !== null) return refuse(ownershipRefusal);
+                const chainRefusal = ruleEntryChainRefusal();
+                if (chainRefusal !== null) return refuse(chainRefusal);
+                const walletRefusal = ruleEntryWalletRefusal();
+                if (walletRefusal !== null) return refuse(walletRefusal);
+
+                const cooldown = yield* db
+                  .getPoolCooldown(poolAddress)
+                  .pipe(Effect.orElseSucceed(() => null));
+                if (cooldown !== null && Date.now() < cooldown.cooldownUntil) {
+                  return refuse(`pool cooldown active — ${cooldown.reason}`);
+                }
+
+                const gates = evaluateEntryGates(entryGateInput());
+                if (!gates.approved) return refuse(gates.reason);
+
+                if (config.jupiterTokenRiskEnabled !== false) {
+                  const risks = yield* Effect.promise(() =>
+                    consultTokenRisks([pool.tokenX, pool.tokenY], config),
+                  );
+                  for (const mint of [pool.tokenX, pool.tokenY]) {
+                    const signal = risks.get(mint);
+                    if (
+                      signal !== undefined &&
+                      (signal.isSus || signal.organicScoreLabel === "low")
+                    ) {
+                      return refuse(`token risk on ${mint}`);
+                    }
+                  }
+                }
+                return { positionSizeUsd: gates.positionSizeUsd };
+              });
+
+            /**
+             * `DECISION_ENGINE=rules` runs the rule core BEFORE the risk gates
+             * and adopts its action, so every gate below evaluates what will
+             * actually be dispatched. Shadow mode does no work here — the same
+             * evaluation is journalled after the risk gates, as it always was.
+             */
+            let ruleAdoption: AdoptionResult | null = null;
+            const applyRuleEngine = (): Effect.Effect<void, Error> =>
+              Effect.gen(function* () {
+                if (config.decisionEngine !== "rules") return;
+                // A positionless HOLD is still worth evaluating here: an ENTER
+                // the core would propose IS that case. Journaling stays gated
+                // below (a plain HOLD writes no row), not the evaluation.
+                const engineDecision = yield* decisionSvc.decide(
+                  buildDecideInput(buildDecisionTelemetryInput(legacyDecision, true)),
+                );
+                const openPoolPositions = openPositions.filter(
+                  (p) => p.poolAddress === poolAddress,
+                );
+                // Underivable target (several positions, none named) means the
+                // EXIT is refused rather than closing an arbitrary row.
+                const targetPositionId =
+                  pos?.positionId ??
+                  (openPoolPositions.length === 1 ? (openPoolPositions[0]?.id ?? null) : null);
+                const entryPlan =
+                  engineDecision.action === "ENTER" && legacyDecision.action !== "ENTER"
+                    ? yield* planRuleEntry()
+                    : null;
+                const adoption = adoptRuleDecision({
+                  legacy: legacyDecision,
+                  engine: engineDecision,
+                  targetPositionId,
+                  entry: entryPlan,
+                });
+                ruleAdoption = adoption;
+                if (!adoption.adopted) {
+                  if (adoption.verdict !== "agreed") {
+                    logger.info("Rules action not dispatched", {
+                      pool: poolAddress,
+                      detail: adoption.detail,
+                    });
+                  }
+                  return;
+                }
+                logger.info("Decision adopted from rules", {
+                  pool: poolAddress,
+                  from: legacyDecision.action,
+                  to: adoption.decision.action,
+                  detail: adoption.detail,
+                });
+                decision = adoption.decision;
+              });
+            yield* applyRuleEngine();
+
+            let riskResult: RiskResult = yield* evaluateTailRisk();
+
+            /**
+             * Journal the decision (with its facts and economics) and, when
+             * armed, enforce the unit-economics verdict. Runs after the risk
+             * gates so the row records what was actually approved, and before
+             * execution so a negative-EV action can be suppressed.
+             */
+            const persistDecisionJournal = (
+              shadow: ShadowOutput,
+              enforced: boolean,
+            ): Effect.Effect<void, Error> =>
+              Effect.gen(function* () {
+                // The row is written AFTER the gate so its kind reflects what
+                // actually happened: an overridden or gate-suppressed action is
+                // `suppressed`, not a proposal that silently never ran.
+                yield* db
+                  .saveDecisionJournal({
+                    ...shadow.legacyRow,
+                    kind: enforced || !riskResult.approved ? "suppressed" : "proposed",
+                  })
+                  .pipe(Effect.ignore);
+                if (shadow.shadowRow === null) return;
+                yield* db
+                  .saveDecisionJournal({
+                    ...shadow.shadowRow,
+                    kind: !enforced ? "shadow" : riskResult.approved ? "proposed" : "suppressed",
+                  })
+                  .pipe(Effect.ignore);
+                const comparison = compareDecisions(
+                  { action: shadow.legacyRow.action, confidence: shadow.legacyRow.confidence },
+                  shadow.engineDecision,
+                );
+                logger.info("Decision shadow", {
+                  pool: poolAddress,
+                  agree: comparison.agree,
+                  enforced,
+                  detail: comparison.summary,
+                });
+              });
+
+            const recordDecisionTelemetry = (): Effect.Effect<void, Error> =>
+              Effect.gen(function* () {
+                if (config.decisionEngine === "legacy" && config.unitEconomicsGate === "off") {
+                  return;
+                }
+                // HOLD on a pool with no position is not a decision worth a row —
+                // unless the rule core adopted it into an action that DID run.
+                if (
+                  legacyDecision.action === "HOLD" &&
+                  pos === undefined &&
+                  ruleAdoption?.adopted !== true
+                ) {
+                  return;
+                }
+
+                const shadow = yield* decisionSvc.shadow(
+                  buildDecisionTelemetryInput(legacyDecision, riskResult.approved),
+                );
+                // An adopted action was already priced by the rule core (and a
+                // veto carries no verdict); re-gating it against the legacy
+                // action's economics would score a verb nobody dispatched.
+                const verdict = ruleAdoption?.adopted === true ? null : shadow.economics;
+                const gate = evaluateEconomicsGate(
+                  config.unitEconomicsGate,
+                  verdict,
+                  riskResult.approved,
+                );
+                if (gate.blocked && gate.reason !== null) {
+                  riskResult = { approved: false, reason: gate.reason };
+                }
+
+                const enforced =
+                  config.decisionEngine === "rules" && ruleAdoption?.adopted === true;
+                yield* persistDecisionJournal(shadow, enforced);
+
+                if (verdict !== null && verdict.blocked) {
+                  logWarnOnlyEconomics(
+                    config.unitEconomicsGate,
+                    poolAddress,
+                    decision.action,
+                    verdict.reason,
+                  );
+                }
+              });
+            yield* recordDecisionTelemetry();
 
             if (!riskResult.approved) {
               const recordTailRiskRejection = (): Effect.Effect<void, Error> =>
@@ -10523,20 +10961,20 @@ export const program = Effect.gen(function* () {
                       poolAddress,
                       action: decision.action,
                       confidence: decision.confidence,
-                      reasoning: decision.reasoning,
+                      reasoning: `[suppressed] ${decision.reasoning}`,
                       metrics,
                       riskResult,
                       executed: false,
                       paperTrading: config.paperTrading,
                     })
-                    .pipe(Effect.catch(() => Effect.void));
+                    .pipe(Effect.ignore);
                   yield* memory
                     .upsert({
                       category: "warning",
                       content: `Decision rejected: ${riskResult.reason}. Action: ${decision.action}`,
                       poolAddress,
                     })
-                    .pipe(Effect.catch(() => Effect.void));
+                    .pipe(Effect.ignore);
 
                   // Deterministic risk denials are sticky (drawdown pause, stop-loss, etc.).
                   // Arm backoff / circuit breaker for applied sync or queue proposals so
@@ -10587,9 +11025,7 @@ export const program = Effect.gen(function* () {
                 if (decision.action === "EXIT") {
                   const pendingCooldown = yield* resolveExitCooldown(decision, pos);
                   if (pendingCooldown) {
-                    yield* db
-                      .setPoolCooldown(pendingCooldown)
-                      .pipe(Effect.catch(() => Effect.void));
+                    yield* db.setPoolCooldown(pendingCooldown).pipe(Effect.ignore);
                   }
                 }
 
@@ -10608,7 +11044,7 @@ export const program = Effect.gen(function* () {
                     action: decision.action,
                     confidence: decision.confidence,
                   })
-                  .pipe(Effect.catch(() => Effect.succeed(null)));
+                  .pipe(Effect.orElseSucceed(() => null));
                 return { signalTimestamp, signalSnapshotId };
               });
             const { signalTimestamp, signalSnapshotId } = yield* recordTailSignalSnapshot();
@@ -10647,7 +11083,7 @@ export const program = Effect.gen(function* () {
                         content: `Paper validation gate blocked live ENTER on ${poolAddress}: ${validation.reason}`,
                         poolAddress,
                       })
-                      .pipe(Effect.catch(() => Effect.void));
+                      .pipe(Effect.ignore);
                     yield* audit
                       .recordDecision({
                         timestamp: Date.now(),
@@ -10661,7 +11097,7 @@ export const program = Effect.gen(function* () {
                         executed: false,
                         paperTrading: false,
                       })
-                      .pipe(Effect.catch(() => Effect.void));
+                      .pipe(Effect.ignore);
                   });
                 yield* recordTailPaperValidation();
                 finalDecisions.push(decision);
@@ -10744,14 +11180,14 @@ export const program = Effect.gen(function* () {
                           executed: false,
                           paperTrading: config.paperTrading,
                         })
-                        .pipe(Effect.catch(() => Effect.void));
+                        .pipe(Effect.ignore);
                       yield* memory
                         .upsert({
                           category: "warning",
                           content: `Entry skipped for ${poolAddress}: free ETH ${budgetHuman} < needed ${neededHuman} — wallet cannot fund the batch; skipped without retry backoff.`,
                           poolAddress,
                         })
-                        .pipe(Effect.catch(() => Effect.void));
+                        .pipe(Effect.ignore);
                     });
                   yield* recordTailCapacitySkip();
                   // An applied queued proposal follows the failed-execution
@@ -10855,9 +11291,7 @@ export const program = Effect.gen(function* () {
                   // REAL swap path and log the outcome. Non-blocking: a dry-run failure
                   // (e.g. no wallet/funds, or an unpriceable leg) never fails the paper
                   // ENTER — it only records what the live path would have done.
-                  yield* paperSwapDryRun(adapter, decision, pool).pipe(
-                    Effect.catch(() => Effect.void),
-                  );
+                  yield* paperSwapDryRun(adapter, decision, pool).pipe(Effect.ignore);
                 } else if (config.autonomousTokenMode === "shadow" && decision.action !== "HOLD") {
                   executionSkipped = true;
                 } else {
@@ -10954,7 +11388,7 @@ export const program = Effect.gen(function* () {
                     if (!config.paperTrading && solFundedEntryMode && movedLiveFunds) {
                       entrySolBudgetLamports = yield* adapter.getNativeBalance().pipe(
                         Effect.map((lamports) => freeEntrySolLamports(lamports)),
-                        Effect.catch(() => Effect.succeed(0n)),
+                        Effect.orElseSucceed(() => 0n),
                       );
                       entrySolBudgetKnown = true;
                     }
@@ -10977,9 +11411,7 @@ export const program = Effect.gen(function* () {
                           },
                         );
                         autonomousCandidates.set(enteredCandidate.id, enteredCandidate);
-                        yield* db
-                          .saveTokenCandidate(enteredCandidate)
-                          .pipe(Effect.catch(() => Effect.void));
+                        yield* db.saveTokenCandidate(enteredCandidate).pipe(Effect.ignore);
                       }
                     }
                   });
@@ -11055,9 +11487,7 @@ export const program = Effect.gen(function* () {
                           },
                         );
                         autonomousCandidates.set(coolingCandidate.id, coolingCandidate);
-                        yield* db
-                          .saveTokenCandidate(coolingCandidate)
-                          .pipe(Effect.catch(() => Effect.void));
+                        yield* db.saveTokenCandidate(coolingCandidate).pipe(Effect.ignore);
                       }
                       // Follow-up 3655404926: record every executed EXIT (deterministic or
                       // agent-adjusted) so the redeploy pass cannot re-enter this pool the
@@ -11069,11 +11499,19 @@ export const program = Effect.gen(function* () {
                           // LOSS (trailing/drawdown exit) is barred from re-entry for
                           // CHALLENGE_LOSS_COOLDOWN_MS — its stale Krystal drawdown must not
                           // lure capital back while it is still crashing.
-                          if (
-                            config.challengeMode === true &&
-                            pos?.realizedPnlUsd !== null &&
-                            (pos?.realizedPnlUsd ?? 0) < 0
-                          ) {
+                          //
+                          // `pos.realizedPnlUsd` is ALWAYS null on the in-memory record (it is
+                          // only ever written to the DB row), so the old guard never armed and
+                          // this map stayed empty. Derive the loss from the live mark instead,
+                          // and stop gating it on CHALLENGE_MODE: a pool we just lost on is a
+                          // pool we should not immediately re-enter in any mode.
+                          const estimatedPnlUsd = pos
+                            ? pos.currentValueUsd +
+                              pos.cumulativeFeesClaimedUsd +
+                              (pos.cumulativeRewardsClaimedUsd ?? 0) -
+                              pos.depositedUsd
+                            : 0;
+                          if (pos && pos.depositedUsd > 0 && estimatedPnlUsd < 0) {
                             challengeLossCooldownUntil.set(
                               poolAddress,
                               Date.now() + (config.challengeLossCooldownMs ?? 6 * 3_600_000),
@@ -11088,7 +11526,7 @@ export const program = Effect.gen(function* () {
                                 "challenge_loss_cooldowns",
                                 JSON.stringify(Object.fromEntries(pruned)),
                               )
-                              .pipe(Effect.catch(() => Effect.void));
+                              .pipe(Effect.ignore);
                           }
                         });
                       yield* recordTailLossCooldown();
@@ -11168,12 +11606,12 @@ export const program = Effect.gen(function* () {
                         error: executionError,
                         paperTrading: config.paperTrading,
                       })
-                      .pipe(Effect.catch(() => Effect.void));
+                      .pipe(Effect.ignore);
 
                     // Threshold evolution: increment counter on EXIT, try evolve at interval
                     if (decision.action === "EXIT" && executed) {
-                      yield* incrementEvolutionCount.pipe(Effect.catch(() => Effect.void));
-                      yield* tryEvolveThresholds.pipe(Effect.catch(() => Effect.void));
+                      yield* incrementEvolutionCount.pipe(Effect.ignore);
+                      yield* tryEvolveThresholds.pipe(Effect.ignore);
                     }
 
                     if (
@@ -11185,7 +11623,7 @@ export const program = Effect.gen(function* () {
                       // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
                       const trigger =
                         decision.action.toLowerCase() as AgentRuntimeCheckin["trigger"];
-                      yield* maybeSendAgentCheckin(trigger).pipe(Effect.catch(() => Effect.void));
+                      yield* maybeSendAgentCheckin(trigger).pipe(Effect.ignore);
                     }
 
                     finalDecisions.push(decision);
@@ -11202,377 +11640,21 @@ export const program = Effect.gen(function* () {
 
   // ─── Periodic fee claiming ─────────────────────────────────────────────────
 
-  const claimPositionRewards = (
-    pos: PositionRecord,
-    poolAddress: string,
-    positionPubKey: string,
-  ): Effect.Effect<void, never, never> =>
-    Effect.gen(function* () {
-      // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
-      // LM farm rewards ride the same periodic cadence as swap-fee
-      // claims. The adapter skips silently for LimitOrder pools and
-      // positions with no pending rewards, so this is a cheap no-op for
-      // non-farm positions. Rewards are tracked separately from fees:
-      // cumulativeFeesClaimedUsd stays fee-pure (fee APR), while the
-      // USD-valued portion accumulates in cumulativeRewardsClaimedUsd.
-      if (!config.farmRewardsEnabled) return;
-      const rewardResult: ClaimRewardsResult | null = yield* adapter
-        .claimRewards(poolAddress, positionPubKey)
-        .pipe(Effect.catch(() => Effect.succeed(null)));
-      if (rewardResult && !rewardResult.skipped && rewardResult.rewards.length > 0) {
-        const rewardSummary = summarizeRewardClaim(rewardResult.rewards);
-        console.info("Farm rewards claimed", {
-          pool: poolAddress,
-          rewards: rewardResult.rewards,
-          totalUsd: rewardSummary.totalUsd,
-          txSignatures: rewardResult.txSignatures,
-        });
-        pos.cumulativeRewardsClaimedUsd += rewardSummary.totalUsd;
-        // Re-arm the shared claim gate: lastFeeClaimAt means "last
-        // on-chain claim of either kind" — a successful reward claim is
-        // a real claim tx, so the position waits one full interval
-        // before the next claim pass even when swap fees are zero
-        // (their claim path never updates the timestamp on a zero
-        // result, which would otherwise re-fire every scan cycle).
-        pos.lastFeeClaimAt = Date.now();
-        yield* persist(`savePosition ${pos.positionId}`, db.savePosition(pos));
-        yield* db
-          .savePositionEvent({
-            id: randomUUID(),
-            poolAddress,
-            positionPubKey: pos.positionPubKey,
-            positionId: pos.positionId,
-            event: "CLAIM",
-            valueUsd: rewardSummary.totalUsd > 0 ? rewardSummary.totalUsd : null,
-            feesUsd: null,
-            price: null,
-            metadata: {
-              ...buildRewardClaimMetadata({
-                txSignatures: rewardResult.txSignatures,
-                rewards: rewardResult.rewards,
-              }),
-            },
-            createdAt: Date.now(),
-          })
-          .pipe(Effect.catch(() => Effect.void));
-        if (rewardSummary.unpricedCount > 0) {
-          yield* memory
-            .upsert({
-              category: "warning",
-              content: `Claimed ${rewardSummary.unpricedCount} farm reward(s) for ${poolAddress} without USD pricing — raw amounts recorded in position_events.`,
-              poolAddress,
-            })
-            .pipe(Effect.catch(() => Effect.void));
-        }
-      }
-    });
-
-  const checkHarvestGate = (
-    poolAddress: string,
-    positionPubKey: string,
-  ): Effect.Effect<boolean, never, never> =>
-    Effect.gen(function* () {
-      // Fee-Truth harvest gate (rule 10): claim only when pending fees
-      // clear the economic floor ($1 net, gas <= 15% of gross fees).
-      // getPendingFees reads unclaimed amounts without broadcasting; a
-      // read failure fails CLOSED (no claim — rule 11: don't act on
-      // stale data). The gas estimate is a static L2 claim cost
-      // (~120k gas at 2x base fee ≈ 6.24e-6 ETH) priced at the config
-      // native price — dust-tiny on this chain, so the $1 floor is the
-      // real gate.
-      const pending: PendingFeesResult = adapter.getPendingFees
-        ? yield* adapter
-            .getPendingFees(poolAddress, positionPubKey)
-            .pipe(Effect.catch(() => Effect.succeed(null)))
-        : null;
-      if (pending) {
-        const pendingUsd = pending.feeXUsd + pending.feeYUsd;
-        const estGasUsd = (config.nativePriceUsd ?? 3000) * 6.24e-6;
-        const harvestDecision = shouldHarvest(pendingUsd, estGasUsd, {
-          minNetUsd: config.harvestMinNetUsd ?? 1,
-          maxGasPct: config.harvestMaxGasPct ?? 0.15,
-        });
-        if (!harvestDecision.harvest) {
-          console.info(
-            `[harvest-gate] Skipping claim on ${poolAddress}: ${harvestDecision.reason}`,
-          );
-          return false;
-        }
-      }
-      return true;
-    });
-
-  const collectPositionFees = (
-    poolAddress: string,
-    positionPubKey: string,
-    revenueConfig: RevenueConfig,
-    tier: string,
-  ): Effect.Effect<ClaimFeesResult | null, never, never> =>
-    Effect.gen(function* () {
-      const result = yield* adapter
-        .claimFees(
-          poolAddress,
-          positionPubKey,
-          revenueConfig.platformFeeRate,
-          revenueConfig.revenueShareEnabled,
-          revenueConfig.revenueShareOperatorPct,
-          revenueConfig.feeWalletAddress,
-        )
-        .pipe(
-          Effect.tap((r) =>
-            Effect.sync(() =>
-              console.info("Fees claimed", {
-                pool: poolAddress,
-                tier,
-                feeX: r.feeX,
-                feeY: r.feeY,
-                platformFeeX: r.platformFeeX,
-                platformFeeY: r.platformFeeY,
-                netFeeX: r.netFeeX,
-                netFeeY: r.netFeeY,
-                tx: r.txSignature,
-              }),
-            ),
-          ),
-          Effect.catch(() => Effect.succeed(null)),
-        );
-      if (!result || (result.feeX === 0 && result.feeY === 0)) return null;
-      return result;
-    });
-
-  const convertCollectedFees = (
-    pos: PositionRecord,
-    poolAddress: string,
-    claimed: ClaimFeesResult,
-  ): Effect.Effect<boolean, never, never> =>
-    Effect.gen(function* () {
-      const feeDestination = config.feeDestination ?? "compound";
-      if (feeDestination === "compound") return false;
-      const liveConversion = adapter.convertClaimedFees
-        ? adapter
-            .convertClaimedFees(poolAddress, feeDestination, claimed.netFeeX, claimed.netFeeY)
-            .pipe(Effect.catch(() => Effect.succeed(null)))
-        : Effect.succeed(null);
-      const conversion = config.paperTrading
-        ? Effect.succeed({
-            destination: feeDestination,
-            outputAtomic: 0n,
-            outputUsd: null,
-            // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
-            txSignatures: [] as ReadonlyArray<string>,
-          })
-        : liveConversion;
-      const converted = yield* conversion;
-      if (converted) {
-        yield* db
-          .savePositionEvent({
-            id: randomUUID(),
-            poolAddress,
-            positionPubKey: pos.positionPubKey,
-            positionId: pos.positionId,
-            event: "CLAIM",
-            valueUsd: converted.outputUsd,
-            feesUsd: null,
-            price: null,
-            metadata: {
-              kind: "fee_accumulation",
-              destination: converted.destination,
-              outputAtomic: converted.outputAtomic.toString(),
-              txSignatures: converted.txSignatures,
-            },
-            createdAt: Date.now(),
-          })
-          .pipe(Effect.catch(() => Effect.void));
-      }
-      return true;
-    });
-
-  const compoundCollectedFees = (
-    pos: PositionRecord,
-    poolAddress: string,
-    positionPubKey: string,
-    claimed: ClaimFeesResult,
-    netFeesUsd: number,
-  ): Effect.Effect<void, never, never> =>
-    Effect.gen(function* () {
-      // F3: fee compounding — if AUTO_COMPOUND_FEES is on and the net fees
-      // cleared the cost threshold, redeposit them into the same range.
-      if (config.autoCompoundFees && config.paperTrading === false) {
-        const rebalanceGasCostUsd = config.rebalanceGasCostNative * config.nativePriceUsd;
-        const compoundGate = evaluateCompoundGate({
-          netFeesUsd,
-          minCompoundFeesUsd: config.minCompoundFeesUsd,
-          compoundGasBufferUsd: config.compoundGasBufferUsd,
-          rebalanceGasCostUsd,
-        });
-        if (compoundGate.approved) {
-          console.info(
-            `[compound] Redeeming fees back into ${poolAddress} — ${compoundGate.reason}`,
-          );
-          // Atomic rebalance into the same range with the just-claimed
-          // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
-          // net fees as top-up, so the claimed fees become new liquidity
-          // in the preserved position (no close+reopen).
-          const topUp = {
-            amountXAtomic: BigInt(Math.max(Math.trunc(claimed.netFeeX), 0)),
-            amountYAtomic: BigInt(Math.max(Math.trunc(claimed.netFeeY), 0)),
-          };
-          const compoundResult =
-            topUp.amountXAtomic === 0n && topUp.amountYAtomic === 0n
-              ? null
-              : yield* adapter
-                  .rebalancePosition(
-                    poolAddress,
-                    positionPubKey,
-                    pos.lowerBinId,
-                    pos.upperBinId,
-                    topUp,
-                  )
-                  .pipe(
-                    Effect.tap((r) =>
-                      Effect.sync(() =>
-                        console.info("Compound rebalance succeeded", {
-                          pool: poolAddress,
-                          position: r.positionPubKey,
-                        }),
-                      ),
-                    ),
-                    Effect.catch((err) => {
-                      console.warn("Compound rebalance failed", {
-                        pool: poolAddress,
-                        // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
-                        err: (err as { message?: string }).message ?? String(err),
-                      });
-                      return Effect.succeed(null);
-                    }),
-                  );
-          if (compoundResult) {
-            if (compoundResult.positionPubKey !== pos.positionId) {
-              // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
-              // Defensive re-key (same contract as the atomic rebalance
-              // path): the identity and its row move with the pubkey.
-              trackedPositions.delete(pos.positionId);
-              yield* persist(`deletePosition ${pos.positionId}`, db.deletePosition(pos.positionId));
-              pos.positionId = compoundResult.positionPubKey;
-              trackedPositions.set(pos.positionId, pos);
-            }
-            pos.positionPubKey = compoundResult.positionPubKey;
-            pos.lastRebalanceAt = Date.now();
-            // Compounded fees become new cost basis; currentValue/highest
-            // adjust in lockstep so PnL and the trailing stop stay honest
-            // (see applyCompoundToCostBasis in engine/pnl.ts).
-            const compounded = applyCompoundToCostBasis({
-              depositedUsd: pos.depositedUsd,
-              currentValueUsd: pos.currentValueUsd,
-              highestValueUsd: pos.highestValueUsd,
-              compoundedFeesUsd: netFeesUsd,
-            });
-            pos.depositedUsd = compounded.depositedUsd;
-            pos.currentValueUsd = compounded.currentValueUsd;
-            pos.highestValueUsd = compounded.highestValueUsd;
-            yield* persist(`savePosition ${pos.positionId}`, db.savePosition(pos));
-            yield* db
-              .savePositionEvent({
-                id: randomUUID(),
-                poolAddress,
-                positionPubKey: pos.positionPubKey,
-                positionId: pos.positionId,
-                event: "COMPOUND",
-                valueUsd: netFeesUsd,
-                feesUsd: null,
-                price: null,
-                metadata: { savingsUsd: compoundGate.savingsUsd },
-                createdAt: Date.now(),
-              })
-              .pipe(Effect.catch(() => Effect.void));
-            yield* memory
-              .upsert({
-                category: "pattern",
-                content: `Auto-compounded $${netFeesUsd.toFixed(2)} fees into ${poolAddress} (savings $${compoundGate.savingsUsd.toFixed(2)})`,
-                poolAddress,
-              })
-              .pipe(Effect.catch(() => Effect.void));
-          }
-        }
-      }
-    });
-
-  const claimAllFees = (): Effect.Effect<void> =>
-    Effect.gen(function* () {
-      const revenueConfigResult = yield* revenueConfigSvc.getConfig();
-      const tier = revenueConfigResult.tier;
-
-      for (const pos of trackedPositions.values()) {
-        const poolAddress = pos.poolAddress;
-        if (pos.positionPubKey && Date.now() - pos.lastFeeClaimAt > config.feeClaimIntervalMs) {
-          yield* claimPositionRewards(pos, poolAddress, pos.positionPubKey);
-          if (!(yield* checkHarvestGate(poolAddress, pos.positionPubKey))) continue;
-
-          const claimed = yield* collectPositionFees(
-            poolAddress,
-            pos.positionPubKey,
-            revenueConfigResult,
-            tier,
-          );
-          if (!claimed) continue;
-
-          // Mint-based net-fee USD from the adapter; null → 0 fails the
-          // compound gate closed (see convertClaimedFees — the legacy
-          // convertClaimFeesToUsd helper was removed with the Solana surface).
-          const netFeesUsd = claimed.netFeesUsd ?? 0;
-
-          yield* db
-            .saveFeeClaim({
-              id: randomUUID(),
-              poolAddress,
-              positionPubkey: pos.positionPubKey,
-              feeX: claimed.feeX,
-              feeY: claimed.feeY,
-              platformFeeX: claimed.platformFeeX,
-              platformFeeY: claimed.platformFeeY,
-              netFeeX: claimed.netFeeX,
-              netFeeY: claimed.netFeeY,
-              operatorFeeX: claimed.operatorFeeX ?? 0,
-              operatorFeeY: claimed.operatorFeeY ?? 0,
-              txSignature: claimed.txSignature,
-              feeTransferTxSignature: claimed.feeTransferTxSignature ?? null,
-              reportedToApi: false,
-              createdAt: Date.now(),
-            })
-            .pipe(Effect.catch(() => Effect.void));
-
-          yield* reportCollectedFees(adapter, poolAddress, pos.positionPubKey, claimed, tier);
-
-          pos.lastFeeClaimAt = Date.now();
-          pos.cumulativeFeesClaimedUsd += netFeesUsd;
-          yield* persist(`savePosition ${pos.positionId}`, db.savePosition(pos));
-
-          yield* db
-            .savePositionEvent({
-              id: randomUUID(),
-              poolAddress,
-              positionPubKey: pos.positionPubKey,
-              positionId: pos.positionId,
-              event: "CLAIM",
-              valueUsd: null,
-              feesUsd: netFeesUsd,
-              price: null,
-              metadata: { txSignature: claimed.txSignature },
-              createdAt: Date.now(),
-            })
-            .pipe(Effect.catch(() => Effect.void));
-
-          yield* alertSvc.recordFeeClaim(poolAddress, netFeesUsd);
-
-          if (yield* convertCollectedFees(pos, poolAddress, claimed)) continue;
-          yield* compoundCollectedFees(pos, poolAddress, pos.positionPubKey, claimed, netFeesUsd);
-        }
-      }
-    });
+  const { claimAllFees } = createFeeExecution({
+    adapter,
+    db,
+    memory,
+    config,
+    trackedPositions,
+    revenueConfig: revenueConfigSvc,
+    alerts: alertSvc,
+    persist,
+    reportCollectedFees,
+  });
 
   // ─── Run initial cycle and schedule ────────────────────────────────────────
 
-  yield* memory.initialize().pipe(Effect.catch(() => Effect.void));
+  yield* memory.initialize().pipe(Effect.ignore);
 
   // Run first cycle
   yield* runScanCycle();
@@ -11601,7 +11683,7 @@ export const program = Effect.gen(function* () {
     // rotation on a single good cycle after every reboot.
     if (rotationConfirmationsDirty) {
       for (const [pairKey, obsCount] of rotationConfirmations) {
-        yield* db.saveRotationObservation(pairKey, obsCount).pipe(Effect.catch(() => Effect.void));
+        yield* db.saveRotationObservation(pairKey, obsCount).pipe(Effect.ignore);
       }
       rotationConfirmationsDirty = false;
     }
@@ -11609,9 +11691,12 @@ export const program = Effect.gen(function* () {
     yield* assessMarketStressLoggingOnly();
     yield* assessLvrEdgeLoggingOnly();
   }).pipe(
-    Effect.catch((err) =>
+    // The cycle body is typed `never`-failing, so the only way a cycle can
+    // report a problem is a defect (a thrown error). `catchCause` keeps the
+    // log line meaningful and lets the scheduler survive instead of dying.
+    Effect.catchCause((cause) =>
       Effect.sync(() => {
-        console.error("Cycle error:", err);
+        console.error("Cycle error:", Cause.squash(cause));
       }),
     ),
   );
@@ -11619,6 +11704,10 @@ export const program = Effect.gen(function* () {
   const schedulerFiber = yield* Effect.forkChild(
     Effect.forever(Effect.sleep(config.scanIntervalMs).pipe(Effect.andThen(runScheduledCycle))),
   );
+  // The signal handlers run outside the effect runtime, so the shutdown fork
+  // must be handed the live context explicitly (a bare runFork would rebuild
+  // an empty one and lose every service it needs).
+  const shutdownContext = yield* Effect.context<never>();
 
   const gracefulShutdown = (signal: string) => {
     if (shuttingDown) return;
@@ -11636,14 +11725,32 @@ export const program = Effect.gen(function* () {
         p.cumulativeRewardsClaimedUsd -
         p.depositedUsd;
     }
-    Effect.runFork(
+    const shutdownPositions = Array.from(trackedPositions.values());
+    const shutdownStatus = buildOperatorStatus({
+      source: "cloud",
+      running: false,
+      version: getCurrentVersion(),
+      dbPath: process.env.SQLITE_DB_PATH ?? null,
+      uptimeMs: Date.now() - programStartTime,
+      scanCount,
+      lastCycleAt: Date.now(),
+      portfolio: portfolioStatusFromPositions(shutdownPositions, lastWalletBalanceUsd),
+      positions: positionStatusesFromRecords(shutdownPositions, new Map()),
+    });
+    Effect.runForkWith(shutdownContext)(
       Fiber.interrupt(schedulerFiber).pipe(
         Effect.andThen(agent.disconnect()),
         Effect.andThen(
-          postEngineStatus("stopped", trackedPositions.size, pnl).pipe(
-            Effect.timeout("4 seconds"),
-            Effect.catch(() => Effect.void),
-          ),
+          postEngineStatus(
+            "stopped",
+            trackedPositions.size,
+            pnl,
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            shutdownStatus,
+          ).pipe(Effect.timeout("4 seconds"), Effect.ignore),
         ),
         Effect.ensuring(Effect.sync(() => process.exit(0))),
       ),

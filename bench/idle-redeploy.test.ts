@@ -11,6 +11,7 @@ import {
   ENTRY_SIZE_WALLET_FRACTION,
 } from "../engine/entry-sizing.js";
 import { StrategyLive } from "../engine/strategy-service.js";
+import { DecisionLive } from "../engine/decision-service.js";
 import { MemoryLive } from "../engine/memory-service.js";
 import { RiskLive } from "../engine/risk-service.js";
 import { AuditLive } from "../engine/audit-service.js";
@@ -317,6 +318,7 @@ function makeProgramLayer(opts: {
     Layer.succeed(ConfigService, config),
     Layer.succeed(AdapterService, opts.adapter),
     StrategyLive,
+    DecisionLive,
     Layer.provide(MemoryLive, dbLayer),
     RiskLive({
       confidenceThreshold: config.confidenceThreshold,
@@ -367,7 +369,7 @@ function makeProgramLayer(opts: {
     opts.agentStateLayer ?? AgentStateMutable({ maxPendingProposals: 50 }).layer,
     Layer.succeed(McpServerService, { start: () => Effect.void, stop: () => Effect.void }),
     Layer.succeed(HttpStatusServerService, { start: () => Effect.void, stop: () => Effect.void }),
-    Layer.succeed(EntryPrepService, { prepareEntryTokens: () => Effect.succeed(undefined) }),
+    Layer.succeed(EntryPrepService, { prepareEntryTokens: () => Effect.undefined }),
     Layer.succeed(KrystalService, {
       getPoolStats: () => Effect.succeed(null),
       getUniverse: () => Effect.succeed(new Map()),
@@ -432,7 +434,7 @@ function runOneCycle<E>(
   const test = Effect.gen(function* () {
     const db = yield* DbService;
     yield* seed(db);
-    yield* Effect.raceFirst(program, Effect.sleep(1_500));
+    yield* Effect.timeoutOrElse(program, { duration: 1_500, orElse: () => Effect.void });
     const audit = yield* AuditService;
     const positions = yield* db.getAllPositions();
     const decisions = yield* audit.getRecentDecisions(200);
@@ -646,9 +648,7 @@ describe("program — idle-capital auto-redeploy gate", () => {
     // allocation (capturing it), and the redeploy pass hits the max-open cap.
     // SAFETY: The controlled test fixture establishes the asserted shape at this boundary, and the surrounding test consumes only that documented invariant.
     const { positions, decisions } = await runOneCycle(layer as never, (db) =>
-      Effect.gen(function* () {
-        yield* db.savePosition(makeSeededPosition({}));
-      }),
+      db.savePosition(makeSeededPosition({})),
     );
 
     expect(positions).toHaveLength(1);
@@ -675,13 +675,11 @@ describe("program — idle-capital auto-redeploy gate", () => {
     });
     // SAFETY: The fixture/assertion is intentionally narrowed here; the surrounding test establishes the exact shape or invariant consumed by this assertion.
     const { positions, decisions } = await runOneCycle(layer as never, (db) =>
-      Effect.gen(function* () {
-        yield* db.setPoolCooldown({
-          poolAddress: POOL,
-          cooldownUntil: Date.now() + 3_600_000,
-          reason: "Low yield exit",
-          consecutiveOorExits: 1,
-        });
+      db.setPoolCooldown({
+        poolAddress: POOL,
+        cooldownUntil: Date.now() + 3_600_000,
+        reason: "Low yield exit",
+        consecutiveOorExits: 1,
       }),
     );
 
@@ -1088,16 +1086,14 @@ describe("program — idle-redeploy follow-up fidelity (post-merge review)", () 
     // allocation caps it to POOL headroom = 4_000 − 500 = $3,500.
     // SAFETY: The controlled test fixture establishes the asserted shape at this boundary, and the surrounding test consumes only that documented invariant.
     const { positions } = await runOneCycle(layer as never, (db) =>
-      Effect.gen(function* () {
-        yield* db.savePosition(
-          makeSeededPosition({
-            positionId: "seed-other",
-            poolAddress: POOL_OTHER,
-            depositedUsd: 1500,
-            currentValueUsd: 1500,
-          }),
-        );
-      }),
+      db.savePosition(
+        makeSeededPosition({
+          positionId: "seed-other",
+          poolAddress: POOL_OTHER,
+          depositedUsd: 1500,
+          currentValueUsd: 1500,
+        }),
+      ),
     );
 
     const poolPositions = positions.filter((p) => p.poolAddress === POOL);
@@ -1278,9 +1274,7 @@ describe("program — idle-redeploy follow-up fidelity (post-merge review)", () 
     });
     // SAFETY: The controlled test fixture establishes the asserted shape at this boundary, and the surrounding test consumes only that documented invariant.
     const { positions, decisions } = await runOneCycle(layer as never, (db) =>
-      Effect.gen(function* () {
-        yield* db.savePosition(makeSeededPosition({ positionId: "seeded-pos", poolAddress: POOL }));
-      }),
+      db.savePosition(makeSeededPosition({ positionId: "seeded-pos", poolAddress: POOL })),
     );
 
     // The advisor EXIT executed (closing the seeded position) and added POOL to

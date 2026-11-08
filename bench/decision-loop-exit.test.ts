@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { Effect, Layer } from "effect";
 import { StrategyLive } from "../engine/strategy-service.js";
+import { DecisionLive } from "../engine/decision-service.js";
 import { program } from "../engine/program.js";
 import { DbLive } from "../engine/db-service.js";
 import { MemoryLive } from "../engine/memory-service.js";
@@ -167,6 +168,7 @@ function makeTestLayer(opts: {
     Layer.succeed(ConfigService, config),
     Layer.succeed(AdapterService, opts.adapter),
     StrategyLive,
+    DecisionLive,
     opts.memoryRecorded
       ? Layer.succeed(MemoryService, makeRecordingMemory(opts.memoryRecorded))
       : Layer.provide(MemoryLive, dbLayer),
@@ -219,7 +221,7 @@ function makeTestLayer(opts: {
     AgentStateMutable({ maxPendingProposals: 50 }).layer,
     Layer.succeed(McpServerService, { start: () => Effect.void, stop: () => Effect.void }),
     Layer.succeed(HttpStatusServerService, { start: () => Effect.void, stop: () => Effect.void }),
-    Layer.succeed(EntryPrepService, { prepareEntryTokens: () => Effect.succeed(undefined) }),
+    Layer.succeed(EntryPrepService, { prepareEntryTokens: () => Effect.undefined }),
     Layer.succeed(KrystalService, {
       getPoolStats: () => Effect.succeed(null),
       getUniverse: () => Effect.succeed(new Map()),
@@ -245,7 +247,7 @@ async function runCycles(
   sleepMs = 2_000,
 ): Promise<ReadonlyArray<DecisionRow>> {
   const test = Effect.gen(function* () {
-    yield* Effect.raceFirst(program, Effect.sleep(sleepMs));
+    yield* Effect.timeoutOrElse(program, { duration: sleepMs, orElse: () => Effect.void });
     const audit = yield* AuditService;
     return yield* audit.getRecentDecisions(200);
   });
@@ -290,12 +292,12 @@ describe("phantom EXIT gating (Wave 2)", () => {
     const test = Effect.gen(function* () {
       const db = yield* DbService;
       yield* db.saveSnapshot(previousSnapshot());
-      yield* Effect.raceFirst(program, Effect.sleep(2_000));
+      yield* Effect.timeoutOrElse(program, { duration: 2_000, orElse: () => Effect.void });
       const audit = yield* AuditService;
       const decisions = yield* audit.getRecentDecisions(50);
       const evolutionCount = yield* db
         .getMetadata("threshold_evolution_count")
-        .pipe(Effect.catch(() => Effect.succeed(null)));
+        .pipe(Effect.orElseSucceed(() => null));
       return { decisions, evolutionCount };
     });
     const { decisions, evolutionCount } = await Effect.runPromise(
@@ -329,7 +331,7 @@ describe("phantom EXIT gating (Wave 2)", () => {
         makePosition({ poolAddress: POOL, depositedUsd: 1_000, currentValueUsd: 1_000 }),
       );
       yield* db.saveSnapshot(previousSnapshot());
-      yield* Effect.raceFirst(program, Effect.sleep(2_000));
+      yield* Effect.timeoutOrElse(program, { duration: 2_000, orElse: () => Effect.void });
       const audit = yield* AuditService;
       return yield* audit.getRecentDecisions(50);
     });
@@ -360,13 +362,11 @@ describe("phantom EXIT gating (Wave 2)", () => {
     });
 
     const test = Effect.gen(function* () {
-      yield* Effect.raceFirst(program, Effect.sleep(2_000));
+      yield* Effect.timeoutOrElse(program, { duration: 2_000, orElse: () => Effect.void });
       const audit = yield* AuditService;
       const decisions = yield* audit.getRecentDecisions(50);
       const db = yield* DbService;
-      const cooldown = yield* db
-        .getPoolCooldown(POOL)
-        .pipe(Effect.catch(() => Effect.succeed(null)));
+      const cooldown = yield* db.getPoolCooldown(POOL).pipe(Effect.orElseSucceed(() => null));
       return { decisions, cooldown };
     });
     // oxlint-disable-next-line anti-slop/no-chained-type-assertions -- SAFETY: the provided Effect fixture has the exact result shape asserted by this test.
@@ -433,7 +433,7 @@ describe("portfolio value math (Wave 2)", () => {
           upperBinId: 5020,
         }),
       );
-      yield* Effect.raceFirst(program, Effect.sleep(2_000));
+      yield* Effect.timeoutOrElse(program, { duration: 2_000, orElse: () => Effect.void });
       const audit = yield* AuditService;
       return yield* audit.getRecentDecisions(50);
     });
@@ -528,7 +528,7 @@ describe("pool snapshot retention (Wave 2)", () => {
         tokenYSymbol: "USDC",
         binArray: makeBinArray(),
       });
-      yield* Effect.raceFirst(program, Effect.sleep(2_000));
+      yield* Effect.timeoutOrElse(program, { duration: 2_000, orElse: () => Effect.void });
       const oldRows = yield* db.getSnapshots(POOL, 0, now - 14 * 86_400_000);
       const recentRows = yield* db.getSnapshots(POOL, now - 14 * 86_400_000, now + 60_000);
       return { oldRows, recentRows };
@@ -653,7 +653,7 @@ describe("agent position context wiring", () => {
         tokenYSymbol: "USDC",
         binArray: makeBinArray(),
       });
-      yield* Effect.raceFirst(program, Effect.sleep(2_000));
+      yield* Effect.timeoutOrElse(program, { duration: 2_000, orElse: () => Effect.void });
     });
     await Effect.runPromise(
       // oxlint-disable-next-line anti-slop/no-chained-type-assertions -- SAFETY: the provided Effect fixture has the exact result shape asserted by this test.
@@ -706,7 +706,7 @@ describe("in-range hard stop-loss (Wave 21)", () => {
           currentValueUsd: 1_000,
         }),
       );
-      yield* Effect.raceFirst(program, Effect.sleep(2_000));
+      yield* Effect.timeoutOrElse(program, { duration: 2_000, orElse: () => Effect.void });
       const audit = yield* AuditService;
       return yield* audit.getRecentDecisions(50);
     });
@@ -750,7 +750,7 @@ describe("in-range hard stop-loss (Wave 21)", () => {
           currentValueUsd: 1_000,
         }),
       );
-      yield* Effect.raceFirst(program, Effect.sleep(2_000));
+      yield* Effect.timeoutOrElse(program, { duration: 2_000, orElse: () => Effect.void });
       const audit = yield* AuditService;
       return yield* audit.getRecentDecisions(50);
     });
@@ -770,5 +770,82 @@ describe("in-range hard stop-loss (Wave 21)", () => {
     expect(stopLossExits, "a single-cycle stop-loss breach must not EXIT (debounce)").toHaveLength(
       0,
     );
+  }, 15_000);
+});
+
+// ─── DECISION_ENGINE=rules: the veto is dispatched, not just journaled ───────
+
+describe("rules mode adoption (integration)", () => {
+  const POOL = "PoolRulesVeto111111111111111111111111111111";
+
+  it("turns a legacy ENTER into the rule core's HOLD and journals both rows", async () => {
+    // A 12.5%/day fee print passes every legacy gate (modeled fee/IL is
+    // excluded in both directions there) but is exactly what
+    // `guard.fee_plausibility` exists to veto: the rule core votes HOLD.
+    const implausibleFees = 25_000;
+    const layer = makeTestLayer({
+      adapter: makeAdapter({
+        [POOL]: makePool({ address: POOL, fees24hUsd: implausibleFees }),
+      }),
+      gecko: {
+        getPoolStats: (addr: string) =>
+          Effect.succeed(addr === POOL ? makeGeckoStats({ fees24hUsd: implausibleFees }) : null),
+      },
+      configOverrides: {
+        watchlistPools: [POOL],
+        paperPortfolioUsd: 100,
+        decisionEngine: "rules",
+      },
+    });
+
+    const test = Effect.gen(function* () {
+      yield* Effect.timeoutOrElse(program, { duration: 2_000, orElse: () => Effect.void });
+      const db = yield* DbService;
+      const journal = yield* db.getRecentDecisionJournal(200);
+      const audit = yield* AuditService;
+      const decisions = yield* audit.getRecentDecisions(50);
+      return { journal, decisions };
+    });
+    const { journal, decisions } = await Effect.runPromise(
+      // oxlint-disable-next-line anti-slop/no-chained-type-assertions -- SAFETY: the provided Effect fixture has the exact result shape asserted by this test.
+      Effect.provide(test, layer) as unknown as Effect.Effect<
+        // oxlint-disable-line anti-slop/no-chained-type-assertions -- SAFETY: this test boundary uses a deliberately partial fixture whose exercised shape is asserted by the surrounding test.
+        {
+          journal: ReadonlyArray<{
+            engine: string;
+            kind: string;
+            action: string;
+            poolAddress: string;
+          }>;
+          decisions: ReadonlyArray<DecisionRow>;
+        },
+        Error,
+        never
+      >,
+    );
+
+    const forPool = journal.filter((row) => row.poolAddress === POOL);
+    const legacyRow = forPool.find((row) => row.engine === "legacy");
+    const rulesRow = forPool.find((row) => row.engine === "rules");
+    const summary = stringifySafe(forPool);
+
+    expect(legacyRow, `no legacy journal row: ${summary}`).toBeDefined();
+    expect(rulesRow, `no rules journal row: ${summary}`).toBeDefined();
+    // The legacy branch proposed an entry; the rule core vetoed it and the
+    // adopted action is what the journal marks as the proposal.
+    expect(legacyRow!.action, `legacy row was not the ENTER being vetoed: ${summary}`).toBe(
+      "ENTER",
+    );
+    expect(rulesRow!.action, `rules row did not veto: ${summary}`).toBe("HOLD");
+    expect(legacyRow!.kind, `legacy ENTER was not marked suppressed: ${summary}`).toBe(
+      "suppressed",
+    );
+    expect(rulesRow!.kind, `rules HOLD was not marked proposed: ${summary}`).toBe("proposed");
+
+    const enters = decisions.filter((d) => d.poolAddress === POOL && d.action === "ENTER");
+    expect(
+      enters,
+      `a vetoed ENTER still reached the audit log: ${stringifySafe(enters)}`,
+    ).toHaveLength(0);
   }, 15_000);
 });

@@ -42,7 +42,7 @@ const listCommand = new Command("list")
         for (const spec of DB_CONFIG_KEYS) {
           const value = yield* db
             .getMetadata(dbConfigKey(spec.envKey))
-            .pipe(Effect.catch(() => Effect.succeed(null)));
+            .pipe(Effect.orElseSucceed(() => null));
           if (value !== null) rows.push({ key: spec.envKey, value });
         }
         if (rows.length === 0) {
@@ -81,7 +81,7 @@ const getCommand = new Command("get")
         const db = yield* DbService;
         const dbValue = yield* db
           .getMetadata(dbConfigKey(key))
-          .pipe(Effect.catch(() => Effect.succeed(null)));
+          .pipe(Effect.orElseSucceed(() => null));
         const envValue = process.env[key];
         if (envValue !== undefined) {
           console.log(`${key}=${envValue}  (from env)`);

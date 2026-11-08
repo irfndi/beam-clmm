@@ -100,11 +100,7 @@ export function runEngine(): Promise<void> {
     );
   });
 
-  const config = Effect.runSync(
-    Effect.gen(function* () {
-      return yield* ConfigService;
-    }).pipe(Effect.provide(ConfigLive)),
-  );
+  const config = Effect.runSync(ConfigService.pipe(Effect.provide(ConfigLive)));
 
   // Chain-identity pre-flight (fail-closed): every contract address this
   // engine uses is the ACTIVE chain's (BEAM_CHAIN, default base). Verify the
@@ -119,7 +115,7 @@ export function runEngine(): Promise<void> {
     const adapter = yield* AdapterService;
     const connectedChainId: number | null = yield* adapter.verifyChainId
       ? adapter.verifyChainId().pipe(
-          Effect.catch(() => Effect.succeed(null)),
+          Effect.orElseSucceed(() => null),
           Effect.map((id) => id as number | null),
         )
       : Effect.succeed<number | null>(null);

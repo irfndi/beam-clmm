@@ -104,7 +104,7 @@ sudo systemctl start beam-clmm
 ## Docker (Optional)
 
 ```dockerfile
-FROM oven/bun:1.4.0
+FROM oven/bun:1.4.4
 WORKDIR /app
 COPY . .
 RUN bun install

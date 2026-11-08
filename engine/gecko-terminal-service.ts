@@ -62,7 +62,25 @@ const DEFAULT_REQUEST_INTERVAL_MS = 2_100;
 // synchronously (before any await) so concurrent callers cannot all pass the
 // pacing check at once and burst past the keyless rate limit.
 let nextGeckoRequestAt = 0;
-let requestIntervalMs = DEFAULT_REQUEST_INTERVAL_MS;
+
+// ─── Batched reads (the fix for multi-agent 429s) ────────────────────────────
+// `/networks/{slug}/pools/multi/{a,b,c}` returns every requested pool in ONE
+// response. LIVE-VERIFIED 2026-10-20 from both the operator host and the VPS:
+// 7 watchlist addresses → HTTP 200 with 7 pool objects; 31+ addresses → HTTP
+// 400 `{"errors":[{"status":"400","title":"maximum 30 addresses allowed"}]}`.
+// Batching is what keeps several agents behind one IP inside the keyless 30
+// req/min budget: three pm2 apps each scanning 7-30 pools used to spend
+// 7-30 requests per cycle each (and tripped 429 as soon as their per-process
+// pacing drifted past the shared IP budget); one batched read per cycle per
+// agent spends exactly one.
+const GECKO_MAX_BATCH = 30; // hard API cap — do not exceed (400)
+
+// A 429 means the IP budget is already spent: every further request inside the
+// window only deepens the penalty, so the whole module stands down and the
+// caller falls through to the heuristic (honest `statsSource` tagging) instead
+// of retrying per pool.
+const RATE_LIMIT_COOLDOWN_MS = 60_000;
+let rateLimitedUntil = 0;
 
 // ─── Response cache (TTL) ────────────────────────────────────────────────
 // Krystal is primary (measured fees); gecko is fallback. Without a cache the
@@ -70,19 +88,51 @@ let requestIntervalMs = DEFAULT_REQUEST_INTERVAL_MS;
 // matches the Krystal universe TTL and the 24h-volume half-life — volume
 // barely moves intraday — so one bulk failure still pays one gecko round per
 // 10 min instead of per pool per cycle.
+//
+// The cache stores RAW stats (volume/reserve/fee-percentage), not derived
+// fees: the same pool is priced with a caller-supplied base fee rate, and a
+// batched prefetch cannot know each pool's binStep-derived rate up front. The
+// fee rate is applied on read, so one batched entry serves every caller.
 const GECKO_CACHE_TTL_MS = 10 * 60 * 1000;
-const geckoCache = new Map<string, { stats: GeckoPoolStats | null; at: number }>();
+
+/** Raw (pre-fee-model) GeckoTerminal pool stats. */
+export interface GeckoRawStats {
+  readonly tvlUsd: number | null;
+  readonly volume24hUsd: number;
+  readonly volume5mUsd: number | null;
+  /** Decimal fraction from `pool_fee_percentage`, or null (always, for CL pools). */
+  readonly feeRateFraction: number | null;
+  readonly basePriceUsd: number | null;
+  readonly quotePriceUsd: number | null;
+}
+
+const geckoCache = new Map<string, { stats: GeckoRawStats | null; at: number }>();
 
 export function clearGeckoCache(): void {
   geckoCache.clear();
+  rateLimitedUntil = 0;
+  nextGeckoRequestAt = 0;
+}
+
+/** TEST-ONLY: shorten the keyless pacing (0 disables it) so batching tests do
+ *  not sleep 2.1s per request. Production never calls this. */
+export function setGeckoRequestIntervalMsForTests(ms: number): void {
+  pacingOverrideMs = ms;
+}
+
+let pacingOverrideMs: number | null = null;
+
+function currentRequestIntervalMs(): number {
+  return pacingOverrideMs ?? DEFAULT_REQUEST_INTERVAL_MS;
+}
+
+/** True while the module is standing down after a 429. Exposed for tests. */
+export function isGeckoRateLimited(now = Date.now()): boolean {
+  return now < rateLimitedUntil;
 }
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
-/** TEST-ONLY: override the minimum inter-request interval (call with 0 to
- *  disable pacing in fast unit tests, or a small value for the pacing test).
- *  Restore to DEFAULT_REQUEST_INTERVAL_MS afterwards; production never calls
- *  this and keeps the 2.1s interval. */
 /**
  * The `fetch` call surface the module needs. A bare call signature rather than
  * the runtime's full `typeof fetch`, so the global `fetch` and a plain injected
@@ -140,11 +190,16 @@ function parseFeePercentageFraction(value: unknown): number | null {
  * `baseFeeRate` is the pool's binStep-derived base-fee fraction used to price
  * real volume into fees when `pool_fee_percentage` is null (always, for DLMM).
  */
-export function parseGeckoPoolStats(raw: unknown, baseFeeRate: number): GeckoPoolStats | null {
+export function parseGeckoPoolRaw(raw: unknown): GeckoRawStats | null {
   if (!isObject(raw)) return null;
   const data = raw["data"];
   if (!isObject(data)) return null;
-  const attrs = data["attributes"];
+  return parseGeckoAttributes(data["attributes"]);
+}
+
+/** Parse one `attributes` object — the shared core of the single-pool (`data`
+ *  is one object) and batched (`data` is an array of objects) responses. */
+export function parseGeckoAttributes(attrs: unknown): GeckoRawStats | null {
   if (!isObject(attrs)) return null;
 
   const volumeUsd = attrs["volume_usd"];
@@ -154,9 +209,6 @@ export function parseGeckoPoolStats(raw: unknown, baseFeeRate: number): GeckoPoo
   // non-positive volume is malformed data (a live pool never reports ≤0 24h
   // volume) — reject the stats ENTIRELY rather than marking garbage measured.
   if (volume24hUsd === null || volume24hUsd <= 0) return null;
-
-  const feePercentage = parseFeePercentageFraction(attrs["pool_fee_percentage"]);
-  const effectiveFeeRate = feePercentage ?? baseFeeRate;
 
   // Non-positive reserves are equally malformed; null them so the caller treats
   // the stats as unavailable (getGeckoPoolStats → null → heuristic + unknown
@@ -170,10 +222,30 @@ export function parseGeckoPoolStats(raw: unknown, baseFeeRate: number): GeckoPoo
     tvlUsd: reserveUsd !== null && reserveUsd <= 0 ? null : reserveUsd,
     volume24hUsd,
     volume5mUsd,
-    fees24hUsd: volume24hUsd * effectiveFeeRate,
+    feeRateFraction: parseFeePercentageFraction(attrs["pool_fee_percentage"]),
     basePriceUsd: readFiniteNumber(attrs["base_token_price_usd"]),
     quotePriceUsd: readFiniteNumber(attrs["quote_token_price_usd"]),
   };
+}
+
+/** Apply a pool's base fee rate to raw volume: gecko's `pool_fee_percentage`
+ *  takes precedence when populated, otherwise fees are modeled as
+ *  `realVolume24h × baseFeeRate`. */
+export function deriveGeckoStats(raw: GeckoRawStats, baseFeeRate: number): GeckoPoolStats {
+  const effectiveFeeRate = raw.feeRateFraction ?? baseFeeRate;
+  return {
+    tvlUsd: raw.tvlUsd,
+    volume24hUsd: raw.volume24hUsd,
+    volume5mUsd: raw.volume5mUsd,
+    fees24hUsd: raw.volume24hUsd * effectiveFeeRate,
+    basePriceUsd: raw.basePriceUsd,
+    quotePriceUsd: raw.quotePriceUsd,
+  };
+}
+
+export function parseGeckoPoolStats(raw: unknown, baseFeeRate: number): GeckoPoolStats | null {
+  const parsed = parseGeckoPoolRaw(raw);
+  return parsed === null ? null : deriveGeckoStats(parsed, baseFeeRate);
 }
 
 // ─── Pool enrichment (source-aware) ──────────────────────────────────────────
@@ -207,6 +279,44 @@ export function enrichPoolFromGecko(pool: PoolState, stats: GeckoPoolStats): Poo
 
 // ─── Fetcher (fail-through to the next source) ───────────────────────────────
 
+/** Reserve the next request slot (see the pacing constants above). Returns how
+ *  long the caller must wait before issuing its request. */
+async function reserveRequestSlot(): Promise<void> {
+  const now = Date.now();
+  const delayMs = Math.max(0, nextGeckoRequestAt - now);
+  nextGeckoRequestAt = Math.max(now, nextGeckoRequestAt) + currentRequestIntervalMs();
+  if (delayMs > 0) {
+    await sleep(delayMs);
+  }
+}
+
+function resolveBaseUrl(override?: string): string {
+  const base = (override ?? process.env.GECKO_TERMINAL_API_URL ?? DEFAULT_BASE_URL)
+    .trim()
+    .replace(/\/+$/, "");
+  return base.length > 0 ? base : DEFAULT_BASE_URL;
+}
+
+function cacheRaw(poolAddress: string, stats: GeckoRawStats | null): void {
+  geckoCache.set(poolAddress.toLowerCase(), { stats, at: Date.now() });
+}
+
+function readCache(
+  poolAddress: string,
+): { readonly hit: true; readonly stats: GeckoRawStats | null } | { readonly hit: false } {
+  const cached = geckoCache.get(poolAddress.toLowerCase());
+  if (cached === undefined || Date.now() - cached.at >= GECKO_CACHE_TTL_MS) return { hit: false };
+  return { hit: true, stats: cached.stats };
+}
+
+/** Mark a 429 and stand the module down for the cooldown window. */
+function enterRateLimitCooldown(): void {
+  rateLimitedUntil = Date.now() + RATE_LIMIT_COOLDOWN_MS;
+  logger.warn("GeckoTerminal rate limited — standing down until the keyless budget resets", {
+    cooldownMs: RATE_LIMIT_COOLDOWN_MS,
+  });
+}
+
 /**
  * Fetch real stats for one pool from GeckoTerminal. NEVER throws and NEVER
  * crashes the scan cycle: 404/429/5xx, timeout, fetch failure, parse failure, or
@@ -216,6 +326,9 @@ export function enrichPoolFromGecko(pool: PoolState, stats: GeckoPoolStats): Poo
  * `baseFeeRate` is the pool's binStep-derived base-fee fraction (the caller
  * computes `0.0025 + binStep / 1e4`); `baseUrl` overrides the endpoint
  * (env `GECKO_TERMINAL_API_URL` already resolved by the caller, else default).
+ *
+ * Prefer `prefetchGeckoPools` for a whole scan set: it fills this cache with a
+ * single batched request, so the per-pool path here is only the cold miss.
  */
 export async function getGeckoPoolStats(
   poolAddress: string,
@@ -228,32 +341,25 @@ export async function getGeckoPoolStats(
   },
 ): Promise<GeckoPoolStats | null> {
   if (!options.bypassCache) {
-    const cached = geckoCache.get(poolAddress);
-    if (cached !== undefined && Date.now() - cached.at < GECKO_CACHE_TTL_MS) {
-      return cached.stats;
+    const cached = readCache(poolAddress);
+    if (cached.hit) {
+      return cached.stats === null ? null : deriveGeckoStats(cached.stats, options.baseFeeRate);
     }
   }
+  if (isGeckoRateLimited()) return null;
+
   const fetchImpl = options.fetchImpl ?? fetch;
   const timeoutMs = options.timeoutMs ?? REQUEST_TIMEOUT_MS;
-  const base = (options.baseUrl ?? process.env.GECKO_TERMINAL_API_URL ?? DEFAULT_BASE_URL)
-    .trim()
-    .replace(/\/+$/, "");
-  const effectiveBase = base.length > 0 ? base : DEFAULT_BASE_URL;
-  const url = `${effectiveBase}/networks/${GECKO_NETWORK_SLUG}/pools/${poolAddress}`;
+  const url = `${resolveBaseUrl(options.baseUrl)}/networks/${GECKO_NETWORK_SLUG}/pools/${poolAddress}`;
 
-  // Pace toward the 30 req/min keyless limit (see the pacing constants above).
-  // JS is single-threaded: reserving the next slot is a synchronous
-  // read-modify-write before any await, so concurrent callers each advance
-  // nextGeckoRequestAt exactly once and can never observe the same free slot.
-  const now = Date.now();
-  const delayMs = Math.max(0, nextGeckoRequestAt - now);
-  nextGeckoRequestAt = Math.max(now, nextGeckoRequestAt) + requestIntervalMs;
-  if (delayMs > 0) {
-    await sleep(delayMs);
-  }
+  await reserveRequestSlot();
 
   try {
     const res = await fetchImpl(url, { signal: AbortSignal.timeout(timeoutMs) });
+    if (res.status === 429) {
+      enterRateLimitCooldown();
+      return null;
+    }
     if (!res.ok) {
       logger.warn("GeckoTerminal unavailable — falling through to next stats source", {
         pool: poolAddress,
@@ -262,7 +368,7 @@ export async function getGeckoPoolStats(
       return null;
     }
     const body: unknown = await res.json();
-    const parsed = parseGeckoPoolStats(body, options.baseFeeRate);
+    const parsed = parseGeckoPoolRaw(body);
     if (parsed === null) {
       logger.warn("GeckoTerminal returned an unparseable pool payload", { pool: poolAddress });
       return null;
@@ -273,18 +379,181 @@ export async function getGeckoPoolStats(
       logger.warn("GeckoTerminal pool has no reserve — treating stats as unavailable", {
         pool: poolAddress,
       });
-      geckoCache.set(poolAddress, { stats: null, at: Date.now() });
+      cacheRaw(poolAddress, null);
       return null;
     }
-    geckoCache.set(poolAddress, { stats: parsed, at: Date.now() });
-    return parsed;
+    cacheRaw(poolAddress, parsed);
+    return deriveGeckoStats(parsed, options.baseFeeRate);
   } catch (err) {
     logger.warn("GeckoTerminal fetch failed — falling through to next stats source", {
       pool: poolAddress,
       error: err instanceof Error ? err.message : String(err),
     });
-    geckoCache.set(poolAddress, { stats: null, at: Date.now() });
+    cacheRaw(poolAddress, null);
     return null;
+  }
+}
+
+/**
+ * Fill the stats cache for every address in `addresses` with as few requests as
+ * the API allows: `/pools/multi/{a,b,...}` accepts up to 30 addresses, so a
+ * 7-pool watchlist costs ONE request per cycle instead of seven (LIVE-VERIFIED
+ * 2026-10-20). This is what keeps several agents behind one IP inside the
+ * keyless 30 req/min budget — per-process 2.1s pacing alone cannot, because the
+ * budget is per IP, not per process.
+ *
+ * Never throws. Addresses already cached fresh are skipped. A chunk that fails
+ * (429/5xx/timeout) leaves its addresses UNCACHED so a later cycle retries, and
+ * a 429 stands the module down for `RATE_LIMIT_COOLDOWN_MS` first.
+ */
+export async function prefetchGeckoPools(
+  addresses: ReadonlyArray<string>,
+  options: {
+    readonly baseUrl?: string;
+    readonly timeoutMs?: number;
+    readonly fetchImpl?: FetchLike;
+    readonly bypassCache?: boolean;
+  } = {},
+): Promise<{ readonly requested: number; readonly cached: number; readonly requests: number }> {
+  const { seen, pending } = partitionUncached(addresses, options.bypassCache === true);
+  const requested = addresses.length;
+  if (pending.length === 0) return { requested, cached: seen.size, requests: 0 };
+  if (isGeckoRateLimited()) {
+    return { requested, cached: seen.size - pending.length, requests: 0 };
+  }
+
+  const deps: BatchDeps = {
+    fetchImpl: options.fetchImpl ?? fetch,
+    timeoutMs: options.timeoutMs ?? REQUEST_TIMEOUT_MS,
+    base: resolveBaseUrl(options.baseUrl),
+  };
+  let requests = 0;
+  for (let offset = 0; offset < pending.length; offset += GECKO_MAX_BATCH) {
+    if (isGeckoRateLimited()) break;
+    const chunk = pending.slice(offset, offset + GECKO_MAX_BATCH);
+    requests += 1;
+    const outcome = await fetchBatchChunk(chunk, deps);
+    if (outcome === "rate_limited") break;
+  }
+
+  let cached = 0;
+  for (const key of seen) {
+    if (readCache(key).hit) cached += 1;
+  }
+  return { requested, cached, requests };
+}
+
+interface BatchDeps {
+  readonly fetchImpl: FetchLike;
+  readonly timeoutMs: number;
+  readonly base: string;
+}
+
+interface UncachedPartition {
+  readonly seen: Set<string>;
+  readonly pending: ReadonlyArray<string>;
+}
+
+/** Split the scan set into the deduped address universe and the subset that
+ *  still needs a request (fresh cache entries are skipped). */
+function partitionUncached(
+  addresses: ReadonlyArray<string>,
+  bypassCache: boolean,
+): UncachedPartition {
+  const seen = new Set<string>();
+  const pending: string[] = [];
+  for (const address of addresses) {
+    const key = address.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    if (!bypassCache && readCache(key).hit) continue;
+    pending.push(key);
+  }
+  return { seen, pending };
+}
+
+/** Index a batched response by pool address. A batched response is
+ *  `data: [ { attributes }, ... ]`, one object per pool, keyed by
+ *  `attributes.address` (live-verified). */
+function indexBatchAttributes(body: unknown): Map<string, unknown> | null {
+  const rows = isObject(body) ? body["data"] : null;
+  if (!Array.isArray(rows)) return null;
+  // SAFETY: Array.isArray proves an array; the elements stay untrusted and are
+  // validated by isObject/parseGeckoAttributes before use.
+  const elements: ReadonlyArray<unknown> = rows as ReadonlyArray<unknown>;
+  const byAddress = new Map<string, unknown>();
+  for (const row of elements) {
+    if (!isObject(row)) continue;
+    const attrs = row["attributes"];
+    if (!isObject(attrs)) continue;
+    const rowAddress = attrs["address"];
+    if (typeof rowAddress === "string") byAddress.set(rowAddress.toLowerCase(), attrs);
+  }
+  return byAddress;
+}
+
+/** Cache one chunk's stats and log the outcome once per chunk (not per pool). */
+function cacheBatchChunk(chunk: ReadonlyArray<string>, byAddress: Map<string, unknown>): void {
+  let measured = 0;
+  let noReserve = 0;
+  let unusable = 0;
+  for (const address of chunk) {
+    const attrs = byAddress.get(address);
+    const parsed = attrs === undefined ? null : parseGeckoAttributes(attrs);
+    // A pool gecko does not track, or one that reports zero 24h volume, is
+    // cached as null: the caller must fall through to the heuristic instead of
+    // marking modeled data as measured.
+    if (parsed === null || parsed.tvlUsd === null) {
+      cacheRaw(address, null);
+      if (parsed === null) unusable += 1;
+      else noReserve += 1;
+      continue;
+    }
+    cacheRaw(address, parsed);
+    measured += 1;
+  }
+  logger.info("GeckoTerminal batch resolved", {
+    pools: chunk.length,
+    measured,
+    noReserve,
+    noVolumeOrUntracked: unusable,
+  });
+}
+
+/** One batched request. Returns "rate_limited" so the caller stops the loop
+ *  (a 429 means the IP budget is spent; further chunks only deepen it). */
+async function fetchBatchChunk(
+  chunk: ReadonlyArray<string>,
+  deps: BatchDeps,
+): Promise<"ok" | "failed" | "rate_limited"> {
+  const url = `${deps.base}/networks/${GECKO_NETWORK_SLUG}/pools/multi/${chunk.join(",")}`;
+  await reserveRequestSlot();
+  try {
+    const res = await deps.fetchImpl(url, { signal: AbortSignal.timeout(deps.timeoutMs) });
+    if (res.status === 429) {
+      enterRateLimitCooldown();
+      return "rate_limited";
+    }
+    if (!res.ok) {
+      logger.warn("GeckoTerminal batch unavailable — pools fall through to heuristic", {
+        pools: chunk.length,
+        status: res.status,
+      });
+      return "failed";
+    }
+    const byAddress = indexBatchAttributes(await res.json());
+    if (byAddress === null) {
+      logger.warn("GeckoTerminal batch response malformed", { pools: chunk.length });
+      return "failed";
+    }
+    cacheBatchChunk(chunk, byAddress);
+    return "ok";
+  } catch (err) {
+    logger.warn("GeckoTerminal batch failed — pools fall through to heuristic", {
+      pools: chunk.length,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return "failed";
   }
 }
 
@@ -298,4 +567,6 @@ export async function getGeckoPoolStats(
 export const GeckoTerminalLive = Layer.succeed(GeckoTerminalService, {
   getPoolStats: (poolAddress, baseFeeRate) =>
     Effect.promise(() => getGeckoPoolStats(poolAddress, { baseFeeRate })),
+  prefetchPools: (addresses) =>
+    Effect.promise(() => prefetchGeckoPools(addresses)).pipe(Effect.asVoid),
 });

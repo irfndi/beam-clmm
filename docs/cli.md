@@ -1,77 +1,64 @@
 # Beam CLI Reference
 
-## Global Commands
+Beam runs fully standalone. The hosted Beam Cloud control plane (Cloudflare
+Workers + D1) was retired when the project moved to a self-hosted VPS, so there
+is no account to register, no API key to obtain, and no cloud login step. State
+lives in local SQLite and the operator surface is the local status server.
 
-### `beam register`
-
-Register with Beam's Cloudflare Worker and get an API key.
-
-```bash
-beam register
-# Output: API key saved to ~/.config/beam/credentials.json
-```
-
-### `beam login <key>`
-
-Validate an existing API key.
-
-```bash
-beam login sk-beam-xxxxxxxx
-# Output: Login successful — user_id: abc123
-```
+## Commands
 
 ### `beam setup`
 
-Interactive wizard to configure the trading agent. Run `beam register` first;
-setup validates the stored account and writes a timestamped `.env` backup.
+Configure the trading agent and write `.env` (a timestamped backup is created
+if one already exists). Works offline — no account required.
 
 ```bash
 # Interactive mode
 beam setup
 
 # Non-interactive (for agents/CI)
-beam setup --non-interactive --rpc-url=https://rpc.mainnet.chain.robinhood.com --rpc-fallback-url=https://second-rpc.example.com
-```
-
-
-telemetry. `--fix` creates missing directories and repairs permissions without
-
-```bash
+beam setup --non-interactive --rpc-url=https://mainnet.base.org
 ```
 
 **Options:**
-- `--rpc-url <url>` — Robinhood Chain RPC URL
+
+- `--rpc-url <url>` — Base RPC URL
 - `--rpc-fallback-url <url>` — optional fallback RPC URL
-- `--jupiter-api-key <key>` — optional Jupiter Price API v3 key
 - `--wallet-key-file <path>` — EVM wallet private key file (optional)
 - `--watchlist <pools>` — Comma-separated pool addresses (optional)
 - `--paper-trading` — Enable paper trading (default: true)
+- `--non-interactive` — Accept defaults without prompting
 
-### `beam whoami`
+### `beam dev`
 
-Show current user info.
-
-```bash
-beam whoami
-# Output:
-# User ID: abc123
-# Tier: free
-# Wallet: 7xKx...3f2a (pubkey)
-# Telegram: linked (@username)
-# API Key: sk-beam-xxxxxxxx (last 4)
-```
-
-## Telegram Commands
-
-### `beam link-telegram`
-
-Generate a one-time code to link your Telegram account.
+Start the trading agent.
 
 ```bash
-beam link-telegram
-# Output: Link code: LINK-AB12CD (expires in 10 minutes)
-# Send this code to @beam_agent_bot
+beam dev
+beam dev --exit-live   # execute EXIT on-chain even in paper mode (needs wallet)
 ```
+
+### Other commands
+
+| Command | Purpose |
+| ------- | ------- |
+| `beam status` | Current agent status, for humans and agent runtimes |
+| `beam portfolio` | Positions and P&L |
+| `beam backtest` | Historical simulation |
+| `beam resume` | Clear the active autonomous safety pause |
+| `beam telemetry` | Inspect or control client error telemetry |
+| `beam config` | Inspect or edit DB-backed config (env > DB > defaults) |
+| `beam feedback` | Record feedback locally (cloud submission is opt-in) |
+| `beam update` \| `beam upgrade` | Check for and apply updates |
+| `beam version` | Show current version |
+
+## Retired commands
+
+`beam register`, `beam login`, `beam whoami`, `beam link-telegram`,
+`beam subscription`, `beam referral`, `beam issue` and `beam support` were
+removed with the Cloudflare control plane they talked to. They are not
+reimplemented locally: there is no account, no tier, and no hosted support
+queue any more.
 
 ## Development Commands
 
@@ -91,19 +78,15 @@ bun run backtest   # Historical simulation
 Key env vars (set via `beam setup` or `.env`):
 
 | Variable | Required | Default | Description |
-|----------|----------|---------|-------------|
-| `ROBINHOOD_RPC_URL` | NO | public mainnet | Robinhood Chain RPC URL |
-| `ROBINHOOD_RPC_FALLBACK_URL` | NO | empty | Fallback RPC URL |
-| `ROBINHOOD_RPC_FALLBACK_URL` | NO | empty | Separate RPC endpoint used after primary rate-limit/network failures |
-| `JUPITER_API_KEY` | NO | empty | Jupiter Price API v3 key |
-| `COINGECKO_API_KEY` | NO | empty | CoinGecko Pro API key |
+| -------- | -------- | ------- | ----------- |
+| `BEAM_CHAIN` | NO | `base` | Active chain (`base` \| `robinhood`) |
+| `BEAM_BASE_RPC_URL` | NO | public mainnet | Base RPC URL |
+| `RPC_FALLBACK_URLS` | NO | empty | Comma-separated fallback RPC endpoints |
 | `WALLET_PRIVATE_KEY` | NO | empty | EVM wallet (live trading only) |
 | `WATCHLIST_POOLS` | NO | empty | Comma-separated pool addresses |
 | `PAPER_TRADING` | NO | `true` | Paper vs live trading |
 | `SQLITE_DB_PATH` | NO | `./beam.db` | SQLite database file |
-
-`beam setup`, `beam dev`, `beam feedback`, and `beam issue` require a valid
-registered account. Feedback and issues are stored in the Beam Cloud D1 store;
-local storage is only an outage fallback.
+| `BEAM_CLOUD_ENABLED` | NO | `false` | Opt in to a hosted control plane. Leave unset when self-hosted |
+| `BEAM_API_URL` | NO | — | Override the control-plane endpoint (only with `BEAM_CLOUD_ENABLED=true`) |
 
 See [`config-service.ts`](../engine/config-service.ts) for the full list.

@@ -18,6 +18,7 @@ import { executePaper, executeLive, reconcilePositions, program } from "../engin
 import { computeSummary, toJsonOutput, formatPosition } from "../cli/portfolio.js";
 import { AlertLive } from "../engine/alert-service.js";
 import { StrategyLive } from "../engine/strategy-service.js";
+import { DecisionLive } from "../engine/decision-service.js";
 import { MemoryLive } from "../engine/memory-service.js";
 import { RiskLive } from "../engine/risk-service.js";
 import { AuditLive } from "../engine/audit-service.js";
@@ -964,7 +965,7 @@ describe("executeLive — two positions on one pool", () => {
       revenueConfigSvc: revenueConfigSvc as never,
       trackedPositions,
       // SAFETY: the entry-preparation stub intentionally omits unrelated production services.
-      entryPrep: { prepareEntryTokens: () => Effect.succeed(undefined) } as never,
+      entryPrep: { prepareEntryTokens: () => Effect.undefined } as never,
       nativePriceUsd: 150,
       // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
       entryStrategyMode: "spot" as const,
@@ -1242,8 +1243,12 @@ describe("per-position alert cooldowns", () => {
     writeFileSync(join(tmpDir, "credentials.json"), JSON.stringify({ apiKey: "sk-test" }), {
       mode: 0o600,
     });
+    // Cloud delivery is opt-in since the control plane was retired; this suite
+    // asserts the cloud POST fan-out, so opt in explicitly.
+    process.env.BEAM_CLOUD_ENABLED = "true";
   });
   afterEach(() => {
+    delete process.env.BEAM_CLOUD_ENABLED;
     if (savedConfigDir === undefined) delete process.env.BEAM_CONFIG_DIR;
     else process.env.BEAM_CONFIG_DIR = savedConfigDir;
     rmSync(tmpDir, { recursive: true, force: true });
@@ -1413,6 +1418,7 @@ function makeProgramLayer(opts: {
     Layer.succeed(ConfigService, config),
     Layer.succeed(AdapterService, opts.adapter),
     StrategyLive,
+    DecisionLive,
     Layer.provide(MemoryLive, dbLayer),
     RiskLive({
       confidenceThreshold: config.confidenceThreshold,
@@ -1463,7 +1469,7 @@ function makeProgramLayer(opts: {
     AgentStateMutable({ maxPendingProposals: 50 }).layer,
     Layer.succeed(McpServerService, { start: () => Effect.void, stop: () => Effect.void }),
     Layer.succeed(HttpStatusServerService, { start: () => Effect.void, stop: () => Effect.void }),
-    Layer.succeed(EntryPrepService, { prepareEntryTokens: () => Effect.succeed(undefined) }),
+    Layer.succeed(EntryPrepService, { prepareEntryTokens: () => Effect.undefined }),
     Layer.succeed(KrystalService, {
       getPoolStats: () => Effect.succeed(null),
       getUniverse: () => Effect.succeed(new Map()),
@@ -1490,7 +1496,7 @@ describe("program — multiple positions per pool", () => {
 
     const test = Effect.gen(function* () {
       // ~3 scan cycles: ENTER A (cycle 1), ENTER B (cycle 2), capped (cycle 3).
-      yield* Effect.raceFirst(program, Effect.sleep(2_500));
+      yield* Effect.timeoutOrElse(program, { duration: 2_500, orElse: () => Effect.void });
       const db = yield* DbService;
       const audit = yield* AuditService;
       const positions = yield* db.getAllPositions();
@@ -1546,7 +1552,7 @@ describe("program — multiple positions per pool", () => {
     });
 
     const test = Effect.gen(function* () {
-      yield* Effect.raceFirst(program, Effect.sleep(2_500));
+      yield* Effect.timeoutOrElse(program, { duration: 2_500, orElse: () => Effect.void });
       const db = yield* DbService;
       const audit = yield* AuditService;
       const positions = yield* db.getAllPositions();
@@ -1587,7 +1593,7 @@ describe("program — multiple positions per pool", () => {
     });
 
     const test = Effect.gen(function* () {
-      yield* Effect.raceFirst(program, Effect.sleep(2_000));
+      yield* Effect.timeoutOrElse(program, { duration: 2_000, orElse: () => Effect.void });
       const db = yield* DbService;
       const positions = yield* db.getAllPositions();
       return positions;
@@ -1649,7 +1655,7 @@ describe("program — multiple positions per pool", () => {
       const db = yield* DbService;
       yield* db.savePosition(seededA);
       yield* db.savePosition(seededB);
-      yield* Effect.raceFirst(program, Effect.sleep(1_500));
+      yield* Effect.timeoutOrElse(program, { duration: 1_500, orElse: () => Effect.void });
       const active = yield* db.getAllPositions();
       const closed = yield* db.getClosedPositions();
       const events = yield* db.getPositionEvents(POOL);
@@ -1752,7 +1758,7 @@ describe("program — multiple positions per pool", () => {
       const db = yield* DbService;
       yield* db.savePosition(seededA);
       yield* db.savePosition(seededB);
-      yield* Effect.raceFirst(program, Effect.sleep(1_500));
+      yield* Effect.timeoutOrElse(program, { duration: 1_500, orElse: () => Effect.void });
       const active = yield* db.getAllPositions();
       const closed = yield* db.getClosedPositions();
       const audit = yield* AuditService;
@@ -1815,7 +1821,7 @@ describe("program — multiple positions per pool", () => {
       yield* db.savePosition(seededB);
       // Default 1s scan interval: the persisted breach (A stays out of range
       // with the active bin fixed at 5000) spans 2+ cycles, so EXIT fires.
-      yield* Effect.raceFirst(program, Effect.sleep(2_500));
+      yield* Effect.timeoutOrElse(program, { duration: 2_500, orElse: () => Effect.void });
       const active = yield* db.getAllPositions();
       const closed = yield* db.getClosedPositions();
       return { active, closed };
@@ -1880,7 +1886,7 @@ describe("program — multiple positions per pool", () => {
       const db = yield* DbService;
       yield* db.savePosition(dustPos);
       yield* db.savePosition(healthyPos);
-      yield* Effect.raceFirst(program, Effect.sleep(1_500));
+      yield* Effect.timeoutOrElse(program, { duration: 1_500, orElse: () => Effect.void });
       const active = yield* db.getAllPositions();
       const closed = yield* db.getClosedPositions();
       const audit = yield* AuditService;
@@ -1936,7 +1942,7 @@ describe("program — multiple positions per pool", () => {
     const test = Effect.gen(function* () {
       const db = yield* DbService;
       yield* db.savePosition(dustLive);
-      yield* Effect.raceFirst(program, Effect.sleep(1_500));
+      yield* Effect.timeoutOrElse(program, { duration: 1_500, orElse: () => Effect.void });
       const active = yield* db.getAllPositions();
       const closed = yield* db.getClosedPositions();
       return { active, closed };
@@ -1985,7 +1991,7 @@ describe("program — multiple positions per pool", () => {
     const test = Effect.gen(function* () {
       const db = yield* DbService;
       yield* db.savePosition(seeded);
-      yield* Effect.raceFirst(program, Effect.sleep(2_000));
+      yield* Effect.timeoutOrElse(program, { duration: 2_000, orElse: () => Effect.void });
       const persisted = yield* db.getPosition("zero-mark-live");
       const audit = yield* AuditService;
       const decisions = yield* audit.getRecentDecisions(200);
@@ -2094,7 +2100,7 @@ describe("program — multiple positions per pool", () => {
     });
 
     const test = Effect.gen(function* () {
-      yield* Effect.raceFirst(program, Effect.sleep(2_500));
+      yield* Effect.timeoutOrElse(program, { duration: 2_500, orElse: () => Effect.void });
       const audit = yield* AuditService;
       const decisions = yield* audit.getRecentDecisions(200);
       return decisions;
@@ -2154,7 +2160,7 @@ describe("A4 paper fee accrual requires datapi-MEASURED fees", () => {
     const test = Effect.gen(function* () {
       const db = yield* DbService;
       yield* db.savePosition(makePos({ positionId: POS_ID, lowerBinId: 4980, upperBinId: 5020 }));
-      yield* Effect.raceFirst(program, Effect.sleep(1_500));
+      yield* Effect.timeoutOrElse(program, { duration: 1_500, orElse: () => Effect.void });
       const events = yield* db.getPositionEvents(POOL);
       const pos = yield* db.getPosition(POS_ID);
       const accruals = events

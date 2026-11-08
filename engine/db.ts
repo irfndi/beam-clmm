@@ -1086,6 +1086,47 @@ const MIGRATIONS: ReadonlyArray<Migration> = [
       }
     },
   },
+  {
+    version: 28,
+    name: "decision_journal",
+    up(db) {
+      // One row per DECISION EVALUATION (not per execution). `audit` conflates
+      // proposals, rejections and real transactions — 87k ENTER rows for 152
+      // executions — so it cannot be used to attribute PnL to a rule. This
+      // table records what the decision saw (facts), which rules fired
+      // (signals), what it chose, and the economics it computed.
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS decision_journal (
+          id TEXT PRIMARY KEY,
+          timestamp INTEGER NOT NULL,
+          cycle_id TEXT NOT NULL,
+          pool_address TEXT NOT NULL,
+          position_id TEXT,
+          engine TEXT NOT NULL CHECK (engine IN ('legacy', 'rules')),
+          kind TEXT NOT NULL CHECK (kind IN ('proposed', 'suppressed', 'executed', 'shadow')),
+          action TEXT NOT NULL,
+          confidence REAL NOT NULL DEFAULT 0,
+          reasoning TEXT NOT NULL DEFAULT '',
+          ev_usd REAL,
+          cost_usd REAL,
+          min_size_usd REAL,
+          regime TEXT,
+          facts_json TEXT,
+          signals_json TEXT,
+          decision_json TEXT
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_decision_journal_time
+          ON decision_journal(timestamp);
+
+        CREATE INDEX IF NOT EXISTS idx_decision_journal_pool_time
+          ON decision_journal(pool_address, timestamp);
+
+        CREATE INDEX IF NOT EXISTS idx_decision_journal_position
+          ON decision_journal(position_id);
+      `);
+    },
+  },
 ];
 
 function runMigrations(db: Database) {

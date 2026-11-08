@@ -3,7 +3,10 @@ import {
   parseGeckoPoolStats,
   enrichPoolFromGecko,
   getGeckoPoolStats,
+  prefetchGeckoPools,
+  isGeckoRateLimited,
   clearGeckoCache,
+  setGeckoRequestIntervalMsForTests,
   type GeckoPoolStats,
 } from "../engine/gecko-terminal-service.js";
 import type { PoolState } from "../engine/types.js";
@@ -184,5 +187,175 @@ describe("getGeckoPoolStats", () => {
     };
     const stats = await getGeckoPoolStats("0xpool", { baseFeeRate: BASE_FEE_RATE, fetchImpl });
     expect(stats).toBeNull();
+  });
+});
+
+// ─── prefetchGeckoPools (batched /pools/multi) ────────────────────────────────
+
+describe("prefetchGeckoPools", () => {
+  beforeEach(() => {
+    clearGeckoCache();
+    setGeckoRequestIntervalMsForTests(0);
+  });
+
+  const address = (i: number): string => `0x${i.toString(16).padStart(40, "0")}`;
+
+  type PoolRowAttributes = {
+    address: string;
+    volume_usd: { h24: string | number };
+    pool_fee_percentage: null;
+    base_token_price_usd: string;
+    quote_token_price_usd: string;
+    reserve_in_usd?: string | number;
+  };
+
+  function poolRow(addr: string, h24: string | number, reserve: string | number | null) {
+    const base: PoolRowAttributes = {
+      address: addr,
+      volume_usd: { h24 },
+      pool_fee_percentage: null,
+      base_token_price_usd: "1.0",
+      quote_token_price_usd: "2500",
+    };
+    const attributes: PoolRowAttributes =
+      reserve === null ? base : { ...base, reserve_in_usd: reserve };
+    return { id: `base_${addr}`, attributes };
+  }
+
+  function requestUrl(input: string | URL | Request): string {
+    if (input instanceof Request) return input.url;
+    if (input instanceof URL) return input.href;
+    return input;
+  }
+
+  function captureBatchFetch(rows: ReadonlyArray<unknown>) {
+    const calls: string[] = [];
+    const fetchImpl = async (input: string | URL | Request) => {
+      calls.push(requestUrl(input));
+      return Response.json({ data: rows });
+    };
+    return { calls, fetchImpl };
+  }
+
+  it("resolves a whole scan set with ONE multi request and serves per-pool reads from cache", async () => {
+    const addrs = [
+      address(1),
+      address(2),
+      address(3),
+      address(4),
+      address(5),
+      address(6),
+      address(7),
+    ];
+    const { calls, fetchImpl } = captureBatchFetch(
+      addrs.map((a, i) => poolRow(a, 1000 * (i + 1), 50_000)),
+    );
+
+    const result = await prefetchGeckoPools(addrs, { fetchImpl });
+    expect(result.requests).toBe(1);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toContain("/networks/");
+    expect(calls[0]).toContain("/pools/multi/");
+    expect(calls[0]!.split("/multi/")[1]!.split(",")).toHaveLength(7);
+
+    // Per-pool reads hit the warmed cache: no further requests, and the
+    // caller-supplied base fee rate is applied on read.
+    let laterCalls = 0;
+    const noNetwork = async () => {
+      laterCalls += 1;
+      return Response.json({ data: null });
+    };
+    const stats = await getGeckoPoolStats(addrs[2]!, {
+      baseFeeRate: 0.003,
+      fetchImpl: noNetwork,
+    });
+    expect(laterCalls).toBe(0);
+    expect(stats!.volume24hUsd).toBe(3000);
+    expect(stats!.fees24hUsd).toBeCloseTo(3000 * 0.003, 8);
+  });
+
+  it("chunks at the 30-address API cap (40 pools → 30 + 10)", async () => {
+    const addrs = Array.from({ length: 40 }, (_, i) => address(i + 1));
+    const { calls, fetchImpl } = captureBatchFetch(addrs.map((a) => poolRow(a, 500, 100_000)));
+
+    const result = await prefetchGeckoPools(addrs, { fetchImpl });
+    expect(result.requests).toBe(2);
+    const sizes = calls.map((c) => c.split("/multi/")[1]!.split(",").length);
+    expect(sizes).toEqual([30, 10]);
+  });
+
+  it("caches zero-volume and untracked pools as unavailable (never marks them measured)", async () => {
+    const tracked = address(11);
+    const zeroVolume = address(12);
+    const untracked = address(13);
+    const { fetchImpl } = captureBatchFetch([
+      poolRow(tracked, 1000, 50_000),
+      poolRow(zeroVolume, 0, 50_000),
+      // `untracked` is absent from the response entirely.
+    ]);
+
+    await prefetchGeckoPools([tracked, zeroVolume, untracked], { fetchImpl });
+
+    const never = async () => {
+      throw new Error("network must not be hit for cached entries");
+    };
+    expect(
+      await getGeckoPoolStats(tracked, { baseFeeRate: BASE_FEE_RATE, fetchImpl: never }),
+    ).not.toBeNull();
+    expect(
+      await getGeckoPoolStats(zeroVolume, { baseFeeRate: BASE_FEE_RATE, fetchImpl: never }),
+    ).toBeNull();
+    expect(
+      await getGeckoPoolStats(untracked, { baseFeeRate: BASE_FEE_RATE, fetchImpl: never }),
+    ).toBeNull();
+  });
+
+  it("dedupes repeated and differently-cased addresses into one request", async () => {
+    const a = address(21);
+    const { calls, fetchImpl } = captureBatchFetch([poolRow(a, 1000, 50_000)]);
+    await prefetchGeckoPools([a, a.toUpperCase().replace("0X", "0x"), a], { fetchImpl });
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.split("/multi/")[1]!.split(",")).toHaveLength(1);
+  });
+
+  it("stands down for the cooldown after a 429 instead of retrying per pool", async () => {
+    const addrs = [address(31), address(32)];
+    let calls = 0;
+    const rateLimited = async () => {
+      calls += 1;
+      return new Response("slow down", { status: 429 });
+    };
+
+    const result = await prefetchGeckoPools(addrs, { fetchImpl: rateLimited });
+    expect(result.requests).toBe(1);
+    expect(isGeckoRateLimited()).toBe(true);
+
+    // Both the batch path and the single-pool path stay local while cooling down.
+    expect(await prefetchGeckoPools(addrs, { fetchImpl: rateLimited })).toMatchObject({
+      requests: 0,
+    });
+    expect(
+      await getGeckoPoolStats(addrs[0]!, { baseFeeRate: BASE_FEE_RATE, fetchImpl: rateLimited }),
+    ).toBeNull();
+    expect(calls).toBe(1);
+
+    // Clearing the cache (operator/restart path) also clears the cooldown.
+    clearGeckoCache();
+    expect(isGeckoRateLimited()).toBe(false);
+  });
+
+  it("returns without a request when every address is already cached fresh", async () => {
+    const addrs = [address(41)];
+    const { fetchImpl } = captureBatchFetch([poolRow(addrs[0]!, 1000, 50_000)]);
+    await prefetchGeckoPools(addrs, { fetchImpl });
+
+    let calls = 0;
+    const counting = async () => {
+      calls += 1;
+      return Response.json({ data: [] });
+    };
+    const second = await prefetchGeckoPools(addrs, { fetchImpl: counting });
+    expect(second.requests).toBe(0);
+    expect(calls).toBe(0);
   });
 });

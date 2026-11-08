@@ -1,5 +1,5 @@
 # ── Stage 1: Build ─────────────────────────────────────────────────────────
-FROM oven/bun:1.4.0-slim AS builder
+FROM oven/bun:1.4.4-slim AS builder
 
 WORKDIR /app
 
@@ -20,7 +20,7 @@ COPY types ./types
 RUN bun run build
 
 # ── Stage 2: Runtime ───────────────────────────────────────────────────────
-FROM oven/bun:1.4.0-slim AS runtime
+FROM oven/bun:1.4.4-slim AS runtime
 
 WORKDIR /app
 

@@ -107,12 +107,16 @@ describe("AlertService", () => {
     // The service resolves the API key via BEAM_CONFIG_DIR/credentials.json.
     savedConfigDir = process.env.BEAM_CONFIG_DIR;
     process.env.BEAM_CONFIG_DIR = tmpDir;
+    // Cloud delivery is opt-in since the control plane was retired; these tests
+    // exercise the cloud POST path, so they must ask for it explicitly.
+    process.env.BEAM_CLOUD_ENABLED = "true";
     writeFileSync(join(tmpDir, "credentials.json"), JSON.stringify({ apiKey: TEST_API_KEY }), {
       mode: 0o600,
     });
   });
 
   afterEach(() => {
+    delete process.env.BEAM_CLOUD_ENABLED;
     if (savedConfigDir === undefined) {
       delete process.env.BEAM_CONFIG_DIR;
     } else {
@@ -145,6 +149,29 @@ describe("AlertService", () => {
       expect(posts[0]!.body.message).toBe("Position out of range on SOL/USDC");
       expect(posts[0]!.body.poolAddress).toBe(POOL);
     } finally {
+      restore();
+    }
+  });
+
+  it("does not POST when BEAM_CLOUD_ENABLED=false (standalone mode)", async () => {
+    process.env.BEAM_CLOUD_ENABLED = "false";
+    const { posts, restore } = capturePosts();
+    try {
+      const layer = makeAlertLayer(dbPath);
+      await Effect.runPromise(
+        Effect.gen(function* () {
+          const alerts = yield* AlertService;
+          yield* alerts.sendAlert({
+            type: "position_out_of_range",
+            severity: "critical",
+            message: "Position out of range on the standalone agent",
+            poolAddress: POOL,
+          });
+        }).pipe(Effect.provide(layer)),
+      );
+      expect(posts).toHaveLength(0);
+    } finally {
+      delete process.env.BEAM_CLOUD_ENABLED;
       restore();
     }
   });

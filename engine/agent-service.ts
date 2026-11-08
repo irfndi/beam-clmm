@@ -523,13 +523,11 @@ export function AgentLive(config: AppConfig): Layer.Layer<AgentService, never, n
         agentGatewayUrl: config.agentGatewayUrl,
         agentGatewayToken: config.agentGatewayToken,
       }).pipe(
-        Effect.catch(() =>
-          Effect.succeed({
-            hermes: { available: false, path: null },
-            openclaw: { available: false, path: null, gatewayRunning: false },
-            recommended: "none" as const,
-          }),
-        ),
+        Effect.orElseSucceed(() => ({
+          hermes: { available: false, path: null },
+          openclaw: { available: false, path: null, gatewayRunning: false },
+          recommended: "none" as const,
+        })),
       );
 
       const transport = selectTransport(config, detection);

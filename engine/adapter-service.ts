@@ -3346,7 +3346,10 @@ export const AdapterLive = Layer.effect(
         const lensBase = lensTargets.findIndex((p) => p.toLowerCase() === key) * WORDS_PER_POOL;
         bins.push(
           ...collectBinsFromWords(
-            // oxlint-disable-next-line anti-slop/no-chained-type-assertions, anti-slop/require-safety-comment-for-type-assertion -- aggregate3Read returns the shared multicall result union; the lens branch structurally matches {success, returnData} by the allowFailure branch contract.
+            // SAFETY: aggregate3Read returns the shared multicall result union;
+            // the lens branch structurally matches {success, returnData} by the
+            // allowFailure branch contract.
+            // oxlint-disable-next-line anti-slop/no-chained-type-assertions -- the assertion narrows a documented multicall union to the branch it was decoded for.
             lensResults as unknown as ReadonlyArray<{
               success: boolean;
               returnData: `0x${string}`;
@@ -4005,7 +4008,7 @@ export const AdapterLive = Layer.effect(
           const full = yield* Effect.tryPromise({
             try: () => getPoolStatesWithBinsImpl(poolAddresses),
             catch: (e) => new Error(`getPoolStatesWithBins: ${underlyingErrorMessage(e)}`),
-          }).pipe(Effect.catch(() => Effect.succeed(null)));
+          }).pipe(Effect.orElseSucceed(() => null));
           return full ?? new Map<string, { state: PoolState; bins: BinArray | null }>();
         }),
       getBinArrays: (poolAddresses) =>
@@ -4013,7 +4016,7 @@ export const AdapterLive = Layer.effect(
           const full = yield* Effect.tryPromise({
             try: () => getPoolStatesWithBinsImpl(poolAddresses),
             catch: (e) => new Error(`getBinArrays: ${underlyingErrorMessage(e)}`),
-          }).pipe(Effect.catch(() => Effect.succeed(null)));
+          }).pipe(Effect.orElseSucceed(() => null));
           const out = new Map<string, BinArray | null>();
           for (const p of poolAddresses) {
             const entry = full?.get(p.toLowerCase());
@@ -4098,7 +4101,7 @@ export const AdapterLive = Layer.effect(
             return usd0 + usd1;
           },
           catch: () => null,
-        }).pipe(Effect.catch(() => Effect.succeed(null))),
+        }).pipe(Effect.orElseSucceed(() => null)),
       getAllPositionValuesUsd: (wallet) =>
         Effect.tryPromise({
           try: async () => {
@@ -5194,7 +5197,7 @@ export const AdapterLive = Layer.effect(
             });
             return 0n;
           },
-        }).pipe(Effect.catch(() => Effect.succeed(0n))),
+        }).pipe(Effect.orElseSucceed(() => 0n)),
       swapUSDCForNative: (minNativeThreshold, swapAmountStable) =>
         Effect.tryPromise({
           try: async () => {
@@ -5252,7 +5255,7 @@ export const AdapterLive = Layer.effect(
               error: underlyingErrorMessage(e),
             });
           },
-        }).pipe(Effect.catch(() => Effect.void)),
+        }).pipe(Effect.ignore),
       getTokenBalance: (mint) =>
         Effect.tryPromise({
           try: async () => (walletAddress ? getBalance(mint, walletAddress) : 0n),
@@ -5388,7 +5391,9 @@ export const AdapterLive = Layer.effect(
             const calldata = decodePreparedCalldata(prepared.transactionBase64);
             const target = raw.router === "universalrouter" ? UNIVERSAL_ROUTER : V3_SWAP_ROUTER_02;
             await publicClient.call({ account: owner, to: target, data: calldata });
-            return { successful: true, logs: [], unitsConsumed: null };
+            // SAFETY: the simulated call above resolved without throwing, so the
+            // success discriminant is the literal `true` SwapSimulation requires.
+            return { successful: true as const, logs: [], unitsConsumed: null };
           },
           catch: (e) => new Error(`simulateSwap: ${underlyingErrorMessage(e)}`),
         }),

@@ -17,6 +17,7 @@ import { Effect } from "effect";
 import { join } from "path";
 import { getBeamUserConfigDir } from "./paths.js";
 import { readTelemetryPreference } from "./telemetry-preference.js";
+import { isCloudEnabled } from "./cloud-switch.js";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -89,7 +90,7 @@ function readBeamApiKey(): Effect.Effect<string | null, never> {
       return typeof value.apiKey === "string" && value.apiKey.length > 0 ? value.apiKey : null;
     },
     catch: (cause) => (cause instanceof Error ? cause : new Error(String(cause))),
-  }).pipe(Effect.catch(() => Effect.succeed(null)));
+  }).pipe(Effect.orElseSucceed(() => null));
 }
 
 // ─── Sanitization patterns ───────────────────────────────────────────────────
@@ -195,7 +196,10 @@ export class ErrorReporter {
       typeof process !== "undefined" ? process.env.BEAM_ERROR_REPORTING : undefined;
     const optOut = config.optOut ?? !readTelemetryPreference().enabled;
     const explicitEnabled = config.enabled ?? reportingEnv !== "false";
-    const envDisabled = reportingEnv === "false";
+    // Standalone mode kills only the default Beam cloud endpoint: an explicitly
+    // configured collector (BEAM_ERROR_ENDPOINT / config.endpoint) still works.
+    const cloudOff = explicitEndpoint === undefined && !isCloudEnabled();
+    const envDisabled = reportingEnv === "false" || cloudOff;
     this.endpoint =
       explicitEndpoint ??
       (explicitEnabled && !envDisabled && !optOut ? DEFAULT_ERROR_ENDPOINT : undefined);

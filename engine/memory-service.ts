@@ -8,7 +8,7 @@ export const MemoryLive = Layer.effect(
     const db = yield* DbService;
 
     const api: MemoryApi = {
-      initialize: () => Effect.succeed(void 0),
+      initialize: () => Effect.void,
 
       upsert: (entry) =>
         Effect.gen(function* () {
@@ -24,14 +24,9 @@ export const MemoryLive = Layer.effect(
         }),
 
       getRelevantContext: (query, topK = 5, poolAddress) =>
-        Effect.gen(function* () {
-          return yield* db.queryMemory(query, topK, poolAddress);
-        }),
+        db.queryMemory(query, topK, poolAddress),
 
-      pruneExpired: () =>
-        Effect.gen(function* () {
-          return yield* db.pruneMemory();
-        }),
+      pruneExpired: () => db.pruneMemory(),
 
       recordOutcome: (poolAddress, action, pnlUsd, context) =>
         Effect.gen(function* () {

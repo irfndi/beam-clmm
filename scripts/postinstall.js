@@ -81,6 +81,10 @@ function getOrCreateInstallId() {
 }
 
 function pingInstall(event) {
+  // The Cloudflare control plane was retired; BEAM_CLOUD_ENABLED is opt-in, so an
+  // unset switch must not fire a POST at an endpoint that no longer exists.
+  const cloud = (process.env.BEAM_CLOUD_ENABLED ?? "").trim().toLowerCase();
+  if (!["1", "true", "yes", "on"].includes(cloud)) return;
   void (async () => {
     try {
       const pkgPath = path.join(REPO_ROOT, "package.json");

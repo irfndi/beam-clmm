@@ -1,4 +1,4 @@
-import Database from "better-sqlite3";
+import { Database } from "bun:sqlite";
 import { existsSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -18,18 +18,18 @@ function getBeamDbPath(): string {
   return path.join(getBeamDataDir(), "beam.db");
 }
 
-function openDb(): InstanceType<typeof Database> | null {
+function openDb(): Database | null {
   const dbPath = getBeamDbPath();
   if (!existsSync(dbPath)) {
     return null;
   }
-  return new Database(dbPath, { readonly: true, fileMustExist: true });
+  return new Database(dbPath, { readonly: true });
 }
 
 // The engine soft-closes positions via closed_at (Wave 4); DBs written by
 // older engines lack the column, so detect it per connection instead of
 // failing the query with "no such column".
-function activePositionsWhere(db: InstanceType<typeof Database>): string {
+function activePositionsWhere(db: Database): string {
   const cols = db.prepare("PRAGMA table_info(positions)").all() as Array<{ name: string }>;
   const hasClosedAt = cols.some((c) => c.name === "closed_at");
   return hasClosedAt
@@ -199,49 +199,6 @@ function registerBeamPositions(server: McpServer): void {
   );
 }
 
-function registerBeamWhoami(server: McpServer): void {
-  server.tool(
-    "beam_whoami",
-    "Show the current Beam cloud account info. Requires `beam register` to have been run first. " +
-      "Returns an error message if not registered.",
-    {},
-    async () => {
-      const result = await runBeam(["whoami"]);
-      if (!result.ok) {
-        if (result.stderr.includes("Not registered") || result.stderr.includes("Run 'beam register'")) {
-          return {
-            content: [
-              {
-                type: "text",
-                text: JSON.stringify(
-                  { registered: false, message: "Not registered. Run 'beam register' first." },
-                  null,
-                  2,
-                ),
-              },
-            ],
-          };
-        }
-        const detail = result.timedOut
-          ? `Command timed out after 30s:\n${result.stderr}`
-          : `Error running \`beam whoami\` (exit ${result.exitCode}):\n${result.stderr}`;
-        return {
-          content: [
-            {
-              type: "text",
-              text: detail,
-            },
-          ],
-          isError: true,
-        };
-      }
-      return {
-        content: [{ type: "text", text: result.stdout }],
-      };
-    },
-  );
-}
-
 function registerBeamBacktest(server: McpServer): void {
   server.tool(
     "beam_backtest",
@@ -288,6 +245,5 @@ function registerBeamBacktest(server: McpServer): void {
 export function registerAllTools(server: McpServer): void {
   registerBeamStatus(server);
   registerBeamPositions(server);
-  registerBeamWhoami(server);
   registerBeamBacktest(server);
 }

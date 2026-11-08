@@ -11,12 +11,15 @@
  *   - HOLD: live per-position confidence (fee/IL > minFeeIlRatio + no recent
  *     warnings → min(0.6 + feeIlRatio·0.05, 0.9); otherwise the pool-default
  *     HOLD at confidence 0.5).
- *   - ENTER mega-gate, in live order: per-pool position-cap slot, [fee-il-gate]
- *     hard floor, ×1.5 candidate conditions (fee/IL, volume authenticity,
- *     bin utilization, TVL), challenge hard floor + per-pool loss cooldown,
- *     weighted entry score, per-pool allocation cap (incl. the challenge
- *     pool-share cap), then ENTER with the live confidence
- *     min(0.5 + feeIlRatio·0.05, 0.85) sized by the allocation headroom.
+ *   - ENTER mega-gate, in live order: the shared quality floors from
+ *     engine/entry-gates.ts ([fee-il-gate], [fee-gas-gate], ×1.5 candidate
+ *     conditions — fee/IL, volume authenticity, bin utilization, TVL), then the
+ *     challenge score/age/hard-floor/loss-cooldown gates, then the shared
+ *     weighted-score + allocation tail (incl. the challenge pool-share cap),
+ *     then ENTER with the live confidence min(0.5 + feeIlRatio·0.05, 0.85)
+ *     sized by the allocation headroom. The quality floors, the score and the
+ *     allocation are the SAME functions the live branch runs, so a replay
+ *     decision and a live decision can only differ where this file says so.
  *   - Confidence formulas and `evaluateRisk` overlay are the live ones.
  *
  * Remaining delta (live branches NOT replayed — see program.ts):
@@ -37,8 +40,8 @@
  *     the live pool metrics; challenge rotation uses `drawdown24hPct` input
  *     (snapshots do not persist Krystal drawdown).
  */
-import { evaluateRisk, evaluatePerPoolAllocation, type RiskConfig } from "../risk-service.js";
-import { weightedEntryScore } from "../strategy-service.js";
+import { evaluateRisk, type RiskConfig } from "../risk-service.js";
+import { evaluateEntryGates, qualityGateViolation, type EntryGateInput } from "../entry-gates.js";
 import { challengePoolScore, challengeRotationSignal } from "../challenge-strategy.js";
 import type { AgentDecision, PoolMetrics, Position, SignalWeights } from "../types.js";
 import type { RiskContext } from "../services.js";
@@ -305,93 +308,49 @@ function replayHoldDecision(
       : `No strong signal. Fee/IL: ${feeIlRatio.toFixed(2)}`,
   };
 }
-function replayEnterAllocation(
-  input: ReplayEvaluationInput,
-  feeIlRatio: number,
-  volumeAuth: number,
-  poolAddress: string,
-): AgentDecision | null {
-  const entryScore = weightedEntryScore(
-    metrics_for_enter(input),
-    input.signalWeights ?? DEFAULT_SIGNAL_WEIGHTS,
-  );
-  if (entryScore <= input.weightedEntryScoreThreshold) return null;
-  // SAFETY: allocationArgs is built field-by-field from ReplayEvaluationInput
-  // with the same shapes evaluatePerPoolAllocation consumes; the assertion
-  // only names that evaluated parameter contract.
-  const allocationArgs = {
-    proposedDepositUsd: input.proposedSizeUsd,
+/**
+ * The shared gate input (engine/entry-gates.ts) built from the replay's parity
+ * knobs: the same config subset the live engine reads, the snapshot metrics,
+ * and the replay's own sizing rule. The allocation cap counts exactly what this
+ * branch can see (the replay's open book).
+ */
+export function replayEntryGateInput(input: ReplayEvaluationInput): EntryGateInput {
+  const poolPositions = input.openPositions.filter((p) => p.poolAddress === input.poolAddress);
+  return {
+    config: {
+      minPoolTvlUsd: input.minPoolTvlUsd,
+      minFeeIlRatio: input.minFeeIlRatio,
+      weightedEntryScoreThreshold: input.weightedEntryScoreThreshold,
+      maxPerPoolAllocationPct: input.risk.maxPerPoolAllocationPct,
+      maxOpenPositions: input.maxOpenPositions,
+      maxPositionsPerPool: input.risk.maxPositionsPerPool,
+      ilProtectionEnabled: input.ilProtectionEnabled,
+      ...(input.enterRoundTripGasUsd !== undefined && {
+        enterRoundTripGasUsd: input.enterRoundTripGasUsd,
+      }),
+      ...(input.enterMin7dFeeOverGas !== undefined && {
+        enterMin7dFeeOverGas: input.enterMin7dFeeOverGas,
+      }),
+      ...(input.challengePoolShareCapPct !== undefined && {
+        challengePoolShareCapPct: input.challengePoolShareCapPct,
+      }),
+    },
+    poolAddress: input.poolAddress,
+    poolTvlUsd: input.poolTvlUsd,
+    poolFees24hUsd: input.metrics.pool.fees24hUsd,
+    metrics: input.metrics,
+    proposedSizeUsd: input.proposedSizeUsd,
+    feeIlRatio: input.metrics.feeIlRatio,
+    volumeAuth: input.metrics.volumeAuthenticity,
+    binUtilization: input.metrics.binUtilization,
+    signalWeights: input.signalWeights ?? DEFAULT_SIGNAL_WEIGHTS,
+    minFeeIlRatio: input.minFeeIlRatio,
+    volumeAuthThreshold: input.volumeAuthThreshold,
     portfolioValueUsd: input.portfolioValueUsd,
     openPositions: input.openPositions.map(toRiskPosition),
-    maxPerPoolAllocationPct: input.risk.maxPerPoolAllocationPct,
-    maxOpenPositions: input.maxOpenPositions,
-    poolAddress,
-    maxPositionsPerPool: input.risk.maxPositionsPerPool,
-    poolTvlUsd: input.poolTvlUsd,
-  } as Parameters<typeof evaluatePerPoolAllocation>[0];
-  if (input.challengePoolShareCapPct !== undefined) {
-    Object.assign(allocationArgs, { challengePoolShareCapPct: input.challengePoolShareCapPct });
-  }
-  const allocation = evaluatePerPoolAllocation(allocationArgs);
-  if (!allocation.approved) return null;
-  return {
-    action: "ENTER",
-    poolAddress,
-    confidence: Math.min(0.5 + feeIlRatio * 0.05, 0.85),
-    reasoning: `Strong pool: Fee/IL ${feeIlRatio.toFixed(2)}, auth ${volumeAuth.toFixed(2)}, TVL $${input.poolTvlUsd.toFixed(0)}`,
-    positionSizeUsd: allocation.adjustedDepositUsd,
+    ownBookOpenPositions: input.openPositions.length,
+    ownBookPoolPositions: poolPositions.length,
   };
-}
-function metrics_for_enter(input: ReplayEvaluationInput): PoolMetrics {
-  return input.metrics;
-}
-function isPoolCandidateGateBlocked(
-  input: ReplayEvaluationInput,
-  feeIlRatio: number,
-  volumeAuth: number,
-): boolean {
-  // Live parity: modeled-fee pools face the env volume bar, measured pools 0.8.
-  const volumeBar = input.metrics.feeIlRatioKnown ? 0.8 : input.volumeAuthThreshold;
-  return (
-    !(input.metrics.feeIlRatioKnown ? feeIlRatio > input.minFeeIlRatio * 1.5 : true) ||
-    !input.metrics.volumeAuthenticityKnown ||
-    volumeAuth < volumeBar ||
-    !input.metrics.binUtilizationKnown ||
-    input.metrics.binUtilization <= 0.4 ||
-    input.poolTvlUsd <= input.minPoolTvlUsd * 2
-  );
-}
-function replayEnterPoolCapGate(input: ReplayEvaluationInput): string | null {
-  const poolPositions = input.openPositions.filter((p) => p.poolAddress === input.poolAddress);
-  if (poolPositions.length >= input.risk.maxPositionsPerPool) {
-    return `Per-pool position cap reached (${poolPositions.length}/${input.risk.maxPositionsPerPool}) for pool ${input.poolAddress}`;
-  }
-  return null;
-}
-function replayFeeIlGate(input: ReplayEvaluationInput, feeIlRatio: number): string | null {
-  if (
-    input.ilProtectionEnabled === true &&
-    input.metrics.feeIlRatioKnown &&
-    feeIlRatio < input.minFeeIlRatio
-  ) {
-    return `[fee-il-gate] Fee/IL ratio ${feeIlRatio.toFixed(2)} below minimum ${input.minFeeIlRatio} — expected fees cannot beat IL`;
-  }
-  return null;
-}
-function replayFeeGasGate(input: ReplayEvaluationInput): string | null {
-  if (
-    (input.enterRoundTripGasUsd ?? 0) > 0 &&
-    input.metrics.pool.fees24hUsd > 0 &&
-    input.poolTvlUsd > 0 &&
-    input.metrics.pool.fees24hUsd * (input.proposedSizeUsd / input.poolTvlUsd) * 7 <
-      (input.enterRoundTripGasUsd ?? 0) * (input.enterMin7dFeeOverGas ?? 1)
-  ) {
-    const expected7d =
-      input.metrics.pool.fees24hUsd * (input.proposedSizeUsd / input.poolTvlUsd) * 7;
-    const gasCost = (input.enterRoundTripGasUsd ?? 0) * (input.enterMin7dFeeOverGas ?? 1);
-    return `[fee-gas-gate] expected 7d fees $${expected7d.toFixed(3)} < round-trip gas $${gasCost.toFixed(3)} — entry cannot pay for itself`;
-  }
-  return null;
 }
 function replayChallengeScoreGate(
   input: ReplayEvaluationInput,
@@ -438,34 +397,20 @@ function replayLossCooldownGate(input: ReplayEvaluationInput): string | null {
   if ((input.nowMs ?? Date.now()) >= (input.lossCooldownUntilMs ?? 0)) return null;
   return "[loss-cooldown] pool recently realized a loss — re-entry barred";
 }
-function replayEnterGateRejectionReason(
+/**
+ * The challenge gates this branch models on top of the shared stack, evaluated
+ * between the quality floors and the weighted score exactly as the live ENTER
+ * branch orders them.
+ */
+function replayChallengeEnterGates(
   input: ReplayEvaluationInput,
-  feeIlRatio: number,
-  volumeAuth: number,
   challengeScore: number,
 ): string | null {
-  const weightedGate = (() => {
-    const entryScore = weightedEntryScore(
-      metrics_for_enter(input),
-      input.signalWeights ?? DEFAULT_SIGNAL_WEIGHTS,
-    );
-    if (entryScore <= input.weightedEntryScoreThreshold) {
-      return `[weighted-score] score ${entryScore.toFixed(3)} <= threshold ${input.weightedEntryScoreThreshold}`;
-    }
-    return null;
-  })();
   return (
-    replayEnterPoolCapGate(input) ??
-    replayFeeIlGate(input, feeIlRatio) ??
-    replayFeeGasGate(input) ??
-    (isPoolCandidateGateBlocked(input, feeIlRatio, volumeAuth)
-      ? "[candidate-gate] pool failed the ×1.5 candidate conditions"
-      : null) ??
     replayChallengeScoreGate(input, challengeScore) ??
     replayChallengeAgeGate(input) ??
     replayChallengeHardFloorGate(input) ??
-    replayLossCooldownGate(input) ??
-    weightedGate
+    replayLossCooldownGate(input)
   );
 }
 function replayRiskTail(
@@ -529,30 +474,37 @@ export function evaluateReplayPool(input: ReplayEvaluationInput): ReplayEvaluati
 
   // ── ENTER mega-gate (one slot per pool per cycle) ─────────────────────────
   if (!decision && !position) {
-    const gateRejection = replayEnterGateRejectionReason(
-      input,
-      feeIlRatio,
-      volumeAuth,
-      challengeScore,
-    );
-    if (gateRejection !== null) {
+    const gate = replayEntryGateInput(input);
+    // Live order: quality floors → challenge gates → weighted score →
+    // allocation. The quality floors are re-evaluated inside
+    // `evaluateEntryGates`; they are pure, so interleaving the challenge gates
+    // only decides which reason a rejected ENTER reports.
+    const quality = qualityGateViolation(gate);
+    const challenge = quality === null ? replayChallengeEnterGates(input, challengeScore) : null;
+    const rejection = quality !== null ? quality.reason : challenge;
+    if (rejection !== null) {
       decision = {
         action: "HOLD",
         poolAddress,
         confidence: 0,
-        reasoning: `[enter-gate] ${gateRejection}`,
+        reasoning: `[enter-gate] ${rejection}`,
       };
     } else {
-      const entered = replayEnterAllocation(input, feeIlRatio, volumeAuth, poolAddress);
-      if (entered) {
-        decision = entered;
+      const verdict = evaluateEntryGates(gate);
+      if (verdict.approved) {
+        decision = {
+          action: "ENTER",
+          poolAddress,
+          confidence: Math.min(0.5 + feeIlRatio * 0.05, 0.85),
+          reasoning: `Strong pool: Fee/IL ${feeIlRatio.toFixed(2)}, auth ${volumeAuth.toFixed(2)}, TVL $${input.poolTvlUsd.toFixed(0)}`,
+          positionSizeUsd: verdict.positionSizeUsd,
+        };
       } else {
-        // Allocation gate inside replayEnterAllocation failed late (e.g. per-pool allocation cap)
         decision = {
           action: "HOLD",
           poolAddress,
           confidence: 0,
-          reasoning: "[enter-gate] [alloc-gate] allocation failed",
+          reasoning: `[enter-gate] ${verdict.reason}`,
         };
       }
     }

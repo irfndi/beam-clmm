@@ -126,7 +126,7 @@ scenario_s2() {
 
 # ---- S3: Bun version check ----
 scenario_s3() {
-  bold "S3: install.sh rejects bun < 1.4.0 (lockfile v2 requires it)"
+  bold "S3: install.sh rejects bun < 1.4.4 (lockfile v2 requires it)"
   # We use a stub PATH that points to a directory containing a fake `bun`
   # binary that prints a too-old version. Expect a non-zero exit and an
   # error message that mentions the minimum version.
@@ -154,7 +154,7 @@ EOF
     *"bun version"*|*"bun-version"*|*"Bun 1.4"*|*"requires Bun 1.4"*|*"minimum bun"*|*"minimum version"*) matched=1 ;;
   esac
   case "$body" in
-    *"1.4.0"*) matched=1 ;;
+    *"1.4.4"*) matched=1 ;;
   esac
   case "$body" in
     *"too old"*) matched=1 ;;
@@ -167,8 +167,8 @@ EOF
     printf "  %s bun-version-mismatch message present\n" "$(green PASS)"
   else
     FAIL=$((FAIL + 1))
-    FAILED_NAMES+=("S3: bun < 1.4.0 is rejected with a clear message")
-    printf "  %s S3: bun < 1.4.0 is rejected with a clear message\n" "$(red FAIL)"
+    FAILED_NAMES+=("S3: bun < 1.4.4 is rejected with a clear message")
+    printf "  %s S3: bun < 1.4.4 is rejected with a clear message\n" "$(red FAIL)"
     printf "       body (first 400):\n       %s\n" "${body:0:400}"
   fi
   rm -rf "$tmp"

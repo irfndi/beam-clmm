@@ -21,6 +21,7 @@ import type {
   TokenCandidateState,
 } from "./types.js";
 import { DbService, type DbApi } from "./services.js";
+import type { DecisionJournalRecord } from "./decision-journal.js";
 import { bigintReplacer } from "./bigint-json.js";
 import { randomUUID } from "crypto";
 import { PersistenceContractError } from "./errors.js";
@@ -507,6 +508,45 @@ export const DbLive = (dbPath?: string) =>
             return rows.map(rowToAudit);
           }),
 
+        saveDecisionJournal: (record) =>
+          Effect.sync(() => {
+            runOne(
+              db,
+              `INSERT OR REPLACE INTO decision_journal (
+              id, timestamp, cycle_id, pool_address, position_id, engine, kind,
+              action, confidence, reasoning, ev_usd, cost_usd, min_size_usd,
+              regime, facts_json, signals_json, decision_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+              record.id,
+              record.timestamp,
+              record.cycleId,
+              record.poolAddress,
+              record.positionId,
+              record.engine,
+              record.kind,
+              record.action,
+              record.confidence,
+              record.reasoning,
+              record.evUsd,
+              record.costUsd,
+              record.minSizeUsd,
+              record.regime,
+              record.factsJson,
+              record.signalsJson,
+              record.decisionJson,
+            );
+          }),
+
+        getRecentDecisionJournal: (limit) =>
+          Effect.sync(() => {
+            const rows = queryAll<SqlRawRow>(
+              db,
+              "SELECT * FROM decision_journal ORDER BY timestamp DESC LIMIT ?",
+              limit,
+            );
+            return rows.map(rowToDecisionJournal);
+          }),
+
         cacheBlacklist: (type, values) =>
           Effect.sync(() => {
             db.transaction(() => {
@@ -535,7 +575,7 @@ export const DbLive = (dbPath?: string) =>
 
         insertMemory: (entry) =>
           hasVecMemoryTable(db)
-            ? Effect.catch(
+            ? Effect.catchIf(
                 Effect.gen(function* () {
                   const id = randomUUID();
                   const now = Date.now();
@@ -572,13 +612,14 @@ export const DbLive = (dbPath?: string) =>
                     catch: toError,
                   });
                 }),
-                (e) => (isVecMemoryMissingError(e) ? Effect.void : Effect.fail(e)),
+                (e) => isVecMemoryMissingError(e),
+                () => Effect.void,
               )
             : Effect.void,
 
         queryMemory: (queryText, topK, poolAddress) =>
           hasVecMemoryTable(db)
-            ? Effect.catch(
+            ? Effect.catchIf(
                 Effect.gen(function* () {
                   const now = Date.now();
                   const embedding = yield* getEmbedding(queryText);
@@ -670,14 +711,15 @@ export const DbLive = (dbPath?: string) =>
                     expiresAt: Number(row.expiresAt ?? 0),
                   }));
                 }),
-                (e) => (isVecMemoryMissingError(e) ? Effect.succeed([]) : Effect.fail(e)),
+                (e) => isVecMemoryMissingError(e),
+                () => Effect.succeed([]),
               )
             : Effect.succeed([]),
 
         pruneMemory: () =>
           hasVecMemoryTable(db)
-            ? Effect.catch(
-                Effect.sync(() => {
+            ? Effect.try({
+                try: () => {
                   const now = Date.now();
                   // sqlite-vec doesn't support DELETE with WHERE on virtual tables directly in all versions,
                   // so we find expired IDs and delete them
@@ -690,8 +732,13 @@ export const DbLive = (dbPath?: string) =>
                     runOne(db, "DELETE FROM vec_memory WHERE rowid = ?", rowid);
                   }
                   return rows.length;
-                }),
-                (e) => (isVecMemoryMissingError(e) ? Effect.succeed(0) : Effect.fail(e)),
+                },
+                catch: toError,
+              }).pipe(
+                Effect.catchIf(
+                  (e) => isVecMemoryMissingError(e),
+                  () => Effect.succeed(0),
+                ),
               )
             : Effect.succeed(0),
 
@@ -1778,6 +1825,45 @@ function rowToAudit(row: SqlRawRow): AuditRecord {
     paperTrading: Boolean(row.paper_trading),
     txSignature: row.tx_signature ? readSqlText(row.tx_signature) : null,
     error: row.error ? readSqlText(row.error) : null,
+  };
+}
+
+function parseJournalEngine(value: unknown): "legacy" | "rules" {
+  return value === "rules" ? "rules" : "legacy";
+}
+
+function parseJournalKind(value: unknown): DecisionJournalRecord["kind"] {
+  if (value === "suppressed" || value === "executed" || value === "shadow") return value;
+  return "proposed";
+}
+
+function nullableSqlNumber(value: unknown): number | null {
+  return value === null || value === undefined ? null : Number(value);
+}
+
+function nullableSqlText(value: SqlRawCell): string | null {
+  return value ? readSqlText(value) : null;
+}
+
+function rowToDecisionJournal(row: SqlRawRow): DecisionJournalRecord {
+  return {
+    id: String(row.id),
+    timestamp: Number(row.timestamp ?? 0),
+    cycleId: readSqlText(row.cycle_id),
+    poolAddress: readSqlText(row.pool_address),
+    positionId: nullableSqlText(row.position_id),
+    engine: parseJournalEngine(row.engine),
+    kind: parseJournalKind(row.kind),
+    action: readSqlText(row.action),
+    confidence: Number(row.confidence ?? 0),
+    reasoning: readSqlText(row.reasoning),
+    evUsd: nullableSqlNumber(row.ev_usd),
+    costUsd: nullableSqlNumber(row.cost_usd),
+    minSizeUsd: nullableSqlNumber(row.min_size_usd),
+    regime: nullableSqlText(row.regime),
+    factsJson: nullableSqlText(row.facts_json),
+    signalsJson: nullableSqlText(row.signals_json),
+    decisionJson: nullableSqlText(row.decision_json),
   };
 }
 

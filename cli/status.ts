@@ -14,9 +14,17 @@ import { AdapterLive } from "../engine/adapter-service.js";
 import {
   computeSummaryWithEquity,
   readCliWalletBalance,
-  toJsonOutput,
   type PortfolioSummary,
 } from "./portfolio.js";
+import {
+  autonomousStatus,
+  buildOperatorStatus,
+  decisionStatusFromRecord,
+  portfolioStatusFromSummary,
+  positionStatusesFromRecords,
+  type OperatorStatus,
+} from "../engine/operator-status.js";
+import { getCurrentVersion } from "../engine/version.js";
 import { createLogger } from "../engine/logger.js";
 import { readLockfile, isProcessAlive, findRunningEngineProcess } from "./lockfile.js";
 import { getBeamDbPath } from "../engine/paths.js";
@@ -96,73 +104,7 @@ export function classifyStrandedSettlement(input: {
   return valueUsd >= input.dustUsd ? { kind: "stranded", valueUsd } : { kind: "dust", valueUsd };
 }
 
-export interface StatusJsonOutput {
-  running: boolean;
-  dbPath: string;
-  timestamp: string;
-  agentRuntime: {
-    enabled: boolean;
-    runtime: string;
-    acpCommand: string;
-    gatewayUrl: string;
-    checkinIntervalMs: number;
-    checkinOnEvents: boolean;
-  };
-  portfolio: PortfolioSummary;
-  positions: ReturnType<typeof toJsonOutput>["positions"];
-  recentDecisions: Array<{
-    timestamp: string;
-    action: string;
-    pool: string;
-    confidence: number;
-    reasoning: string;
-    executed: boolean;
-    paperTrading: boolean;
-  }>;
-  autonomous: {
-    mode: "off" | "shadow" | "canary" | "live";
-    walletAddress: string | null;
-    agentInstanceId: string;
-    candidates: Array<{
-      id: string;
-      state: string;
-      poolAddress: string;
-      tokenMint: string;
-      healthyScanCount: number;
-      updatedAt: string;
-    }>;
-    operations: Array<{
-      id: string;
-      candidateId: string | null;
-      positionId: string | null;
-      type: string;
-      status: string;
-      poolAddress: string;
-      tokenMint: string;
-      txSignature: string | null;
-      error: string | null;
-      updatedAt: string;
-    }>;
-    settlements: Array<{
-      id: string;
-      positionId: string;
-      status: string;
-      poolAddress: string;
-      tokenMint: string;
-      attempts: number;
-      nextRetryAt: string | null;
-      expiresAt: string;
-      txSignature: string | null;
-      error: string | null;
-    }>;
-    safetyPause: {
-      active: boolean;
-      reason: string;
-      triggeredAt: string;
-      resolvedAt: string | null;
-    } | null;
-  };
-}
+export type StatusJsonOutput = OperatorStatus;
 
 function buildProgram(): Layer.Layer<
   DbService | AuditService | ConfigService | AdapterService,
@@ -199,10 +141,12 @@ interface StatusReportContext {
 }
 
 function printStatusJson(ctx: StatusReportContext): void {
-  const json: StatusJsonOutput = {
+  const status = buildOperatorStatus({
+    source: "cli",
     running: ctx.running,
+    version: getCurrentVersion(),
     dbPath: process.env.SQLITE_DB_PATH ?? getBeamDbPath(),
-    timestamp: new Date().toISOString(),
+    lastCycleAt: ctx.recentAudit[0]?.timestamp ?? null,
     agentRuntime: {
       enabled: ctx.config.agentiveMode,
       runtime: ctx.config.agentRuntime,
@@ -211,72 +155,20 @@ function printStatusJson(ctx: StatusReportContext): void {
       checkinIntervalMs: ctx.config.agentCheckinIntervalMs,
       checkinOnEvents: ctx.config.agentCheckinOnEvents,
     },
-    portfolio: ctx.summary,
-    positions: toJsonOutput(ctx.activePositions, ctx.prices).positions,
-    recentDecisions: ctx.recentAudit.slice(0, 10).map((d) => ({
-      timestamp: new Date(d.timestamp).toISOString(),
-      action: d.action,
-      pool: d.poolAddress,
-      confidence: d.confidence,
-      reasoning: d.reasoning,
-      executed: d.executed,
-      paperTrading: d.paperTrading,
-    })),
-    autonomous: {
+    portfolio: portfolioStatusFromSummary(ctx.summary),
+    positions: positionStatusesFromRecords(ctx.activePositions, ctx.prices),
+    decisions: ctx.recentAudit.slice(0, 10).map(decisionStatusFromRecord),
+    autonomous: autonomousStatus({
       mode: ctx.config.autonomousTokenMode,
       walletAddress: ctx.walletAddress,
       agentInstanceId: ctx.config.agentInstanceId,
-      candidates: ctx.autonomous.candidates.map((candidate) => ({
-        id: candidate.id,
-        state: candidate.state,
-        poolAddress: candidate.poolAddress,
-        tokenMint: candidate.tokenMint,
-        healthyScanCount: candidate.healthyScanCount,
-        updatedAt: new Date(candidate.updatedAt).toISOString(),
-      })),
-      operations: ctx.autonomous.operations.map((operation) => ({
-        id: operation.id,
-        candidateId: operation.candidateId,
-        positionId: operation.positionId,
-        type: operation.operationType,
-        status: operation.status,
-        poolAddress: operation.poolAddress,
-        tokenMint: operation.tokenMint,
-        txSignature: operation.txSignature,
-        error: operation.error,
-        updatedAt: new Date(operation.updatedAt).toISOString(),
-      })),
-      settlements: ctx.autonomous.settlements.map((settlement) => ({
-        id: settlement.id,
-        positionId: settlement.positionId,
-        status: settlement.status,
-        poolAddress: settlement.poolAddress,
-        tokenMint: settlement.tokenMint,
-        amountAtomic: settlement.amountAtomic,
-        confirmedOutputAtomic: settlement.confirmedOutputAtomic,
-        attempts: settlement.attempts,
-        nextRetryAt:
-          settlement.nextRetryAt === null ? null : new Date(settlement.nextRetryAt).toISOString(),
-        expiresAt: new Date(settlement.expiresAt).toISOString(),
-        createdAt: new Date(settlement.createdAt).toISOString(),
-        txSignature: settlement.txSignature,
-        error: settlement.error,
-      })),
-      safetyPause:
-        ctx.autonomous.safetyPause === null
-          ? null
-          : {
-              active: ctx.autonomous.safetyPause.resolvedAt === null,
-              reason: ctx.autonomous.safetyPause.reason,
-              triggeredAt: new Date(ctx.autonomous.safetyPause.triggeredAt).toISOString(),
-              resolvedAt:
-                ctx.autonomous.safetyPause.resolvedAt === null
-                  ? null
-                  : new Date(ctx.autonomous.safetyPause.resolvedAt).toISOString(),
-            },
-    },
-  };
-  console.log(JSON.stringify(json, null, 2));
+      candidates: ctx.autonomous.candidates,
+      operations: ctx.autonomous.operations,
+      settlements: ctx.autonomous.settlements,
+      safetyPause: ctx.autonomous.safetyPause,
+    }),
+  });
+  console.log(JSON.stringify(status, null, 2));
 }
 
 function printStatusMessage(ctx: StatusReportContext): void {
@@ -410,7 +302,7 @@ function fetchStrandedClassification(
       // Unpriceable — fall back to per-mint fetches, deduplicated (one
       // fetch per unique mint, not per settlement).
       Effect.catchCause(() =>
-        Effect.all(candidateMints.map(resolvePriceForMint), { concurrency: 4 }).pipe(
+        Effect.forEach(candidateMints, resolvePriceForMint, { concurrency: 4 }).pipe(
           Effect.map((results) => new Map(results.map((r) => [r.mint, r]))),
         ),
       ),
@@ -421,25 +313,23 @@ function fetchStrandedClassification(
     // (→ Unpriceable — a retry can never succeed). Deduplicated per
     // unique mint, bounded concurrency.
     const decimalsLookup = new Map<string, { state: StrandedLookupState; value: number }>();
-    yield* Effect.all(
-      candidateMints
-        .filter((mint) => priceLookup.get(mint)?.state === "ok")
-        .map((mint) =>
-          adapter.getTokenDecimals(mint).pipe(
-            Effect.map((decimals) => {
-              const state: StrandedLookupState = decimals > 0 ? "ok" : "unpriceable";
-              return { mint, state, value: decimals };
+    yield* Effect.forEach(
+      candidateMints.filter((mint) => priceLookup.get(mint)?.state === "ok"),
+      (mint) =>
+        adapter.getTokenDecimals(mint).pipe(
+          Effect.map((decimals) => {
+            const state: StrandedLookupState = decimals > 0 ? "ok" : "unpriceable";
+            return { mint, state, value: decimals };
+          }),
+          Effect.catch((err) =>
+            Effect.succeed({
+              mint,
+              state: decimalsFailureState(String(err)),
+              value: 0,
             }),
-            Effect.catch((err) =>
-              Effect.succeed({
-                mint,
-                state: decimalsFailureState(String(err)),
-                value: 0,
-              }),
-            ),
-            Effect.catchCause(() =>
-              Effect.succeed({ mint, state: "unpriceable" as const, value: 0 }),
-            ),
+          ),
+          Effect.catchCause(() =>
+            Effect.succeed({ mint, state: "unpriceable" as const, value: 0 }),
           ),
         ),
       { concurrency: 4 },
@@ -657,7 +547,7 @@ network; with no stranded settlements it is fully offline.`,
           for (const pos of activePositions) {
             const price = yield* db
               .getLatestSnapshotPrice(pos.poolAddress)
-              .pipe(Effect.catch(() => Effect.succeed(null)));
+              .pipe(Effect.orElseSucceed(() => null));
             if (price != null) prices.set(pos.poolAddress, price);
           }
           const hasDb = positions.length > 0 || recentAudit.length > 0;
