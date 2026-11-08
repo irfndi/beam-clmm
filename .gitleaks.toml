@@ -21,8 +21,16 @@ regexes = [
   'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v', # USDC
   'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB', # USDT
   'So11111111111111111111111111111111111111112',  # SOL/wSOL
+  # Public EVM token addresses asserted in fixtures — these are the chain
+  # registry's own weth9 / defaultStablecoinMint constants
+  # (engine/chain-registry.ts), i.e. contracts, not credentials.
+  '0x0[bB][dD]7[dD]308[fF]8[eE]1639[fF][aA][bB]988[dD][fF]18[aA]8011[fF]41[eE][aA][cC][aA][dD]73',
+  '0x5[fF][cC]5360[dD]0400[aA]0[fF][dD]4[fF]2[aA][fF]552[aA][dD][dD]042[dD]716[fF]1[dD]168',
   # Documentation curl examples use an explicit placeholder token.
   'sk-beam-xxx',
+  # Fixture mint label, not a key: the generic-api-key rule matches any
+  # hyphenated identifier assigned to a *mint/token* field in bench fixtures.
+  'unpriceable-1',
 ]
 paths = [
   'engine/db-config\.ts$',
