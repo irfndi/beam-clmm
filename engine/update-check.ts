@@ -37,7 +37,7 @@ function gateUpdateTimeAndFlags(
       return false;
     }
     return true;
-  }).pipe(Effect.catch(() => Effect.succeed(false)));
+  }).pipe(Effect.orElseSucceed(() => false));
 }
 
 export function checkForAutoUpdate(config: AppConfig, db: DbApi): Effect.Effect<void, never> {

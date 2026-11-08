@@ -1,6 +1,6 @@
 {
   "name": "beam-clmm",
-  "version": "0.1.12",
+  "version": "0.1.13",
   "description": "Autonomous concentrated-liquidity agent for Uniswap v3 & v4 on Robinhood Chain",
   "keywords": [
     "ai-agent",
@@ -30,7 +30,7 @@
     "beam": "./scripts/beam.sh"
   },
   "type": "module",
-  "packageManager": "bun@1.4.0",
+  "packageManager": "bun@1.4.4",
   "scripts": {
     "start": "bun $(bun scripts/cli-entry.mjs) dev",
     "dev": "bun run --watch $(bun scripts/cli-entry.mjs) dev",
@@ -41,6 +41,7 @@
     "backtest": "bun $(bun scripts/cli-entry.mjs) backtest",
     "autoresearch": "bun ops/autoresearch.ts",
     "pretest": "tsc --noEmit",
+    "typecheck:fast": "tsrs --noEmit --fast",
     "test": "bun --bun vitest run",
     "test:watch": "bun --bun vitest",
     "lint": "bash scripts/lint.sh",
@@ -50,36 +51,35 @@
     "prepare": "effect-tsgo patch --oxlint || echo \"warning: effect-tsgo patch failed (unsupported platform or version mismatch) — type-aware effect lint disabled\""
   },
   "dependencies": {
-    "@clack/prompts": "^1.7.0",
-    "@uniswap/sdk-core": "^7.19.2",
-    "@uniswap/v3-sdk": "^3.31.3",
-    "@uniswap/v4-sdk": "^2.3.3",
-    "@xenova/transformers": "^2.17.2",
-    "chalk": "^6.0.0",
+    "@clack/prompts": "^1.8.1",
+    "@huggingface/transformers": "^4.3.2",
+    "@uniswap/sdk-core": "^7.20.0",
+    "@uniswap/v3-sdk": "^3.31.8",
+    "@uniswap/v4-sdk": "^2.4.4",
     "commander": "^15.0.0",
-    "dotenv": "^17.4.2",
-    "effect": "4.0.0-rc.112",
+    "effect": "4.1.0",
     "semver": "^7.8.5",
     "sqlite-vec": "^0.1.9",
-    "viem": "^2.56.3"
+    "viem": "^2.57.13"
   },
   "devDependencies": {
-    "@effect/tsgo": "0.41.0",
-    "@oxlint/plugins": "1.81.0",
-    "@types/node": "^26.4.1",
+    "@effect/tsgo": "0.63.0",
+    "@oxlint/plugins": "1.90.0",
+    "@types/node": "^26.6.6",
     "@types/semver": "^7.8.0",
-    "@vitest/coverage-istanbul": "^5.0.0",
-    "bun-types": "1.4.1",
-    "fast-check": "^4.9.0",
+    "@vitest/coverage-istanbul": "^5.0.5",
+    "bun-types": "1.4.4",
+    "fast-check": "^4.10.2",
     "jsbi": "^3.2.5",
-    "oxfmt": "^0.66.0",
-    "oxlint": "^1.81.0",
-    "oxlint-tsgolint": "7.0.2001",
-    "tsdown": "^0.23.0",
+    "oxfmt": "^0.75.0",
+    "oxlint": "^1.90.0",
+    "oxlint-tsgolint": "7.0.2005",
+    "tsdown": "^0.23.4",
+    "tsrs": "0.20.1-ts7.1.0-beta",
     "typescript": "^7.0.2",
-    "vitest": "^5.0.0"
+    "vitest": "^5.0.5"
   },
   "engines": {
-    "bun": ">=1.4.0"
+    "bun": ">=1.4.4"
   }
 }

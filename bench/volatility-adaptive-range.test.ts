@@ -253,15 +253,7 @@ describe("ConfigService Wave 9 env vars", () => {
   });
 
   async function loadConfig() {
-    return Effect.runPromise(
-      Effect.provide(
-        Effect.gen(function* () {
-          return yield* ConfigService;
-        }),
-        ConfigLive,
-        { local: true },
-      ),
-    );
+    return Effect.runPromise(Effect.provide(ConfigService, ConfigLive, { local: true }));
   }
 
   it("defaults: 0 (binStep-tier baseline) and adaptive enabled", async () => {

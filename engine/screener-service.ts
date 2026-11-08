@@ -106,7 +106,7 @@ export const ScreenerLive = (screenerConfig: ScreenerConfig) =>
                     : { ...baseCandidate, createdAtMs: pool.createdAtMs };
                 },
                 catch: (error) => (error instanceof Error ? error : new Error(String(error))),
-              }).pipe(Effect.catch(() => Effect.succeed(null)));
+              }).pipe(Effect.orElseSucceed(() => null));
 
               if (candidate) screened.push(candidate);
             }
@@ -124,7 +124,7 @@ export const ScreenerLive = (screenerConfig: ScreenerConfig) =>
             if (adapter.getBinArrays !== undefined) {
               binsByPool = yield* adapter
                 .getBinArrays(toCheck.map((c) => c.address))
-                .pipe(Effect.catch(() => Effect.succeed(null)));
+                .pipe(Effect.orElseSucceed(() => null));
             }
             const enriched: ScreenedPool[] = [];
             for (const candidate of toCheck) {

@@ -126,10 +126,10 @@ export function detectAgents(config: {
 
     const [hermesPath, openclawPath, gatewayRunning] = yield* Effect.all(
       [
-        which(config.agentAcpCommand).pipe(Effect.catch(() => Effect.succeed(null))),
-        which("openclaw").pipe(Effect.catch(() => Effect.succeed(null))),
+        which(config.agentAcpCommand).pipe(Effect.orElseSucceed(() => null)),
+        which("openclaw").pipe(Effect.orElseSucceed(() => null)),
         isGatewayRunning(config.agentGatewayUrl, config.agentGatewayToken).pipe(
-          Effect.catch(() => Effect.succeed(false)),
+          Effect.orElseSucceed(() => false),
         ),
       ],
       { concurrency: 3 },

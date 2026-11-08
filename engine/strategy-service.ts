@@ -199,15 +199,16 @@ export const DLMMStrategy: StrategyApi = {
     const tvlVelocity = previousTvlUsd > 0 ? (pool.tvlUsd - previousTvlUsd) / previousTvlUsd : 0;
 
     const feeIlRatio = DLMMStrategy.computeFeeIlRatio(pool, binArray, priceDrift);
-    // Fees are MEASURED only under the Data API (real per-pool fee data) — the
-    // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
-    // same definition as feeIlRatioKnown below. Gecko's fees are a binStep
-    // base-rate MODEL, so the fee-rate-band component of volume authenticity
-    // must be skipped for gecko (feesMeasured=false); the real volume/TVL
-    // components stay.
+    // Fees are MEASURED under datapi, krystal and defillama — the same
+    // definition as feeIlRatioKnown below. Gecko's fees are a binStep base-rate
+    // MODEL, so the fee-rate-band component of volume authenticity must be
+    // skipped for gecko (feesMeasured=false); the real volume/TVL components
+    // stay.
     const volumeAuthenticity = DLMMStrategy.checkVolumeAuthenticity(
       pool,
-      pool.statsSource === "datapi" || pool.statsSource === "krystal",
+      pool.statsSource === "datapi" ||
+        pool.statsSource === "krystal" ||
+        pool.statsSource === "defillama",
     );
     const binUtilization = DLMMStrategy.computeBinUtilization(binArray);
 
@@ -239,11 +240,16 @@ export const DLMMStrategy: StrategyApi = {
       // - Heuristic knows nothing (both flags false) — fabricated values would
       //   just re-validate their own assumptions, so no gate touches them.
       volumeAuthenticityKnown: isMeasuredStatsSource(pool.statsSource),
-      // Fees are MEASURED under datapi (legacy) and krystal (verified on-chain
-      // fee income from v4 Swap events — the Robinhood Chain source of truth).
-      // GeckoTerminal fees remain a binStep base-rate MODEL — feeIlRatioKnown
-      // stays false for gecko (see the comment block above).
-      feeIlRatioKnown: pool.statsSource === "datapi" || pool.statsSource === "krystal",
+      // Fees are MEASURED under datapi (legacy), krystal (verified on-chain
+      // fee income from v4 Swap events — the Robinhood Chain source of truth)
+      // and defillama (Base v3 only: DefiLlama's `apyBase` is fee income it
+      // computes from on-chain fee growth, used when Krystal 403s from a
+      // datacenter IP). GeckoTerminal fees remain a binStep base-rate MODEL —
+      // feeIlRatioKnown stays false for gecko (see the comment block above).
+      feeIlRatioKnown:
+        pool.statsSource === "datapi" ||
+        pool.statsSource === "krystal" ||
+        pool.statsSource === "defillama",
       binUtilizationKnown: binArray.reservesKnown !== false,
       // Farm APR only flows from the Data API overlay: a pool with a farm but
       // an unknown APR reports 0 (known farm, no rate), non-farm/unknown null.

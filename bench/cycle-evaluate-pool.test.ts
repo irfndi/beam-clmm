@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { evaluateReplayPool } from "../engine/cycle/evaluate-pool.js";
+import { evaluateReplayPool, replayEntryGateInput } from "../engine/cycle/evaluate-pool.js";
+import { evaluateEntryGates, type EntryGateCode } from "../engine/entry-gates.js";
 import { evaluateRisk } from "../engine/risk-service.js";
 import type { PoolMetrics, PoolState, Position } from "../engine/types.js";
 import type { ReplayEvaluationInput } from "../engine/cycle/evaluate-pool.js";
@@ -502,7 +503,8 @@ describe("evaluateReplayPool", () => {
     });
 
     expect(result.decision.action).toBe("HOLD");
-    expect(result.decision.reasoning).toContain("candidate-gate");
+    // Same tagged reason the live branch reports through entry-gates.ts.
+    expect(result.decision.reasoning).toContain("volume authenticity unknown");
   });
 
   it("exits on the challenge-rotation drawdown (Krystal 24h drawdown)", () => {
@@ -603,5 +605,137 @@ describe("evaluateReplayPool", () => {
     // 1% of $150k TVL = $1,500 headroom beats the 40% portfolio cap ($4,000).
     expect(result.decision.action).toBe("ENTER");
     expect(result.decision.positionSizeUsd).toBe(1_500);
+  });
+});
+
+describe("replay/live ENTER gate parity", () => {
+  // The replay builds the shared gate input from its parity knobs and runs the
+  // SAME engine/entry-gates.ts stack the live ENTER branch runs. Each case
+  // pins the shared verdict code and the reason the replay reports.
+  interface ParityCase {
+    readonly name: string;
+    readonly expected: EntryGateCode;
+    readonly tag: string;
+    readonly build: () => ReplayEvaluationInput;
+  }
+
+  const parityCases: ReadonlyArray<ParityCase> = [
+    {
+      name: "fee/IL floor",
+      expected: "fee-il-floor",
+      tag: "[fee-il-gate]",
+      build: () => ({
+        ...base,
+        position: undefined,
+        openPositions: [],
+        metrics: { ...metrics, feeIlRatio: 0.9 },
+      }),
+    },
+    {
+      name: "round-trip gas floor",
+      expected: "fee-gas-floor",
+      tag: "[fee-gas-gate]",
+      build: () => ({
+        ...base,
+        position: undefined,
+        openPositions: [],
+        enterRoundTripGasUsd: 0.15,
+        enterMin7dFeeOverGas: 1,
+        metrics: { ...metrics, pool: { ...metrics.pool, fees24hUsd: 0.001 } },
+      }),
+    },
+    {
+      name: "×1.5 fee/IL candidate edge",
+      expected: "fee-il-edge",
+      tag: "[fee-il-edge]",
+      build: () => ({
+        ...base,
+        position: undefined,
+        openPositions: [],
+        metrics: { ...metrics, feeIlRatio: 1.5 },
+      }),
+    },
+    {
+      name: "volume authenticity against the measured 0.8 bar",
+      expected: "volume-authenticity",
+      tag: "[volume]",
+      build: () => ({
+        ...base,
+        position: undefined,
+        openPositions: [],
+        metrics: { ...metrics, volumeAuthenticity: 0.5 },
+      }),
+    },
+    {
+      name: "on-chain bin utilization",
+      expected: "bin-utilization",
+      tag: "[bin-utilization]",
+      build: () => ({
+        ...base,
+        position: undefined,
+        openPositions: [],
+        metrics: { ...metrics, binUtilization: 0.3 },
+      }),
+    },
+    {
+      name: "candidate TVL floor",
+      expected: "tvl-floor",
+      tag: "[tvl]",
+      build: () => ({
+        ...base,
+        position: undefined,
+        openPositions: [],
+        poolTvlUsd: 40_000,
+      }),
+    },
+    {
+      name: "weighted entry score",
+      expected: "weighted-score",
+      tag: "[weighted-score]",
+      build: () => ({
+        ...base,
+        position: undefined,
+        openPositions: [],
+        weightedEntryScoreThreshold: 10,
+      }),
+    },
+    {
+      name: "per-pool position cap in the allocation gate",
+      expected: "allocation",
+      tag: "[alloc-gate]",
+      build: () => ({
+        ...base,
+        position: undefined,
+        openPositions: [heldPosition, { ...heldPosition, positionPubKey: "position-2" }],
+      }),
+    },
+  ];
+
+  for (const parityCase of parityCases) {
+    it(`blocks ${parityCase.name} with the live gate code`, () => {
+      const input = parityCase.build();
+      const shared = evaluateEntryGates(replayEntryGateInput(input));
+      expect(shared.code).toBe(parityCase.expected);
+
+      const result = evaluateReplayPool(input);
+      expect(result.decision.action).toBe("HOLD");
+      expect(result.decision.reasoning).toContain("[enter-gate]");
+      expect(result.decision.reasoning).toContain(parityCase.tag);
+    });
+  }
+
+  it("sizes a replay ENTER with the shared allocation gate", () => {
+    const input: ReplayEvaluationInput = {
+      ...base,
+      position: undefined,
+      openPositions: [],
+      proposedSizeUsd: 9_000,
+    };
+    const shared = evaluateEntryGates(replayEntryGateInput(input));
+    const result = evaluateReplayPool(input);
+
+    expect(shared.approved).toBe(true);
+    expect(result.decision.action).toBe("ENTER");
+    expect(result.decision.positionSizeUsd).toBe(shared.positionSizeUsd);
   });
 });

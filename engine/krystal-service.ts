@@ -312,9 +312,7 @@ export const KrystalLive = Layer.succeed(KrystalService, {
         const last = lastKnownStats.get(addr);
         return last !== undefined && Date.now() - last.at <= LAST_KNOWN_TTL_MS ? last.stats : null;
       }),
-    ).pipe(Effect.catch(() => Effect.succeed(null))),
+    ).pipe(Effect.orElseSucceed(() => null)),
   getUniverse: (): Effect.Effect<ReadonlyMap<string, KrystalPoolStats>, never> =>
-    Effect.tryPromise(() => fetchKrystalUniverse()).pipe(
-      Effect.catch(() => Effect.succeed(new Map())),
-    ),
+    Effect.tryPromise(() => fetchKrystalUniverse()).pipe(Effect.orElseSucceed(() => new Map())),
 } satisfies KrystalApi);

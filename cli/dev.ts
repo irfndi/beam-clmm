@@ -2,6 +2,7 @@ import { Command } from "commander";
 import { pingInstall, requireRegistered, type BeamCredentials } from "./api.js";
 import { acquireLock, releaseLock, LOCKFILE_PATH } from "./lockfile.js";
 import { runEngine } from "../engine/run-engine.js";
+import { isCloudEnabled } from "../engine/cloud-switch.js";
 
 interface DevCommandOptions {
   exitLive: boolean;
@@ -24,15 +25,24 @@ export const devCommand = new Command("dev")
     false,
   )
   .action(async (options: DevCommandOptions) => {
-    let creds: BeamCredentials;
-    try {
-      creds = await requireRegistered(true);
-    } catch (err) {
-      console.error(`Error: ${err instanceof Error ? err.message : String(err)}`);
-      process.exit(1);
-    }
+    // Standalone mode (BEAM_CLOUD_ENABLED=false) needs no Beam account: the
+    // cloud login validation would otherwise hard-exit the engine whenever the
+    // hosted API is unreachable, over quota, or the key was revoked.
+    if (isCloudEnabled()) {
+      let creds: BeamCredentials;
+      try {
+        creds = await requireRegistered(true);
+      } catch (err) {
+        console.error(`Error: ${err instanceof Error ? err.message : String(err)}`);
+        process.exit(1);
+      }
 
-    await reportDevStartTelemetry(creds.userId);
+      await reportDevStartTelemetry(creds.userId);
+    } else {
+      console.log(
+        "Cloud disabled (BEAM_CLOUD_ENABLED=false) — starting standalone, no account required.",
+      );
+    }
 
     const lock = acquireLock();
     if (!lock.acquired) {

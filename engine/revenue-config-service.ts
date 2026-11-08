@@ -6,6 +6,7 @@ import { createLogger } from "./logger.js";
 import fs from "fs";
 import path from "path";
 import { getBeamUserConfigDir } from "./paths.js";
+import { isCloudEnabled } from "./cloud-switch.js";
 
 const log = createLogger("revenue-config-service");
 
@@ -75,7 +76,7 @@ function readApiKey(): Effect.Effect<string | null, never> {
       return typeof key === "string" && key.length > 0 ? key : null;
     },
     catch: (cause) => (cause instanceof Error ? cause : new Error(String(cause))),
-  }).pipe(Effect.catch(() => Effect.succeed(null)));
+  }).pipe(Effect.orElseSucceed(() => null));
 }
 
 export function parseRevenueConfig(data: unknown): RevenueConfig | null {
@@ -94,8 +95,11 @@ export function parseRevenueConfig(data: unknown): RevenueConfig | null {
 
 export function fetchConfigFromApi(apiKey: string): Effect.Effect<RevenueConfig, Error> {
   return Effect.gen(function* () {
+    // Honour BEAM_API_URL like every other cloud caller; a hardcoded host would
+    // become unreachable and untestable the moment the control plane moves.
+    const baseUrl = process.env.BEAM_API_URL ?? API_BASE_URL;
     const res = yield* Effect.tryPromise(() =>
-      fetch(`${API_BASE_URL}/v1/config`, {
+      fetch(`${baseUrl}/v1/config`, {
         headers: { Authorization: `Bearer ${apiKey}` },
         signal: AbortSignal.timeout(10_000),
       }),
@@ -121,7 +125,7 @@ function loadFromDb(db: DbApi): Effect.Effect<RevenueConfig | null, Error> {
     const parsed = yield* Effect.try({
       try: () => JSON.parse(raw) as unknown,
       catch: (cause) => (cause instanceof Error ? cause : new Error(String(cause))),
-    }).pipe(Effect.catch(() => Effect.succeed(null)));
+    }).pipe(Effect.orElseSucceed(() => null));
     return parseRevenueConfig(parsed);
   });
 }
@@ -147,10 +151,32 @@ function fetchWithRetry(apiKey: string): Effect.Effect<RevenueConfig, Error> {
   });
 }
 
+/**
+ * Standalone resolution: with the cloud switched off there is no revenue API
+ * to ask, so the last cached row (or the built-in default) is authoritative.
+ * Logged once per cache window instead of warning on every scan cycle.
+ */
+function resolveLocalConfig(db: DbApi): Effect.Effect<RevenueConfig, never> {
+  return Effect.gen(function* () {
+    const fromDb = yield* Effect.result(loadFromDb(db));
+    if (fromDb._tag === "Success" && fromDb.success !== null) {
+      cached = { config: fromDb.success, expiresAt: Date.now() + CACHE_TTL_MS };
+      return fromDb.success;
+    }
+    log.info("Cloud disabled: no cached revenue config, using defaults");
+    cached = { config: DEFAULT_CONFIG, expiresAt: Date.now() + CACHE_TTL_MS };
+    return DEFAULT_CONFIG;
+  });
+}
+
 function resolveConfig(db: DbApi, paperTrading: boolean): Effect.Effect<RevenueConfig, never> {
   return Effect.gen(function* () {
     if (cached && Date.now() < cached.expiresAt) {
       return cached.config;
+    }
+
+    if (!isCloudEnabled()) {
+      return yield* resolveLocalConfig(db);
     }
 
     const apiKey = yield* readApiKey();
@@ -189,6 +215,10 @@ function resolveConfig(db: DbApi, paperTrading: boolean): Effect.Effect<RevenueC
 function forceRefresh(db: DbApi, paperTrading: boolean): Effect.Effect<RevenueConfig, never> {
   return Effect.gen(function* () {
     cached = null;
+
+    if (!isCloudEnabled()) {
+      return yield* resolveLocalConfig(db);
+    }
 
     const apiKey = yield* readApiKey();
     if (apiKey === null) {

@@ -19,6 +19,7 @@ import {
 import { getCurrentVersion } from "./version.js";
 import { detectInstallMethod } from "./install-method.js";
 import { getBeamUserConfigDir } from "./paths.js";
+import { isCloudEnabled } from "./cloud-switch.js";
 
 const logger = createLogger("feedback");
 
@@ -42,6 +43,27 @@ interface CloudFeedbackPayload {
   context: FeedbackContext;
   hash: string;
   reportedAt: number;
+}
+
+type CloudFeedbackAck =
+  | { readonly id: string; readonly duplicate: boolean }
+  | { readonly authFailure: true }
+  | null;
+
+/**
+ * Standalone mode short-circuits to `null` (= "no cloud ack"), which the
+ * caller treats exactly like an unreachable cloud: the item is stored locally.
+ */
+function submitCloudOrNull(
+  enabled: boolean,
+  apiUrl: string,
+  payload: CloudFeedbackPayload,
+  apiKey: string | null,
+): Effect.Effect<CloudFeedbackAck, never> {
+  if (!enabled) return Effect.succeed(null);
+  // SAFETY: the caller only reaches here when `enabled`, i.e. after
+  // apiKeyGate accepted a non-empty key.
+  return submitCloudFeedback(apiUrl, payload, apiKey as string);
 }
 
 function submitCloudFeedback(
@@ -73,7 +95,7 @@ function submitCloudFeedback(
       id: json.id,
       duplicate: "duplicate" in json && json.duplicate === true,
     };
-  }).pipe(Effect.catch(() => Effect.succeed(null)));
+  }).pipe(Effect.orElseSucceed(() => null));
 }
 
 function hashFeedback(summary: string, details: string | undefined, category: string): string {
@@ -87,7 +109,7 @@ function readOptOut(): Effect.Effect<boolean, never> {
   return Effect.try({
     try: () => existsSync(OPT_OUT_FILE) && readFileSync(OPT_OUT_FILE, "utf-8").trim() === "true",
     catch: (cause) => (cause instanceof Error ? cause : new Error(String(cause))),
-  }).pipe(Effect.catch(() => Effect.succeed(false)));
+  }).pipe(Effect.orElseSucceed(() => false));
 }
 
 function writeOptOut(value: boolean): Effect.Effect<void, never> {
@@ -97,10 +119,7 @@ function writeOptOut(value: boolean): Effect.Effect<void, never> {
       writeFileSync(OPT_OUT_FILE, value ? "true" : "false");
     },
     catch: (cause) => (cause instanceof Error ? cause : new Error(String(cause))),
-  }).pipe(
-    Effect.catch(() => Effect.void),
-    Effect.asVoid,
-  );
+  }).pipe(Effect.ignore, Effect.asVoid);
 }
 
 function buildContext(): FeedbackContext {
@@ -120,7 +139,7 @@ function detectAgentId(): Effect.Effect<string, never> {
     const existing = yield* Effect.try({
       try: () => (existsSync(walletPath) ? readFileSync(walletPath, "utf-8").trim() : null),
       catch: (cause) => (cause instanceof Error ? cause : new Error(String(cause))),
-    }).pipe(Effect.catch(() => Effect.succeed(null)));
+    }).pipe(Effect.orElseSucceed(() => null));
     if (existing) return existing;
 
     const fingerprint = `${process.platform}-${process.arch}-${homedir()}-${process.cwd()}`;
@@ -132,7 +151,7 @@ function detectAgentId(): Effect.Effect<string, never> {
         writeFileSync(walletPath, id, { mode: 0o600 });
       },
       catch: (cause) => (cause instanceof Error ? cause : new Error(String(cause))),
-    }).pipe(Effect.catch(() => Effect.void));
+    }).pipe(Effect.ignore);
     return id;
   });
 }
@@ -153,7 +172,7 @@ function readBeamApiKey(): Effect.Effect<string | null, never> {
       return typeof value.apiKey === "string" && value.apiKey.length > 0 ? value.apiKey : null;
     },
     catch: (cause) => (cause instanceof Error ? cause : new Error(String(cause))),
-  }).pipe(Effect.catch(() => Effect.succeed(null)));
+  }).pipe(Effect.orElseSucceed(() => null));
 }
 
 function toFeedbackEntry(row: {
@@ -347,9 +366,14 @@ export const FeedbackLive = Layer.effect(
           context,
         };
         const hash = hashFeedback(feedback.summary, feedback.details, feedback.category);
-        const apiKey = yield* readBeamApiKey();
-        const apiKeyRejection = apiKeyGate(apiKey);
-        if (apiKeyRejection) return apiKeyRejection;
+        // Standalone mode stores feedback in the local DB only — there is no
+        // cloud registry to accept it, so requiring an API key would be wrong.
+        const cloudEnabled = isCloudEnabled();
+        const apiKey = cloudEnabled ? yield* readBeamApiKey() : null;
+        if (cloudEnabled) {
+          const apiKeyRejection = apiKeyGate(apiKey);
+          if (apiKeyRejection) return apiKeyRejection;
+        }
 
         const localRow = yield* db.getFeedbackByHash(hash, agentId);
         const local = localRow ? toFeedbackEntry(localRow) : null;
@@ -366,7 +390,8 @@ export const FeedbackLive = Layer.effect(
           : DEFAULT_CLOUD_FEEDBACK_URL;
         const reportedAt = Date.now();
         const cloudId = randomUUID();
-        const cloudResult = yield* submitCloudFeedback(
+        const cloudResult = yield* submitCloudOrNull(
+          cloudEnabled,
           cloudUrl,
           {
             id: cloudId,
@@ -380,9 +405,7 @@ export const FeedbackLive = Layer.effect(
             hash,
             reportedAt,
           },
-          // SAFETY: apiKeyGate above returns unless apiKey is a non-empty
-          // string, so apiKey is narrowed to string on this path.
-          apiKey as string,
+          apiKey,
         );
 
         const authRejection = authFailureGate(cloudResult);
@@ -405,7 +428,11 @@ export const FeedbackLive = Layer.effect(
         const localId = `local-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
         const entry = buildFeedbackEntry(localId, agentId, feedback, context, reportedAt, hash);
         yield* db.saveFeedback(entry);
-        logger.warn(`Cloud feedback unavailable; feedback stored locally: ${feedback.summary}`);
+        if (cloudEnabled) {
+          logger.warn(`Cloud feedback unavailable; feedback stored locally: ${feedback.summary}`);
+        } else {
+          logger.info(`Cloud disabled; feedback stored locally: ${feedback.summary}`);
+        }
         return { kind: "local_only" as const, localId };
       }).pipe(
         Effect.catch((err: unknown) => {
@@ -424,8 +451,8 @@ export const FeedbackLive = Layer.effect(
       listForAgent: (id: string) =>
         Effect.map(db.listFeedbackForAgent(id), (rows) => rows.map(toFeedbackEntry)),
       getByHash: (hash: string) =>
-        Effect.flatMap(db.getFeedbackByHash(hash, agentId), (row) =>
-          Effect.succeed(row ? toFeedbackEntry(row) : null),
+        Effect.map(db.getFeedbackByHash(hash, agentId), (row) =>
+          row ? toFeedbackEntry(row) : null,
         ),
       setOptOut: (value: boolean) =>
         Effect.gen(function* () {

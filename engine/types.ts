@@ -162,7 +162,7 @@ export interface PoolState {
    * and the fee/IL ratio are only meaningful for non-heuristic stats; gates
    * skip them when heuristic.
    */
-  statsSource?: "datapi" | "krystal" | "geckoterminal" | "heuristic" | undefined;
+  statsSource?: "datapi" | "krystal" | "defillama" | "geckoterminal" | "heuristic" | undefined;
   /**
    * 24h drawdown % (negative) from the Krystal LP explorer — the challenge
    * strategy's risk term (IL proxy). Only set when statsSource is "krystal".
@@ -199,8 +199,13 @@ export interface PoolState {
  */
 export function isMeasuredStatsSource(
   source: PoolState["statsSource"],
-): source is "datapi" | "krystal" | "geckoterminal" {
-  return source === "datapi" || source === "krystal" || source === "geckoterminal";
+): source is "datapi" | "krystal" | "defillama" | "geckoterminal" {
+  return (
+    source === "datapi" ||
+    source === "krystal" ||
+    source === "defillama" ||
+    source === "geckoterminal"
+  );
 }
 
 export interface PoolSnapshot {
@@ -235,7 +240,7 @@ export interface PoolSnapshot {
    // SAFETY: this assertion is applied to a value whose producer and invariant are controlled by this code path.
    * was never recorded is treated as fabricated (`heuristic`), NOT datapi.
    */
-  statsSource?: "datapi" | "krystal" | "geckoterminal" | "heuristic" | undefined;
+  statsSource?: "datapi" | "krystal" | "defillama" | "geckoterminal" | "heuristic" | undefined;
   /**
    * Krystal 24h drawdown (negative = down), persisted at capture time so a
    * backtest can replay the live rotation's drawdown exit without

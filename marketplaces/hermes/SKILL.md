@@ -24,7 +24,7 @@ Use this skill when the user wants to install Beam for automated liquidity manag
 
 ## Prerequisites
 
-- Bun 1.4.0+ (auto-installed if missing)
+- Bun 1.4.4+ (auto-installed if missing)
 - A private Solana RPC URL; Helius is optional when another provider is configured
 
 ## Installation Steps

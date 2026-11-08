@@ -179,6 +179,37 @@ export interface AppConfig {
   /** Cost per simulated tx in paper mode (USD) — deducted from paper PnL
    *  for profitability truth (PAPER_GAS_COST_USD). L2 realistic: ~$0.50. */
   readonly paperGasCostUsd: number;
+  /**
+   * Which decision implementation runs. `legacy` keeps the historical branch
+   * table; `shadow` also evaluates the rule core and journals the diff without
+   * acting on it; `rules` dispatches the rule core's vetoes (HOLD), protective
+   * EXITs, and ENTERs that clear the shared gate stack (`engine/entry-gates.ts`)
+   * plus the token-risk/cooldown/wallet gates. A rules REBALANCE stays advisory
+   * (the core produces no range params), and challenge mode is refused because
+   * its proofs are not modelled there. Env `DECISION_ENGINE`. Compare the two
+   * with `beam decisions parity`.
+   */
+  readonly decisionEngine?: "legacy" | "shadow" | "rules";
+  /** Execution gas price used by the unit-cost model, gwei. Env `GAS_PRICE_GWEI`. */
+  readonly gasPriceGwei?: number;
+  /** OP-stack L1 data fee per transaction, USD. Env `L1_DATA_FEE_USD`. */
+  readonly l1DataFeeUsd?: number;
+  /** LP swap fee in bps. Env `SWAP_FEE_BPS`. */
+  readonly swapFeeBps?: number;
+  /** Expected slippage per swap leg in bps. Env `SLIPPAGE_BPS`. */
+  readonly slippageBps?: number;
+  /**
+   * How the unit-economics gate behaves for ENTER/REBALANCE:
+   * `enforce` (default) blocks negative-EV actions, `warn` only journals them,
+   * `off` disables the check. Env `UNIT_ECONOMICS_GATE`.
+   */
+  readonly unitEconomicsGate?: "enforce" | "warn" | "off";
+  /**
+   * Longest break-even hold (days) an entry may require. An entry whose fees
+   * need longer than this to repay its round trip is refused. Env
+   * `MAX_BREAK_EVEN_HOLD_DAYS`; default 3.
+   */
+  readonly maxBreakEvenHoldDays?: number;
   readonly minBinUtilization: number;
   readonly maxRebalanceRangeBins: number;
   readonly watchlistPools: ReadonlyArray<string>;
@@ -322,6 +353,11 @@ export interface AppConfig {
   /** Krystal LP explorer as the primary measured-fee stats source. */
   readonly krystalEnabled?: boolean;
   readonly krystalApiUrl?: string;
+  /** DefiLlama yields as the measured-fee tier behind Krystal (Base Uniswap v3
+   *  only). Default true; absent = active. Needed because api.krystal.app is
+   *  Cloudflare-challenged from datacenter IPs. */
+  readonly defillamaEnabled?: boolean;
+  readonly defillamaEndpoint?: string;
 
   // ─── Pyth Hermes price feeds ─────────────────────────────────────────────────
   // Optional so standalone test fixtures that omit new fields keep compiling;
@@ -651,7 +687,7 @@ export interface AppConfig {
 export class ConfigService extends Context.Service<ConfigService, AppConfig>()("ConfigService") {}
 
 function validatedNumber(name: string, min: number, fallback: number, max?: number) {
-  return Config.number(name).pipe(
+  return Config.Number(name).pipe(
     Effect.map((n) => {
       if (!Number.isFinite(n)) {
         logger.warn("Invalid numeric configuration; using fallback", { name, value: n, fallback });
@@ -678,7 +714,7 @@ function validatedNumber(name: string, min: number, fallback: number, max?: numb
  * the full uint256 range parse without precision loss.
  */
 function validatedBigIntWei(name: string, fallback: bigint) {
-  return Config.string(name).pipe(
+  return Config.String(name).pipe(
     Effect.map((raw) => {
       const value = raw.trim();
       try {
@@ -826,7 +862,7 @@ const loadConfig = Effect.gen(function* () {
   // 2 (already the default), feeClaimIntervalMs 1h (already the default),
   // entrySizeTvlFraction 0.05, maxEntrySizeUsd 5000, minFeeIlRatio 1.2
   // (already the default).
-  const challengeMode = yield* Config.boolean("CHALLENGE_MODE").pipe(
+  const challengeMode = yield* Config.Boolean("CHALLENGE_MODE").pipe(
     Effect.orElseSucceed(() => false),
   );
   // Single drawdown exit threshold: the old 'halve' de-risk tier (default 5%)
@@ -866,7 +902,7 @@ const loadConfig = Effect.gen(function* () {
   );
   // 5m chasing: small-account fast lane (bypass 4/7 persistence on spike).
   // Disabled by default — enable with CHALLENGE_5M_SPIKE=true for $30-200 books.
-  const challenge5mSpikeEnabled = yield* Config.boolean("CHALLENGE_5M_SPIKE").pipe(
+  const challenge5mSpikeEnabled = yield* Config.Boolean("CHALLENGE_5M_SPIKE").pipe(
     Effect.orElseSucceed(() => false),
   );
   const challenge5mMinVolumeUsd = yield* validatedNumber("CHALLENGE_5M_MIN_VOLUME_USD", 0, 2000);
@@ -875,15 +911,14 @@ const loadConfig = Effect.gen(function* () {
   // WALLET_PRIVATE_KEY (env / .env) takes precedence; otherwise fall back to the local
   // keystore written by `beam wallet generate|import`, so a generated wallet actually
   // enables live trading (engine/adapter-service.ts decodes this hex key).
-  const walletPrivateKey = yield* Config.string("WALLET_PRIVATE_KEY").pipe(
+  const walletPrivateKey = yield* Config.String("WALLET_PRIVATE_KEY").pipe(
     Effect.orElseSucceed(() => loadKeystoreSecretKeyHex() ?? ""),
   );
   // RPC resolution (chain-aware): the ACTIVE chain's own var wins first
   // (e.g. BEAM_BASE_RPC_URL / legacy BEAM_ROBINHOOD_RPC_URL), then the generic
   // RPC_URL, then the legacy ROBINHOOD_RPC_URL (for existing setups), then the
   // ACTIVE chain's default RPC from chain-registry.
-  const rpcUrlOr = (name: string) =>
-    Config.string(name).pipe(Effect.catch(() => Effect.succeed("")));
+  const rpcUrlOr = (name: string) => Config.String(name).pipe(Effect.orElseSucceed(() => ""));
   const chainRpcVar = `BEAM_${ACTIVE_CHAIN_KEY.toUpperCase()}_RPC_URL`;
   const rpcUrl = yield* Effect.gen(function* () {
     const chainVar = yield* rpcUrlOr(chainRpcVar);
@@ -895,25 +930,25 @@ const loadConfig = Effect.gen(function* () {
     return isTest ? "https://example.com" : DEFAULT_RPC;
   });
   const rpcFallbackUrls = yield* Effect.gen(function* () {
-    const multi = yield* Config.string("RPC_FALLBACK_URLS").pipe(Effect.orElseSucceed(() => ""));
+    const multi = yield* Config.String("RPC_FALLBACK_URLS").pipe(Effect.orElseSucceed(() => ""));
     if (multi.trim()) {
       return multi
         .split(",")
         .map((s) => s.trim())
         .filter((s) => s.length > 0);
     }
-    const single = yield* Config.string("RPC_FALLBACK_URL").pipe(Effect.orElseSucceed(() => ""));
+    const single = yield* Config.String("RPC_FALLBACK_URL").pipe(Effect.orElseSucceed(() => ""));
     return single.trim() ? [single.trim()] : [];
   });
   const rpcRetryCount = yield* validatedNumber("RPC_RETRY_COUNT", 0, 4);
-  const paperTrading = yield* Config.boolean("PAPER_TRADING").pipe(
+  const paperTrading = yield* Config.Boolean("PAPER_TRADING").pipe(
     Effect.orElseSucceed(() => true),
   );
-  const autonomousTokenModeRaw = yield* Config.string("AUTONOMOUS_TOKEN_MODE").pipe(
+  const autonomousTokenModeRaw = yield* Config.String("AUTONOMOUS_TOKEN_MODE").pipe(
     Effect.orElseSucceed(() => AUTONOMOUS_TOKEN_CONFIG_DEFAULTS.autonomousTokenMode),
   );
   const autonomousTokenMode = yield* resolveAutonomousTokenMode(autonomousTokenModeRaw);
-  const settlementAssetRaw = yield* Config.string("SETTLEMENT_ASSET").pipe(
+  const settlementAssetRaw = yield* Config.String("SETTLEMENT_ASSET").pipe(
     Effect.orElseSucceed(() => AUTONOMOUS_TOKEN_CONFIG_DEFAULTS.settlementAsset),
   );
   const settlementAsset = yield* validateSettlementAsset(settlementAssetRaw);
@@ -946,7 +981,7 @@ const loadConfig = Effect.gen(function* () {
     1,
     AUTONOMOUS_TOKEN_CONFIG_DEFAULTS.maxMarketDataAgeMs,
   );
-  const maxSwapSlippageBpsRaw = yield* Config.string("MAX_SWAP_SLIPPAGE_BPS").pipe(
+  const maxSwapSlippageBpsRaw = yield* Config.String("MAX_SWAP_SLIPPAGE_BPS").pipe(
     Effect.orElseSucceed(() => ""),
   );
   yield* validateIntegerConfig(maxSwapSlippageBpsRaw);
@@ -986,7 +1021,7 @@ const loadConfig = Effect.gen(function* () {
       AUTONOMOUS_TOKEN_CONFIG_DEFAULTS.maxConsecutiveExecutionFailures,
     ),
   );
-  const agentInstanceIdRaw = yield* Config.string("AGENT_INSTANCE_ID").pipe(
+  const agentInstanceIdRaw = yield* Config.String("AGENT_INSTANCE_ID").pipe(
     Effect.orElseSucceed(() => AUTONOMOUS_TOKEN_CONFIG_DEFAULTS.agentInstanceId),
   );
   const agentInstanceId = yield* validateAgentInstanceId(agentInstanceIdRaw);
@@ -1025,16 +1060,47 @@ const loadConfig = Effect.gen(function* () {
   const confidenceThreshold = yield* validatedNumber("CONFIDENCE_THRESHOLD", 0, 0.65);
   const paperPortfolioUsd = yield* validatedNumber("PAPER_PORTFOLIO_USD", 1, 10_000);
   // ponytail: 0.50 covers Base/Robinhood L2 (200k gas + L1 data); raise if L1 mainnet
-  const paperGasCostUsd = yield* validatedNumber("PAPER_GAS_COST_USD", 0, 0.5, 100);
+  // Paper gas models one L2 transaction. The old 0.5 default deducted $1.00
+  // per paper round trip — 20× a real Base cost — and silently made every
+  // paper strategy look unprofitable.
+  const paperGasCostUsd = yield* validatedNumber("PAPER_GAS_COST_USD", 0, 0.05, 100);
+
+  // ─── Decision core + unit economics ──────────────────────────────────────
+  // The engine used to price gas in three unrelated constants: paper at
+  // $0.5×2 per round trip, rebalance at REBALANCE_GAS_COST_NATIVE×ETH price
+  // ($18.85, which blocked every rebalance on Base) and ENTER_ROUND_TRIP_GAS_USD
+  // at $0.15. One model now prices every action from chain-real gas units,
+  // gwei and native USD. Defaults are Base L2.
+  const decisionEngineRaw = yield* Config.String("DECISION_ENGINE").pipe(
+    Effect.orElseSucceed(() => "legacy"),
+  );
+  const decisionEngine = parseEnum(
+    ["legacy", "shadow", "rules"] as const,
+    decisionEngineRaw,
+    "legacy",
+  );
+  const gasPriceGwei = yield* validatedNumber("GAS_PRICE_GWEI", 0, 0.02, 1_000);
+  const l1DataFeeUsd = yield* validatedNumber("L1_DATA_FEE_USD", 0, 0.005, 50);
+  const swapFeeBps = yield* validatedNumber("SWAP_FEE_BPS", 0, 5, 10_000);
+  const slippageBps = yield* validatedNumber("SLIPPAGE_BPS", 0, 4, 10_000);
+  const unitEconomicsGateRaw = yield* Config.String("UNIT_ECONOMICS_GATE").pipe(
+    Effect.orElseSucceed(() => "enforce"),
+  );
+  const unitEconomicsGate = parseEnum(
+    ["enforce", "warn", "off"] as const,
+    unitEconomicsGateRaw,
+    "enforce",
+  );
+  const maxBreakEvenHoldDays = yield* validatedNumber("MAX_BREAK_EVEN_HOLD_DAYS", 0, 3, 365);
   const minBinUtilization = yield* validatedNumber("MIN_BIN_UTILIZATION", 0, 0.3);
   const maxRebalanceRangeBins = yield* validatedNumber("MAX_REBALANCE_RANGE_BINS", 1, 50);
-  const watchlistPoolsRaw = yield* Config.string("WATCHLIST_POOLS").pipe(
+  const watchlistPoolsRaw = yield* Config.String("WATCHLIST_POOLS").pipe(
     Effect.orElseSucceed(() => ""),
   );
   // Default = the verified stablecoin mints. An explicit
   // empty value (STABLECOIN_MINTS=) is present, not absent, so it disables the
   // allowlist (empty set). Entries are pubkey-validated below, fail-closed.
-  const stablecoinMintsRaw = yield* Config.string("STABLECOIN_MINTS").pipe(
+  const stablecoinMintsRaw = yield* Config.String("STABLECOIN_MINTS").pipe(
     // Default = the ACTIVE chain's canonical stablecoin mint (USDG on
     // Robinhood, USDC on Base — from chain-registry).
     Effect.orElseSucceed(() => DEFAULT_STABLECOIN_MINT),
@@ -1048,26 +1114,26 @@ const loadConfig = Effect.gen(function* () {
     12,
   );
 
-  const freezeSmartScreening = yield* Config.boolean("FREEZE_SMART_SCREENING").pipe(
+  const freezeSmartScreening = yield* Config.Boolean("FREEZE_SMART_SCREENING").pipe(
     Effect.orElseSucceed(() => false),
   );
-  const ilProtectionEnabled = yield* Config.boolean("IL_PROTECTION_ENABLED").pipe(
+  const ilProtectionEnabled = yield* Config.Boolean("IL_PROTECTION_ENABLED").pipe(
     Effect.orElseSucceed(() => true),
   );
   const ilDominanceExitFactor = yield* validatedNumber("IL_DOMINANCE_EXIT_FACTOR", 1, 2);
   const ilDominanceMinUsd = yield* validatedNumber("IL_DOMINANCE_MIN_USD", 0, 5);
   const dustExitUsd = yield* validatedNumber("DUST_EXIT_USD", 0, 5);
 
-  const jupiterTokenRiskEnabled = yield* Config.boolean("JUPITER_TOKEN_RISK_ENABLED").pipe(
+  const jupiterTokenRiskEnabled = yield* Config.Boolean("JUPITER_TOKEN_RISK_ENABLED").pipe(
     Effect.orElseSucceed(() => true),
   );
-  const entryV4Enabled = yield* Config.boolean("LIVE_ENTRY_V4_ENABLED").pipe(
+  const entryV4Enabled = yield* Config.Boolean("LIVE_ENTRY_V4_ENABLED").pipe(
     // Default = the ACTIVE chain's support for live v4 ENTERs (from
     // chain-registry): Base's official v4 PM is proven (true), Robinhood's
     // fork PM rejects v4 mints (false). An explicit env value overrides.
     Effect.orElseSucceed(() => LIVE_ENTRY_V4_ENABLED_CHAIN),
   );
-  const liveEntryNativeLegOnly = yield* Config.boolean("LIVE_ENTRY_NATIVE_LEG_ONLY").pipe(
+  const liveEntryNativeLegOnly = yield* Config.Boolean("LIVE_ENTRY_NATIVE_LEG_ONLY").pipe(
     Effect.orElseSucceed(() => false),
   );
   const jupiterTokenRiskCacheTtlMin = yield* validatedNumber(
@@ -1076,25 +1142,35 @@ const loadConfig = Effect.gen(function* () {
     30,
   );
 
-  const geckoTerminalEnabled = yield* Config.boolean("GECKO_TERMINAL_ENABLED").pipe(
+  const geckoTerminalEnabled = yield* Config.Boolean("GECKO_TERMINAL_ENABLED").pipe(
     Effect.orElseSucceed(() => true),
   );
 
   // ─── Krystal LP explorer (primary measured-fee stats source) ─────────────
   // Measured on-chain fee income (verified vs raw v4 Swap events) — the only
   // measured-fee source on Robinhood Chain; gecko fees stay modeled.
-  const krystalEnabled = yield* Config.boolean("KRYSTAL_ENABLED").pipe(
+  const krystalEnabled = yield* Config.Boolean("KRYSTAL_ENABLED").pipe(
     Effect.orElseSucceed(() => true),
   );
-  const krystalApiUrl = yield* Config.string("KRYSTAL_API_URL").pipe(
+  const krystalApiUrl = yield* Config.String("KRYSTAL_API_URL").pipe(
     Effect.orElseSucceed(() => "https://api.krystal.app"),
   );
 
+  // ─── DefiLlama yields (measured-fee tier behind Krystal) ────────────────
+  // Base Uniswap v3 only: `apyBase` is fee income computed from on-chain fee
+  // growth, so the fee/IL gate runs on measured data when Krystal is blocked.
+  const defillamaEnabled = yield* Config.Boolean("DEFILLAMA_ENABLED").pipe(
+    Effect.orElseSucceed(() => true),
+  );
+  const defillamaEndpoint = yield* Config.String("DEFILLAMA_ENDPOINT").pipe(
+    Effect.orElseSucceed(() => "https://yields.llama.fi/pools"),
+  );
+
   // ─── Pyth Hermes price feeds ──────────────────────────────────────────────
-  const pythEnabled = yield* Config.boolean("PYTH_ENABLED").pipe(Effect.orElseSucceed(() => true));
-  const pythApiKey = yield* Config.string("PYTH_API_KEY").pipe(Effect.orElseSucceed(() => ""));
+  const pythEnabled = yield* Config.Boolean("PYTH_ENABLED").pipe(Effect.orElseSucceed(() => true));
+  const pythApiKey = yield* Config.String("PYTH_API_KEY").pipe(Effect.orElseSucceed(() => ""));
   const pythMaxStalenessMs = yield* validatedNumber("PYTH_MAX_STALENESS_MS", 5_000, 60_000);
-  const pythBaseUrl = yield* Config.string("PYTH_BASE_URL").pipe(
+  const pythBaseUrl = yield* Config.String("PYTH_BASE_URL").pipe(
     Effect.orElseSucceed(() => "https://hermes.pyth.network"),
   );
 
@@ -1133,11 +1209,11 @@ const loadConfig = Effect.gen(function* () {
   const entryRangeHalfWidthBins = Math.floor(
     yield* validatedNumber("ENTRY_RANGE_HALF_WIDTH_BINS", 0, 0, 200),
   );
-  const volatilityAdaptiveRanges = yield* Config.boolean("VOLATILITY_ADAPTIVE_RANGES").pipe(
+  const volatilityAdaptiveRanges = yield* Config.Boolean("VOLATILITY_ADAPTIVE_RANGES").pipe(
     Effect.orElseSucceed(() => true),
   );
   const entryRangeAsymmetry = yield* validatedNumber("ENTRY_RANGE_ASYMMETRY", -0.5, 0, 0.5);
-  const ladderEnabled = yield* Config.boolean("LADDER_ENABLED").pipe(
+  const ladderEnabled = yield* Config.Boolean("LADDER_ENABLED").pipe(
     Effect.orElseSucceed(() => false),
   );
   const ladderTightPct = yield* validatedNumber("LADDER_TIGHT_PCT", 0, 0.6, 1);
@@ -1149,21 +1225,19 @@ const loadConfig = Effect.gen(function* () {
   );
 
   // ─── F3: Fee compounding / auto-reinvest ─────────────────────────────────────
-  const autoCompoundFees = yield* Config.boolean("AUTO_COMPOUND_FEES").pipe(
+  const autoCompoundFees = yield* Config.Boolean("AUTO_COMPOUND_FEES").pipe(
     Effect.orElseSucceed(() => false),
   );
   const minCompoundFeesUsd = yield* validatedNumber("MIN_COMPOUND_FEES_USD", 0, 0.5);
   const compoundGasBufferUsd = yield* validatedNumber("COMPOUND_GAS_BUFFER_USD", 0, 0.05);
-  const feeDestination: FeeDestination = yield* Config.string("FEE_DESTINATION").pipe(
+  const feeDestination: FeeDestination = yield* Config.String("FEE_DESTINATION").pipe(
     Config.withDefault("compound"),
-    Effect.flatMap((value) =>
-      isFeeDestination(value)
-        ? Effect.succeed(value)
-        : Effect.fail(
-            new ConfigError({
-              message: `FEE_DESTINATION must be compound, accumulate-quote, or accumulate-native; got ${value}`,
-            }),
-          ),
+    Effect.filterOrFail(
+      isFeeDestination,
+      (value) =>
+        new ConfigError({
+          message: `FEE_DESTINATION must be compound, accumulate-quote, or accumulate-native; got ${value}`,
+        }),
     ),
   );
 
@@ -1248,7 +1322,7 @@ const loadConfig = Effect.gen(function* () {
     100,
   );
   const minEntryTvlUsd = yield* validatedNumber("MIN_ENTRY_TVL_USD", 0, 1_000);
-  const exitRouteProofRequired = yield* Config.boolean("EXIT_ROUTE_PROOF_REQUIRED").pipe(
+  const exitRouteProofRequired = yield* Config.Boolean("EXIT_ROUTE_PROOF_REQUIRED").pipe(
     Effect.orElseSucceed(() => true),
   );
 
@@ -1292,7 +1366,7 @@ const loadConfig = Effect.gen(function* () {
   );
 
   // ─── Idle-capital auto-redeploy (opt-in) ─────────────────────────────────
-  const idleRedeployEnabled = yield* Config.boolean("IDLE_REDEPLOY_ENABLED").pipe(
+  const idleRedeployEnabled = yield* Config.Boolean("IDLE_REDEPLOY_ENABLED").pipe(
     Effect.orElseSucceed(() => false),
   );
   const idleRedeployThresholdUsd = yield* validatedNumber("IDLE_REDEPLOY_THRESHOLD_USD", 0, 500);
@@ -1300,7 +1374,7 @@ const loadConfig = Effect.gen(function* () {
 
   // ─── F6: Paper-trading validation period ────────────────────────────────────
   const paperValidationMinDays = yield* validatedNumber("PAPER_VALIDATION_MIN_DAYS", 0, 7);
-  const paperValidationEnforce = yield* Config.boolean("PAPER_VALIDATION_ENFORCE").pipe(
+  const paperValidationEnforce = yield* Config.Boolean("PAPER_VALIDATION_ENFORCE").pipe(
     Effect.orElseSucceed(() => false),
   );
 
@@ -1334,7 +1408,7 @@ const loadConfig = Effect.gen(function* () {
   const rotationCooldownMs = yield* validatedNumber("ROTATION_COOLDOWN_MS", 0, 15 * 60 * 1000);
 
   // ─── Fee-density-driven low-yield exit cooldowns ────────────────────────────
-  const feeDensityCooldowns = yield* Config.boolean("FEE_DENSITY_COOLDOWNS").pipe(
+  const feeDensityCooldowns = yield* Config.Boolean("FEE_DENSITY_COOLDOWNS").pipe(
     Effect.orElseSucceed(() => true),
   );
   const DEFAULT_FEE_DENSITY_COOLDOWN_MIN_MS = 60 * 60 * 1000;
@@ -1374,28 +1448,28 @@ const loadConfig = Effect.gen(function* () {
   const feeDensityLowPct = feeDensityBounds.lowPct;
 
   // ─── Agentic mode / agent runtime overlay ────────────────────────────
-  const agentiveMode = yield* Config.boolean("AGENTIC_MODE").pipe(
+  const agentiveMode = yield* Config.Boolean("AGENTIC_MODE").pipe(
     Effect.orElseSucceed(() => false),
   );
-  const agentRuntimeRaw = yield* Config.string("AGENT_RUNTIME").pipe(
+  const agentRuntimeRaw = yield* Config.String("AGENT_RUNTIME").pipe(
     Effect.orElseSucceed(() => "auto"),
   );
   const validAgentRuntimes = ["auto", "hermes", "openclaw", "none"] as const;
   const agentRuntime = parseEnum(validAgentRuntimes, agentRuntimeRaw, "auto");
-  const agentAcpCommand = yield* Config.string("AGENT_ACP_COMMAND").pipe(
+  const agentAcpCommand = yield* Config.String("AGENT_ACP_COMMAND").pipe(
     Effect.orElseSucceed(() => "hermes"),
   );
-  const agentAcpArgsRaw = yield* Config.string("AGENT_ACP_ARGS").pipe(
+  const agentAcpArgsRaw = yield* Config.String("AGENT_ACP_ARGS").pipe(
     Effect.orElseSucceed(() => "acp"),
   );
   const agentAcpArgs = agentAcpArgsRaw
     .split(" ")
     .map((s) => s.trim())
     .filter(Boolean);
-  const agentGatewayUrl = yield* Config.string("AGENT_GATEWAY_URL").pipe(
+  const agentGatewayUrl = yield* Config.String("AGENT_GATEWAY_URL").pipe(
     Effect.orElseSucceed(() => "ws://127.0.0.1:18789"),
   );
-  const agentGatewayToken = yield* Config.string("AGENT_GATEWAY_TOKEN").pipe(
+  const agentGatewayToken = yield* Config.String("AGENT_GATEWAY_TOKEN").pipe(
     Effect.orElseSucceed(() => ""),
   );
   const agentPromptTimeoutMs = yield* validatedNumber(
@@ -1418,40 +1492,40 @@ const loadConfig = Effect.gen(function* () {
     0,
     60 * 60 * 1000,
   );
-  const agentCheckinOnEvents = yield* Config.boolean("AGENT_CHECKIN_ON_EVENTS").pipe(
+  const agentCheckinOnEvents = yield* Config.Boolean("AGENT_CHECKIN_ON_EVENTS").pipe(
     Effect.orElseSucceed(() => true),
   );
-  const agentCheckinIncludeHistory = yield* Config.boolean("AGENT_CHECKIN_INCLUDE_HISTORY").pipe(
+  const agentCheckinIncludeHistory = yield* Config.Boolean("AGENT_CHECKIN_INCLUDE_HISTORY").pipe(
     Effect.orElseSucceed(() => true),
   );
   const agentCheckinMaxPositions = yield* validatedNumber("AGENT_CHECKIN_MAX_POSITIONS", 0, 10);
-  const agentOpenclawWebhookUrl = yield* Config.string("AGENT_OPENCLAW_WEBHOOK_URL").pipe(
+  const agentOpenclawWebhookUrl = yield* Config.String("AGENT_OPENCLAW_WEBHOOK_URL").pipe(
     Effect.orElseSucceed(() => ""),
   );
-  const agentOpenclawWebhookToken = yield* Config.string("AGENT_OPENCLAW_WEBHOOK_TOKEN").pipe(
+  const agentOpenclawWebhookToken = yield* Config.String("AGENT_OPENCLAW_WEBHOOK_TOKEN").pipe(
     Effect.orElseSucceed(() => ""),
   );
-  const agentHermesApiUrl = yield* Config.string("AGENT_HERMES_API_URL").pipe(
+  const agentHermesApiUrl = yield* Config.String("AGENT_HERMES_API_URL").pipe(
     Effect.orElseSucceed(() => ""),
   );
-  const agentHermesApiToken = yield* Config.string("AGENT_HERMES_API_TOKEN").pipe(
+  const agentHermesApiToken = yield* Config.String("AGENT_HERMES_API_TOKEN").pipe(
     Effect.orElseSucceed(() => ""),
   );
   const agentHttpPort = yield* validatedNumber("AGENT_HTTP_PORT", 0, 0, 65_535);
-  const agentMcpEnabled = yield* Config.boolean("AGENT_MCP_ENABLED").pipe(
+  const agentMcpEnabled = yield* Config.Boolean("AGENT_MCP_ENABLED").pipe(
     Effect.orElseSucceed(() => false),
   );
 
   // ─── Agent Proposals ───────────────────────────────────────────────────────
-  const agentProposalModeRaw = yield* Config.string("AGENT_PROPOSAL_MODE").pipe(
+  const agentProposalModeRaw = yield* Config.String("AGENT_PROPOSAL_MODE").pipe(
     Effect.orElseSucceed(() => "veto"),
   );
   const validAgentProposalModes = ["veto", "suggest", "supervised", "full"] as const;
   const agentProposalMode = parseEnum(validAgentProposalModes, agentProposalModeRaw, "veto");
-  const agentProposalToken = yield* Config.string("AGENT_PROPOSAL_TOKEN").pipe(
+  const agentProposalToken = yield* Config.String("AGENT_PROPOSAL_TOKEN").pipe(
     Effect.orElseSucceed(() => ""),
   );
-  const agentApprovalToken = yield* Config.string("AGENT_APPROVAL_TOKEN").pipe(
+  const agentApprovalToken = yield* Config.String("AGENT_APPROVAL_TOKEN").pipe(
     Effect.orElseSucceed(() => ""),
   );
   const agentProposalTimeoutMs = yield* validatedNumber(
@@ -1543,10 +1617,10 @@ const loadConfig = Effect.gen(function* () {
     // velocity) cap near ~0.9. 0.6 is a strict-but-reachable floor.
     0.6,
   );
-  const autoSwapEntry = yield* Config.boolean("AUTO_SWAP_ENTRY").pipe(
+  const autoSwapEntry = yield* Config.Boolean("AUTO_SWAP_ENTRY").pipe(
     Effect.orElseSucceed(() => false),
   );
-  const entryStrategyTypeRaw = yield* Config.string("ENTRY_STRATEGY_TYPE").pipe(
+  const entryStrategyTypeRaw = yield* Config.String("ENTRY_STRATEGY_TYPE").pipe(
     Effect.orElseSucceed(() => "spot"),
   );
   const validEntryStrategyTypes = ["spot", "curve", "bidask", "auto"] as const;
@@ -1557,17 +1631,17 @@ const loadConfig = Effect.gen(function* () {
   );
 
   // ─── Proactive Telegram alerts (Wave 5) ───────────────────────────────────
-  const alertsEnabled = yield* Config.boolean("ALERTS_ENABLED").pipe(
+  const alertsEnabled = yield* Config.Boolean("ALERTS_ENABLED").pipe(
     Effect.orElseSucceed(() => true),
   );
   // ─── LM farm reward claims (Wave 8) ───────────────────────────────────────
-  const farmRewardsEnabled = yield* Config.boolean("FARM_REWARDS_ENABLED").pipe(
+  const farmRewardsEnabled = yield* Config.Boolean("FARM_REWARDS_ENABLED").pipe(
     Effect.orElseSucceed(() => true),
   );
-  const limitOrdersEnabled = yield* Config.boolean("LIMIT_ORDERS_ENABLED").pipe(
+  const limitOrdersEnabled = yield* Config.Boolean("LIMIT_ORDERS_ENABLED").pipe(
     Effect.orElseSucceed(() => false),
   );
-  const limitOrderModeRaw = yield* Config.string("LIMIT_ORDER_MODE").pipe(
+  const limitOrderModeRaw = yield* Config.String("LIMIT_ORDER_MODE").pipe(
     Effect.orElseSucceed(() => "take-profit"),
   );
   const limitOrderMode = limitOrderModeRaw === "dca" ? "dca" : "take-profit";
@@ -1577,13 +1651,13 @@ const loadConfig = Effect.gen(function* () {
     0,
     3,
   );
-  const copySignalsEnabled = yield* Config.boolean("COPY_SIGNALS_ENABLED").pipe(
+  const copySignalsEnabled = yield* Config.Boolean("COPY_SIGNALS_ENABLED").pipe(
     Effect.orElseSucceed(() => false),
   );
-  const copySignalsEndpoint = yield* Config.string("COPY_SIGNALS_ENDPOINT").pipe(
+  const copySignalsEndpoint = yield* Config.String("COPY_SIGNALS_ENDPOINT").pipe(
     Effect.orElseSucceed(() => ""),
   );
-  const copySignalWalletsRaw = yield* Config.string("COPY_SIGNAL_WALLETS").pipe(
+  const copySignalWalletsRaw = yield* Config.String("COPY_SIGNAL_WALLETS").pipe(
     Effect.orElseSucceed(() => ""),
   );
   const copySignalWallets = copySignalWalletsRaw
@@ -1601,7 +1675,7 @@ const loadConfig = Effect.gen(function* () {
   const alertFeeMilestoneUsd = yield* validatedNumber("ALERT_FEE_MILESTONE_USD", 0.01, 10);
 
   // ─── Fallen-angel mode (Wave 19) ───────────────────────────────────────────
-  const fallenAngelEnabled = yield* Config.boolean("FALLEN_ANGEL_ENABLED").pipe(
+  const fallenAngelEnabled = yield* Config.Boolean("FALLEN_ANGEL_ENABLED").pipe(
     Effect.orElseSucceed(() => false),
   );
   const fallenAngelMinTvlUsd = yield* validatedNumber("FALLEN_ANGEL_MIN_TVL_USD", 0, 50_000);
@@ -1648,12 +1722,12 @@ const loadConfig = Effect.gen(function* () {
       .map(Number)
       .filter((n) => Number.isFinite(n));
   const fallenAngelTpRungs = parsePctList(
-    yield* Config.string("FALLEN_ANGEL_TP_RUNGS").pipe(
+    yield* Config.String("FALLEN_ANGEL_TP_RUNGS").pipe(
       Effect.orElseSucceed(() => "0.15,0.30,0.50"),
     ),
   );
   const fallenAngelTpFractions = parsePctList(
-    yield* Config.string("FALLEN_ANGEL_TP_FRACTIONS").pipe(
+    yield* Config.String("FALLEN_ANGEL_TP_FRACTIONS").pipe(
       Effect.orElseSucceed(() => "0.4,0.3,0.3"),
     ),
   );
@@ -1690,12 +1764,12 @@ const loadConfig = Effect.gen(function* () {
     // 1h default (was 24h) — the compounding challenge needs a fast claim cadence.
     60 * 60 * 1000,
   );
-  const enablePoolDiscovery = yield* Config.boolean("ENABLE_POOL_DISCOVERY").pipe(
+  const enablePoolDiscovery = yield* Config.Boolean("ENABLE_POOL_DISCOVERY").pipe(
     Effect.orElseSucceed(() => false),
   );
   const discoveryMinTvlUsd = yield* validatedNumber("DISCOVERY_MIN_TVL_USD", 0, 1_000_000);
   const discoveryMinFeeRatio = yield* validatedNumber("DISCOVERY_MIN_FEE_RATIO", 0, 1.5);
-  const marketScanEnabled = yield* Config.boolean("MARKET_SCAN_ENABLED").pipe(
+  const marketScanEnabled = yield* Config.Boolean("MARKET_SCAN_ENABLED").pipe(
     Effect.orElseSucceed(() => false),
   );
   const marketScanRefreshIntervalMs = yield* validatedNumber(
@@ -1707,7 +1781,7 @@ const loadConfig = Effect.gen(function* () {
   const marketScanMinTvlUsd = yield* validatedNumber("MARKET_SCAN_MIN_TVL_USD", 0, 250_000);
   const marketScanMaxTvlUsd = yield* validatedNumber("MARKET_SCAN_MAX_TVL_USD", 0, 1_000_000);
   const marketScanTargetTvlUsd = yield* validatedNumber("MARKET_SCAN_TARGET_TVL_USD", 1, 150_000);
-  const marketScanRankModeRaw = yield* Config.string("MARKET_SCAN_RANK_MODE").pipe(
+  const marketScanRankModeRaw = yield* Config.String("MARKET_SCAN_RANK_MODE").pipe(
     Effect.orElseSucceed(() => "capitalFit"),
   );
   const marketScanRankMode =
@@ -1728,54 +1802,54 @@ const loadConfig = Effect.gen(function* () {
   const marketScanMinHolders = yield* validatedNumber("MARKET_SCAN_MIN_HOLDERS", 0, 1000);
   const marketScanMinBinStep = yield* validatedNumber("MARKET_SCAN_MIN_BIN_STEP", 0, 2, 100);
   const marketScanMaxBinStep = yield* validatedNumber("MARKET_SCAN_MAX_BIN_STEP", 1, 200, 2000);
-  const deployerBlacklistPath = yield* Config.string("DEPLOYER_BLACKLIST_PATH").pipe(
+  const deployerBlacklistPath = yield* Config.String("DEPLOYER_BLACKLIST_PATH").pipe(
     Effect.orElseSucceed(() => "./engine/data/deployer-blacklist.json"),
   );
-  const tokenBlacklistPath = yield* Config.string("TOKEN_BLACKLIST_PATH").pipe(
+  const tokenBlacklistPath = yield* Config.String("TOKEN_BLACKLIST_PATH").pipe(
     Effect.orElseSucceed(() => "./engine/data/token-blacklist.json"),
   );
-  const sqliteDbPath = yield* Config.string("SQLITE_DB_PATH").pipe(
+  const sqliteDbPath = yield* Config.String("SQLITE_DB_PATH").pipe(
     Effect.orElseSucceed(() => getBeamDbPath()),
   );
-  const enableSnapshotCapture = yield* Config.boolean("ENABLE_SNAPSHOT_CAPTURE").pipe(
+  const enableSnapshotCapture = yield* Config.Boolean("ENABLE_SNAPSHOT_CAPTURE").pipe(
     Effect.orElseSucceed(() => false),
   );
   const snapshotRetentionDays = yield* validatedNumber("SNAPSHOT_RETENTION_DAYS", 1, 14);
 
   // Auto-update config
-  const autoUpdate = yield* Config.boolean("AUTO_UPDATE").pipe(Effect.orElseSucceed(() => true));
+  const autoUpdate = yield* Config.Boolean("AUTO_UPDATE").pipe(Effect.orElseSucceed(() => true));
   const updateCheckIntervalMs = yield* validatedNumber(
     "UPDATE_CHECK_INTERVAL_MS",
     60_000,
     21_600_000,
   );
-  const updateChannelRaw = yield* Config.string("UPDATE_CHANNEL").pipe(
+  const updateChannelRaw = yield* Config.String("UPDATE_CHANNEL").pipe(
     Effect.orElseSucceed(() => "stable"),
   );
   const validChannels = ["stable", "beta", "dev", "canary"] as const;
   const updateChannel = parseEnum(validChannels, updateChannelRaw, "stable");
-  const updateGithubRepo = yield* Config.string("UPDATE_GITHUB_REPO").pipe(
+  const updateGithubRepo = yield* Config.String("UPDATE_GITHUB_REPO").pipe(
     Effect.orElseSucceed(() => "irfndi/beam-clmm"),
   );
-  const updateAllowDirty = yield* Config.boolean("UPDATE_ALLOW_DIRTY").pipe(
+  const updateAllowDirty = yield* Config.Boolean("UPDATE_ALLOW_DIRTY").pipe(
     Effect.orElseSucceed(() => false),
   );
-  const forceUpdateEnabled = yield* Config.boolean("FORCE_UPDATE_ENABLED").pipe(
+  const forceUpdateEnabled = yield* Config.Boolean("FORCE_UPDATE_ENABLED").pipe(
     Effect.orElseSucceed(() => false),
   );
   const forceUpdateAfterDays = yield* validatedNumber("FORCE_UPDATE_AFTER_DAYS", 1, 14);
-  const updateR2PublicUrl = yield* Config.string("UPDATE_R2_PUBLIC_URL").pipe(
+  const updateR2PublicUrl = yield* Config.String("UPDATE_R2_PUBLIC_URL").pipe(
     Effect.orElseSucceed(() => "https://pub-2f55c98709e74d1d900b89ec20f8f1fc.r2.dev"),
   );
 
-  const githubToken = yield* Config.string("GITHUB_TOKEN").pipe(Effect.orElseSucceed(() => ""));
-  const githubRepo = yield* Config.string("GITHUB_REPO").pipe(
+  const githubToken = yield* Config.String("GITHUB_TOKEN").pipe(Effect.orElseSucceed(() => ""));
+  const githubRepo = yield* Config.String("GITHUB_REPO").pipe(
     Effect.orElseSucceed(() => "irfndi/beam-clmm"),
   );
-  const feedbackOptOut = yield* Config.boolean("BEAM_FEEDBACK_OPT_OUT").pipe(
+  const feedbackOptOut = yield* Config.Boolean("BEAM_FEEDBACK_OPT_OUT").pipe(
     Effect.orElseSucceed(() => false),
   );
-  const paperModeExitLive = yield* Config.boolean("PAPER_MODE_EXIT_LIVE").pipe(
+  const paperModeExitLive = yield* Config.Boolean("PAPER_MODE_EXIT_LIVE").pipe(
     Effect.orElseSucceed(() => false),
   );
   const watchlistPools = watchlistPoolsRaw
@@ -1867,6 +1941,13 @@ const loadConfig = Effect.gen(function* () {
     confidenceThreshold,
     paperPortfolioUsd,
     paperGasCostUsd,
+    decisionEngine,
+    gasPriceGwei,
+    l1DataFeeUsd,
+    swapFeeBps,
+    slippageBps,
+    unitEconomicsGate,
+    maxBreakEvenHoldDays,
     minBinUtilization,
     maxRebalanceRangeBins,
     watchlistPools,
@@ -1928,6 +2009,8 @@ const loadConfig = Effect.gen(function* () {
     geckoTerminalEnabled,
     krystalEnabled,
     krystalApiUrl,
+    defillamaEnabled,
+    defillamaEndpoint,
 
     pythEnabled,
     pythApiKey,
@@ -2079,8 +2162,11 @@ const loadConfig = Effect.gen(function* () {
 // so vitest stubs / CLI-set env are honored.
 export const ConfigLive = Layer.effect(
   ConfigService,
-  Effect.gen(function* () {
-    return yield* loadConfig.pipe(
+  // `suspend` keeps the env snapshot at layer-BUILD time: building the provider
+  // eagerly here would capture process.env at module import, before a test
+  // stub or a CLI env write lands.
+  Effect.suspend(() =>
+    loadConfig.pipe(
       Effect.provideService(
         ConfigProvider.ConfigProvider,
         // v4 treats literal "" as a missing env value by default; the engine
@@ -2088,6 +2174,6 @@ export const ConfigLive = Layer.effect(
         // disables the allowlist, AGENT_GATEWAY_TOKEN="" disables a runtime).
         ConfigProvider.fromEnv({ preserveEmptyStrings: true }),
       ),
-    );
-  }),
+    ),
+  ),
 );

@@ -1,5 +1,5 @@
-import { config } from "dotenv";
 import { installBigintWarningFilter } from "./bigint-warning-filter.js";
+import { loadEnvFile } from "./env-parse.js";
 import { ensureBeamConfigDir, getBeamEnvPath } from "./paths.js";
 
 // Installed here — load-env is the first module every entry point imports
@@ -8,4 +8,4 @@ import { ensureBeamConfigDir, getBeamEnvPath } from "./paths.js";
 installBigintWarningFilter();
 
 ensureBeamConfigDir();
-config({ path: getBeamEnvPath(), quiet: true });
+loadEnvFile(getBeamEnvPath(), process.env);

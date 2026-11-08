@@ -11,7 +11,10 @@
     "forceConsistentCasingInFileNames": true,
     "resolveJsonModule": true,
     "declaration": true,
-    "sourceMap": true
+    "sourceMap": true,
+    // Bun runtime globals + node builtins. `bun-types` supplies `bun:sqlite`
+    // (the server no longer depends on the native better-sqlite3 addon).
+    "types": ["bun-types", "node"]
   },
   "include": ["src/**/*"],
   "exclude": ["node_modules", "dist", "test"]

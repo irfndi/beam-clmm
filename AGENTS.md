@@ -3,11 +3,11 @@
 Notes for AI agent harnesses working in `beam-clmm`. This repo was scaffolded
 from `irfndi/prism-liquidity-agent` (Solana / Meteora DLMM) and has been
 ported into an autonomous concentrated-liquidity agent for **Uniswap v3 & v4
-on Base (EVM, chain id 8453; Robinhood Chain 4663 retained as registered chain)**, deployed on Cloudflare via the
-Alchemy framework. The EVM port is COMPLETE: the code compiles, typechecks,
+on Base (EVM, chain id 8453; Robinhood Chain 4663 retained as registered chain)**, deployed with pm2 on a self-hosted VPS (217.216.35.77) via
+`pm2.ecosystem.config.cjs`. The EVM port is COMPLETE: the code compiles, typechecks,
 and the full test suite passes. See `.ulw-notepad.md` for the verified
-chain-fact handoff and `.github/workflows/deploy-cloudflare.yml` for the
-deployment path.
+chain-fact handoff and `pm2.ecosystem.config.cjs` for the
+process profiles.
 
 ## Project
 
@@ -59,27 +59,39 @@ viem does not ship a built-in chain for 4663 — it is defined with
 - Renamed: `prism` → `beam` everywhere (env vars `PRISM_*` → `BEAM_*`, config
   dir, CLI binary `beam`, `scripts/beam.sh`, skills, packages).
 - `cli/setup.ts` / `ops/setup.ts` prompt for `BEAM_CHAIN` + `BEAM_BASE_RPC_URL` (Robinhood `ROBINHOOD_RPC_URL` secondary).
-- Deployment: Cloudflare Workers (`api` + `telegramBot`) + D1 + KV + R2 +
-  Vectorize, managed as TypeScript via Alchemy (`cloudflare/infra/alchemy.run.ts`).
-  Production site `beam.pryx.dev`. Deploys on merge to main via
-  `.github/workflows/deploy-cloudflare.yml`.
+- Deployment: pm2 profiles in `pm2.ecosystem.config.cjs` on the self-hosted
+  VPS (`beam-base`, `beam-base-live`, `beam-robinhood`), driving
+  `scripts/beam-pm2.sh`. State is SQLite under `.data/multichain/`; the
+  hosted control plane is disabled (`BEAM_CLOUD_ENABLED=false`).
+  The Cloudflare Workers + Alchemy stack was retired with the move; the
+  `cloudflare/` subproject no longer exists in this repo.
 
 ## Build / test
 
 ```bash
 bun install
 bun run lint        # tsc --noEmit && oxlint (scripts/lint.sh)
+bun run typecheck:fast  # tsrs (Rust TS7 port), ~0.5s local pre-check
 bun run format      # oxfmt --write
 bun run test        # vitest (bench/**, Bun required)
 ```
 
-Cloudflare subproject (separate workspace, own Effect line):
+`.oxlintrc.json` runs Effect's recommended `@effect/tsgo` rule set as errors
+(216 rules), so Effect usage is enforced by `bun run lint`: `catchIf` for
+selective recovery, `orElseSucceed`/`ignore` when the error is discarded,
+`timeoutOrElse` instead of racing a manual sleep, `forEach` instead of
+`all(map)`, no `try`/`catch` inside `Effect.gen`. `lazy-effect` and the two
+`global-error-in-effect-*` rules are off on purpose (see the comment there).
+
+Runtime profiles (self-hosted pm2 — replaces the retired Cloudflare stack):
 
 ```bash
-cd cloudflare && bun install
-bun run typecheck   # tsc --noEmit workspaces
-bunx vitest run     # worker tests (api, telegram-bot, ...)
+pm2 start pm2.ecosystem.config.cjs
+pm2 list            # beam-base (paper), beam-base-live, beam-robinhood
 ```
+
+Launch from a clean env: `pm2 delete --all; env -i PATH=$PATH HOME=$HOME pm2 start
+pm2.ecosystem.config.cjs` (a sourced shell `.env` otherwise merges into children).
 
 ## Conventions (kept from Prism)
 
@@ -96,5 +108,4 @@ bunx vitest run     # worker tests (api, telegram-bot, ...)
 
 - Verified chain-fact handoff: `.ulw-notepad.md`
 - EVM adapter + decision loop: `engine/adapter-service.ts`, `engine/program.ts`
-- Deployment (Alchemy): `cloudflare/infra/alchemy.run.ts`,
-  `.github/workflows/deploy-cloudflare.yml`, `docs/alchemy-deploy.md`
+- Deployment (pm2): `pm2.ecosystem.config.cjs`, `scripts/beam-pm2.sh`

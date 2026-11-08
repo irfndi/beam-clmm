@@ -9,8 +9,120 @@ import type { BeamStateSnapshot } from "./state-service.js";
 import type { AgentProposal } from "./types.js";
 import { parseHttpQueueProposal, ProposalParseError } from "./proposal-schema.js";
 import { getCurrentVersion } from "./version.js";
+import {
+  buildOperatorStatus,
+  positionStatusFromSnapshot,
+  type OperatorStatus,
+} from "./operator-status.js";
 
 const logger = createLogger("HttpStatusServer");
+
+/** Static, dependency-free dashboard. Read-only: it only GETs /status,
+ *  /positions, /decisions and /config with a Bearer token the operator pastes
+ *  in once. */
+const DASHBOARD_HTML = `<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Beam — local status</title>
+<style>
+:root{color-scheme:dark}
+body{margin:0;padding:24px;background:#0d1117;color:#c9d1d9;font:14px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace}
+h1{font-size:16px;margin:0 0 4px}h2{font-size:13px;text-transform:uppercase;letter-spacing:.08em;color:#8b949e;margin:24px 0 8px}
+.muted{color:#8b949e}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px}
+.card{background:#161b22;border:1px solid #21262d;border-radius:6px;padding:10px}
+.k{color:#8b949e;font-size:11px;text-transform:uppercase;letter-spacing:.06em}
+.v{font-size:18px;margin-top:2px}
+table{width:100%;border-collapse:collapse;font-size:13px}th,td{text-align:left;padding:5px 8px;border-bottom:1px solid #21262d;white-space:nowrap}
+th{color:#8b949e;font-weight:500}tr:hover td{background:#161b22}
+.pos{color:#3fb950}.neg{color:#f85149}
+input,button{background:#161b22;color:#c9d1d9;border:1px solid #30363d;border-radius:6px;padding:6px 10px;font:inherit}
+button{cursor:pointer}button:hover{border-color:#8b949e}
+#gate{max-width:520px}#err{color:#f85149;min-height:18px}
+</style></head><body>
+<h1>Beam — local status</h1>
+<div class="muted">loopback only · read-only · auto-refresh 10s · <span id="tick">idle</span></div>
+<div id="gate" style="margin-top:24px">
+  <p class="muted">Paste the agent read token (AGENT_PROPOSAL_TOKEN). It stays in this tab only.</p>
+  <p><input id="token" type="password" size="40" placeholder="token" autocomplete="off"> <button id="go">Load</button></p>
+  <p id="err"></p>
+</div>
+<div id="view" hidden>
+  <h2>Portfolio</h2><div class="grid" id="portfolio"></div>
+  <h2>Positions</h2><div id="positions"></div>
+  <h2>Recent decisions</h2><div id="decisions"></div>
+  <h2>Config</h2><div id="config"></div>
+</div>
+<script>
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const usd = (n) => (typeof n === "number" && isFinite(n) ? "$" + n.toLocaleString(undefined, {maximumFractionDigits: 2}) : "—");
+const num = (n) => (typeof n === "number" && isFinite(n) ? n.toFixed(2) : "—");
+const ago = (ts) => {
+  if (!ts) return "—";
+  const s = Math.max(0, Math.round((Date.now() - ts) / 1000));
+  if (s < 90) return s + "s ago";
+  if (s < 5400) return Math.round(s / 60) + "m ago";
+  return Math.round(s / 3600) + "h ago";
+};
+let token = sessionStorage.getItem("beamToken") || "";
+async function api(path) {
+  const res = await fetch(path, { headers: { authorization: "Bearer " + token } });
+  if (res.status === 401) throw new Error("401 — token rejected (AGENT_PROPOSAL_TOKEN must be set on the agent)");
+  if (!res.ok) throw new Error(res.status + " " + res.statusText);
+  return res.json();
+}
+function table(rows, cols) {
+  if (!rows || rows.length === 0) return "<p class=muted>none</p>";
+  return "<table><tr>" + cols.map((c) => "<th>" + esc(c.label) + "</th>").join("") + "</tr>" +
+    rows.map((r) => "<tr>" + cols.map((c) => "<td>" + c.render(r) + "</td>").join("") + "</tr>").join("") + "</table>";
+}
+async function refresh() {
+  try {
+    const [status, positions, decisions, config] = await Promise.all([
+      api("/status"), api("/positions"), api("/decisions?limit=25"), api("/config"),
+    ]);
+    $("gate").hidden = true; $("view").hidden = false; $("err").textContent = "";
+    const p = status.portfolio || {};
+    $("portfolio").innerHTML = [
+      ["value", usd(p.totalValueUsd ?? p.currentValueUsd)],
+      ["deposited", usd(p.totalDepositedUsd)],
+      ["pnl", usd(p.unrealizedPnlUsd ?? p.totalPnlUsd)],
+      ["cash", usd(p.availableUsd ?? p.cashUsd)],
+      ["positions", status.portfolio ? (positions.positions || []).length : "—"],
+      ["scans", status.scanCount],
+      ["last cycle", ago(status.lastCycleAt)],
+      ["uptime", status.uptimeMs ? Math.round(status.uptimeMs / 3600000) + "h" : "—"],
+    ].map(([k, v]) => "<div class=card><div class=k>" + esc(k) + "</div><div class=v>" + esc(v) + "</div></div>").join("");
+    $("positions").innerHTML = table(positions.positions, [
+      { label: "pool", render: (r) => esc(String(r.poolAddress).slice(0, 10) + "…" + String(r.poolAddress).slice(-4)) },
+      { label: "value", render: (r) => esc(usd(r.currentValueUsd)) },
+      { label: "deposited", render: (r) => esc(usd(r.depositedUsd)) },
+      { label: "pnl", render: (r) => { const d = (r.currentValueUsd || 0) - (r.depositedUsd || 0); return "<span class=" + (d >= 0 ? "pos" : "neg") + ">" + esc(usd(d)) + "</span>"; } },
+      { label: "range", render: (r) => esc((r.lowerBinId ?? "?") + "…" + (r.upperBinId ?? "?")) },
+      { label: "opened", render: (r) => esc(ago(r.openedAt ?? r.entryTimestamp)) },
+    ]);
+    $("decisions").innerHTML = table(decisions.decisions, [
+      { label: "when", render: (r) => esc(ago(r.timestamp)) },
+      { label: "pool", render: (r) => esc(String(r.poolAddress || "").slice(0, 10)) },
+      { label: "action", render: (r) => esc(r.action) },
+      { label: "conf", render: (r) => esc(num(r.confidence)) },
+      { label: "reason", render: (r) => esc(String(r.reasoning || "").slice(0, 110)) },
+    ]);
+    $("config").innerHTML = table([config], Object.keys(config).map((k) => ({
+      label: k, render: (r) => esc(typeof r[k] === "object" ? JSON.stringify(r[k]) : r[k]),
+    })));
+    $("tick").textContent = "updated " + new Date().toLocaleTimeString();
+  } catch (e) {
+    $("err").textContent = String(e.message || e);
+    $("gate").hidden = false;
+    if (e.message && e.message.startsWith("401")) sessionStorage.removeItem("beamToken");
+  }
+}
+$("go").onclick = () => { token = $("token").value.trim(); sessionStorage.setItem("beamToken", token); refresh(); };
+$("token").onkeydown = (e) => { if (e.key === "Enter") $("go").click(); };
+if (token) refresh(); else $("gate").hidden = false;
+setInterval(() => { if (token) refresh(); }, 10000);
+</script></body></html>`;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -45,6 +157,62 @@ export class HttpStatusServer {
     private readonly config: AppConfig,
     private readonly state: AgentStateApi,
   ) {}
+
+  /** The single read model behind every read endpoint on this server. */
+  private operatorStatus(snapshot: BeamStateSnapshot): OperatorStatus {
+    const positions = (snapshot.positions ?? []).map((position) =>
+      positionStatusFromSnapshot(position),
+    );
+    const totalDepositedUsd = positions.reduce((sum, position) => sum + position.depositedUsd, 0);
+    const portfolio = snapshot.portfolio ?? {
+      totalValueUsd: 0,
+      unrealizedPnlUsd: 0,
+      realizedPnlUsd: 0,
+      openPositions: 0,
+      maxPositions: 0,
+      walletBalanceUsd: 0,
+    };
+    const walletBalanceUsd = portfolio.walletBalanceUsd;
+    const walletKnown = Number.isFinite(walletBalanceUsd);
+    return buildOperatorStatus({
+      source: "http",
+      running: true,
+      version: getCurrentVersion(),
+      uptimeMs: Date.now() - (snapshot.programStartTime ?? Date.now()),
+      scanCount: snapshot.scanCount ?? 0,
+      lastCycleAt: snapshot.lastCycleAt ?? null,
+      portfolio: {
+        totalValueUsd: portfolio.totalValueUsd ?? 0,
+        totalDepositedUsd,
+        totalUnrealizedPnlUsd: portfolio.unrealizedPnlUsd ?? 0,
+        totalUnrealizedPnlPct:
+          totalDepositedUsd > 0
+            ? ((portfolio.unrealizedPnlUsd ?? 0) / totalDepositedUsd) * 100
+            : null,
+        totalFeesClaimedUsd: null,
+        totalRewardsClaimedUsd: null,
+        walletBalanceUsd: walletKnown ? walletBalanceUsd : null,
+        walletKnown,
+        totalEquityUsd: (portfolio.totalValueUsd ?? 0) + (walletKnown ? walletBalanceUsd : 0),
+        realizedPnlUsd: portfolio.realizedPnlUsd ?? null,
+        positionCount: positions.length,
+      },
+      positions,
+      decisions: (snapshot.recentDecisions ?? []).map((decision) => ({
+        timestamp: decision.timestamp,
+        cycleId: decision.cycleId,
+        poolAddress: decision.poolAddress,
+        action: decision.action,
+        confidence: decision.confidence,
+        reasoning: decision.reasoning,
+        executed: decision.executed,
+        paperTrading: false,
+        error: null,
+      })),
+      agentPolicy: snapshot.agentPolicy,
+      config: sanitizeConfig(this.config, snapshot),
+    });
+  }
 
   private isAuthorized(request: Request, expectedToken: string): boolean {
     if (expectedToken.length === 0) return false;
@@ -322,6 +490,17 @@ export class HttpStatusServer {
           const url = new URL(request.url);
           const snapshot = await Effect.runPromise(this.state.getSnapshot());
 
+          // Read-only dashboard shell. Static HTML with no state in it: the page
+          // asks for the read token once (kept in sessionStorage, never in the
+          // URL so it cannot land in access logs) and then pulls the same
+          // token-gated JSON endpoints a CLI would. Loopback-only bind, no
+          // write path, no external assets.
+          if (url.pathname === "/") {
+            return new Response(DASHBOARD_HTML, {
+              headers: { "content-type": "text/html; charset=utf-8" },
+            });
+          }
+
           if (url.pathname === "/health") {
             return Response.json({
               ok: true,
@@ -345,20 +524,17 @@ export class HttpStatusServer {
             }
           }
 
+          const status = this.operatorStatus(snapshot);
+
           if (url.pathname === "/status") {
-            return Response.json({
-              uptimeMs: Date.now() - snapshot.programStartTime,
-              scanCount: snapshot.scanCount,
-              lastCycleAt: snapshot.lastCycleAt,
-              portfolio: snapshot.portfolio,
-            });
+            return Response.json(status);
           }
 
           if (url.pathname === "/positions") {
             const pool = url.searchParams.get("pool");
             const positions = pool
-              ? snapshot.positions.filter((p) => p.poolAddress === pool)
-              : snapshot.positions;
+              ? status.positions.filter((position) => position.poolAddress === pool)
+              : status.positions;
             return Response.json({ positions });
           }
 
@@ -369,19 +545,19 @@ export class HttpStatusServer {
               100,
             );
             const pool = url.searchParams.get("pool");
-            let decisions = snapshot.recentDecisions;
+            let decisions = status.decisions;
             if (pool) {
-              decisions = decisions.filter((d) => d.poolAddress === pool);
+              decisions = decisions.filter((decision) => decision.poolAddress === pool);
             }
             return Response.json({ decisions: decisions.slice(0, limit) });
           }
 
           if (url.pathname === "/config") {
-            return Response.json(sanitizeConfig(this.config, snapshot));
+            return Response.json(status.config ?? {});
           }
 
           if (url.pathname === "/agent-policy") {
-            return Response.json(snapshot.agentPolicy);
+            return Response.json(status.agentPolicy);
           }
 
           if (url.pathname === "/propose") {

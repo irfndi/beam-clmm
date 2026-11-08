@@ -21,6 +21,11 @@ chroma-data/
 *.db-shm
 *.db-wal
 /data/
+# Runtime state + pm2 logs (engine DBs). ~1.2G locally — never vendored.
+.data/
+
+# Agent tooling state
+.oh-my-plumb/
 
 # Editor
 .vscode/
@@ -53,9 +58,6 @@ engine/sqlite-vec-embedded.ts
 # OpenCode internal state
 .omo/
 
-# Wrangler local state
-.wrangler/
-
 # Python build artifacts
 *.egg-info/
 __pycache__/
@@ -65,9 +67,11 @@ __pycache__/
 build/
 dist/
 
-# mcp-server is an npm subproject; do not track its lockfile to avoid security
-# scanners flagging transitive dependencies (e.g. Hono CORS) we do not use.
+# mcp-server is a Bun subproject with its own committed lockfile, so installs
+# stay reproducible. The old npm lockfile stays ignored so a stray `npm install`
+# cannot reintroduce a second dependency tree.
 mcp-server/package-lock.json
+mcp-server/node_modules/
 
 
 # Claude session files

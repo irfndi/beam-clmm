@@ -104,6 +104,7 @@ export interface AgentRuntimeAlert {
   readonly category:
     | "stop_loss"
     | "trailing_stop"
+    | "frozen_feed"
     | "high_volatility"
     | "tvl_drop"
     | "risk_rejected"

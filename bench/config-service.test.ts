@@ -3,15 +3,7 @@ import { Effect } from "effect";
 import { ConfigService, ConfigLive } from "../engine/config-service.js";
 
 async function loadConfig() {
-  return Effect.runPromise(
-    Effect.provide(
-      Effect.gen(function* () {
-        return yield* ConfigService;
-      }),
-      ConfigLive,
-      { local: true },
-    ),
-  );
+  return Effect.runPromise(Effect.provide(ConfigService, ConfigLive, { local: true }));
 }
 
 describe("ConfigService upper-bound clamping", () => {

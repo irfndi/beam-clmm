@@ -4,7 +4,7 @@
 // - fnd_sig-feat-library-334b6b45bc-c771: the prerelease version comparator
 //   must order semver numerically (canary.10 > canary.2), not lexicographically.
 // - Version gate: the wrapper must fail with an actionable message when bun is
-//   missing or older than engines.bun (>= 1.4.0).
+//   missing or older than engines.bun (>= 1.4.4).
 // - Symlink resolution: the wrapper must resolve the package root through
 //   `bin`-style symlinks so BEAM_INSTALL_DIR / cli/index.ts are correct even
 //   when invoked via a global bin link.
@@ -30,7 +30,7 @@ import { fileURLToPath } from "node:url";
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const BEAM_SH = path.join(REPO_ROOT, "scripts", "beam.sh");
-const MIN_BUN_VERSION = "1.4.0";
+const MIN_BUN_VERSION = "1.4.4";
 
 let sandbox: string;
 let stubDir: string;
@@ -137,8 +137,8 @@ describe("scripts/beam.sh wrapper", () => {
   });
 
   it.each([
-    ["1.4.0", "stable release"],
-    ["1.4.1-canary.1", "newer prerelease"],
+    ["1.4.4", "stable release"],
+    ["1.4.5-canary.1", "newer prerelease"],
     ["2.0.0", "newer major"],
   ])("passes the version gate for %s (%s) and execs the CLI", (version) => {
     const res = runBeam(["--help"], { version });
@@ -148,12 +148,12 @@ describe("scripts/beam.sh wrapper", () => {
   });
 
   it("passes the version gate for canary.10 (numeric prerelease ordering)", () => {
-    const res = runBeam(["--help"], { version: "1.4.1-canary.10" });
+    const res = runBeam(["--help"], { version: "1.4.5-canary.10" });
     expect(res.status).toBe(0);
   });
 
   it("passes argv through to the CLI after the wrapper cd's into the package root", () => {
-    const res = runBeam(["dev", "--paper"], { version: "1.4.0" });
+    const res = runBeam(["dev", "--paper"], { version: "1.4.4" });
     expect(res.status).toBe(0);
     const log = logLines();
     const execLine = log.find((l) => l.startsWith("EXEC:"));
@@ -166,7 +166,7 @@ describe("scripts/beam.sh wrapper", () => {
     const linkDir = mkdtempSync(path.join(sandbox, "link1-"));
     const link = path.join(linkDir, "beam");
     symlinkSync(BEAM_SH, link);
-    const res = runBeam(["--help"], { script: link, version: "1.4.0" });
+    const res = runBeam(["--help"], { script: link, version: "1.4.4" });
     expect(res.status).toBe(0);
     const log = logLines();
     expect(log).toContain(`BEAM_INSTALL_DIR=${realpathSync(REPO_ROOT)}`);
@@ -184,7 +184,7 @@ describe("scripts/beam.sh wrapper", () => {
     symlinkSync("b", a); // relative target on purpose
     symlinkSync("c", b);
     symlinkSync(BEAM_SH, path.join(chainDir, "c"));
-    const res = runBeam(["--version"], { script: a, version: "1.4.0" });
+    const res = runBeam(["--version"], { script: a, version: "1.4.4" });
     expect(res.status).toBe(0);
     const log = logLines();
     expect(log).toContain(`BEAM_INSTALL_DIR=${realpathSync(REPO_ROOT)}`);
@@ -192,7 +192,7 @@ describe("scripts/beam.sh wrapper", () => {
 
   it("preserves the caller's cwd as BEAM_CALLER_CWD", () => {
     const caller = mkdtempSync(path.join(sandbox, "cwd-"));
-    const res = runBeam(["--help"], { cwd: caller, version: "1.4.0" });
+    const res = runBeam(["--help"], { cwd: caller, version: "1.4.4" });
     expect(res.status).toBe(0);
     // bash reports PWD as the physical path (/private/var/... on macOS even
     // when the tmpdir API returned the /var/... alias).
@@ -227,8 +227,8 @@ describe("scripts/beam.sh wrapper", () => {
 
     expect(compare("1.4.1-canary.10", "1.4.1-canary.2")).toBe(0); // 10 > 2 numerically
     expect(compare("1.4.1-canary.2", "1.4.1-canary.1")).toBe(0);
-    expect(compare("1.4.0-canary.1", "1.4.0")).toBe(1); // prerelease < release
-    expect(compare("1.3.9", "1.4.0")).toBe(1);
+    expect(compare("1.4.4-canary.1", "1.4.4")).toBe(1); // prerelease < release
+    expect(compare("1.3.9", "1.4.4")).toBe(1);
     expect(compare("1.4.0", "1.4.0")).toBe(0);
   });
 });

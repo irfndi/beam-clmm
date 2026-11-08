@@ -13,6 +13,14 @@ const LIVE_WATCHLIST = [
   "0x6c561B446416E1A00E8E93E221854d6eA4171372", // 0.30%
 ].join(",");
 
+// Standalone deployment: the hosted Cloudflare control plane (D1 heartbeats,
+// alerts, revenue config) is OFF — state is SQLite + the local audit trail, and
+// the watchlist below is the whole scan set.
+const CLOUD_OFF = {
+  BEAM_CLOUD_ENABLED: "false",
+  BEAM_PM2_BEAM_CLOUD_ENABLED: "false",
+};
+
 // Paper keeps restored v4 book ids + live v3 set.
 const PAPER_WATCHLIST = [
   "0x0590e03f159b40055b4f9423f23bdd814edac2f340d6afed1280dee36c30effe",
@@ -50,6 +58,12 @@ module.exports = {
         BEAM_PM2_CHAIN: "base",
         AGENT_INSTANCE_ID: "beam-base",
         BEAM_PM2_AGENT_INSTANCE_ID: "beam-base",
+        // Local read-only operator surface replacing the retired hosted
+        // dashboard: http://127.0.0.1:8787/ (SSH tunnel), gated by
+        // AGENT_PROPOSAL_TOKEN. The token is NOT in this file — it lives in
+        // ~/.config/beam/.env on the host, which load-env reads.
+        AGENT_HTTP_PORT: "8787",
+        BEAM_PM2_AGENT_HTTP_PORT: "8787",
         SQLITE_DB_PATH: `${data}/base.db`,
         BEAM_PM2_SQLITE_DB_PATH: `${data}/base.db`,
         BEAM_INSTALL_DIR: root,
@@ -64,6 +78,14 @@ module.exports = {
         AUTONOMOUS_TOKEN_MODE: "off",
         BEAM_PM2_AUTONOMOUS_TOKEN_MODE: "off",
         ENABLE_POOL_DISCOVERY: "false",
+        ...CLOUD_OFF,
+        // Krystal 403s from this host (Cloudflare) and discovery is off, so the
+        // watchlist is the scan set. DefiLlama fills the measured-fee tier for
+        // the v3 pools; gecko batches the rest (see gecko-terminal-service).
+        KRYSTAL_ENABLED: "false",
+        BEAM_PM2_KRYSTAL_ENABLED: "false",
+        DEFILLAMA_ENABLED: "true",
+        BEAM_PM2_DEFILLAMA_ENABLED: "true",
         // Paper proves the turnover-weighted rotation: scan the universe for
         // small-cap high-turnover books instead of sitting on the watchlist.
         MARKET_SCAN_ENABLED: "true",
@@ -126,6 +148,7 @@ module.exports = {
         BEAM_PM2_RPC_RETRY_COUNT: "8",
         PAPER_TRADING: "false",
         BEAM_PM2_PAPER_TRADING: "false",
+        ...CLOUD_OFF,
         // Pin off: project .env has CHALLENGE_MODE=true (paper harvest book).
         CHALLENGE_MODE: "false",
         BEAM_PM2_CHALLENGE_MODE: "false",

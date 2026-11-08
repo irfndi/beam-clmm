@@ -1,6 +1,8 @@
 /* oxlint-disable anti-slop/no-unsafe-dictionary-type */
 
 import { Context, Effect } from "effect";
+import type { ShadowInput, ShadowOutput } from "./decision-shadow.js";
+import type { DecideInput, EngineDecision } from "./core/decide.js";
 import type {
   AgentDecision,
   AgentPolicySnapshot,
@@ -589,6 +591,25 @@ export class EntryPrepService extends Context.Service<EntryPrepService, EntryPre
   "EntryPrepService",
 ) {}
 
+// ─── Decision Service ────────────────────────────────────────────────────────
+
+/**
+ * The rule-based decision core as an Effect service.
+ *
+ * `decide` is pure; `shadow` runs the rule core beside the live decision and
+ * returns journal rows + an economics verdict. Both are exposed through a
+ * service so the program composes them like every other dependency and tests
+ * can substitute a deterministic implementation.
+ */
+export interface DecisionApi {
+  readonly decide: (input: DecideInput) => Effect.Effect<EngineDecision, never>;
+  readonly shadow: (input: ShadowInput) => Effect.Effect<ShadowOutput, never>;
+}
+
+export class DecisionService extends Context.Service<DecisionService, DecisionApi>()(
+  "DecisionService",
+) {}
+
 // ─── Strategy Service ────────────────────────────────────────────────────────
 
 export interface StrategyApi {
@@ -649,6 +670,17 @@ export interface GeckoTerminalApi {
     poolAddress: string,
     baseFeeRate: number,
   ) => Effect.Effect<GeckoStats | null, never>;
+  /**
+   * Warm the stats cache for a whole scan set in as few requests as the API
+   * allows (`/pools/multi/{...}` takes up to 30 addresses per call). One batched
+   * read per cycle is what keeps several agents behind a single IP inside the
+   * keyless 30 req/min budget; per-pool reads then hit the cache. Never fails and
+   * never throws — a failed batch just leaves its pools on the heuristic.
+   *
+   * Optional so the lightweight `{ getPoolStats }` fakes in the decision-loop
+   * tests keep typechecking; a missing implementation just means no prefetch.
+   */
+  readonly prefetchPools?: (addresses: ReadonlyArray<string>) => Effect.Effect<void, never>;
 }
 
 export interface KrystalApi {
@@ -1092,6 +1124,48 @@ export interface DbApi {
       paperTrading: boolean;
       txSignature: string | null;
       error: string | null;
+    }>,
+    Error
+  >;
+  /** One row per decision EVALUATION (proposed / suppressed / executed / shadow). */
+  readonly saveDecisionJournal: (record: {
+    id: string;
+    timestamp: number;
+    cycleId: string;
+    poolAddress: string;
+    positionId: string | null;
+    engine: "legacy" | "rules";
+    kind: "proposed" | "suppressed" | "executed" | "shadow";
+    action: string;
+    confidence: number;
+    reasoning: string;
+    evUsd: number | null;
+    costUsd: number | null;
+    minSizeUsd: number | null;
+    regime: string | null;
+    factsJson: string | null;
+    signalsJson: string | null;
+    decisionJson: string | null;
+  }) => Effect.Effect<void, Error>;
+  readonly getRecentDecisionJournal: (limit: number) => Effect.Effect<
+    ReadonlyArray<{
+      id: string;
+      timestamp: number;
+      cycleId: string;
+      poolAddress: string;
+      positionId: string | null;
+      engine: "legacy" | "rules";
+      kind: "proposed" | "suppressed" | "executed" | "shadow";
+      action: string;
+      confidence: number;
+      reasoning: string;
+      evUsd: number | null;
+      costUsd: number | null;
+      minSizeUsd: number | null;
+      regime: string | null;
+      factsJson: string | null;
+      signalsJson: string | null;
+      decisionJson: string | null;
     }>,
     Error
   >;

@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { Effect, Layer } from "effect";
 import { StrategyLive } from "../engine/strategy-service.js";
+import { DecisionLive } from "../engine/decision-service.js";
 import { program } from "../engine/program.js";
 import { DbLive } from "../engine/db-service.js";
 import { MemoryLive } from "../engine/memory-service.js";
@@ -125,6 +126,7 @@ function makeTestLayer(opts: {
     Layer.succeed(ConfigService, config),
     Layer.succeed(AdapterService, opts.adapter),
     StrategyLive,
+    DecisionLive,
     Layer.provide(MemoryLive, dbLayer),
     RiskLive({
       confidenceThreshold: 0.65,
@@ -175,7 +177,7 @@ function makeTestLayer(opts: {
     AgentStateMutable({ maxPendingProposals: 50 }).layer,
     Layer.succeed(McpServerService, { start: () => Effect.void, stop: () => Effect.void }),
     Layer.succeed(HttpStatusServerService, { start: () => Effect.void, stop: () => Effect.void }),
-    Layer.succeed(EntryPrepService, { prepareEntryTokens: () => Effect.succeed(undefined) }),
+    Layer.succeed(EntryPrepService, { prepareEntryTokens: () => Effect.undefined }),
     Layer.succeed(KrystalService, {
       getPoolStats: () => Effect.succeed(null),
       getUniverse: () => Effect.succeed(new Map()),
@@ -212,7 +214,7 @@ function runWithSeed(
     for (const pos of positions) {
       yield* db.savePosition(pos);
     }
-    yield* Effect.raceFirst(program, Effect.sleep(2_000));
+    yield* Effect.timeoutOrElse(program, { duration: 2_000, orElse: () => Effect.void });
     const audit = yield* AuditService;
     return yield* audit.getRecentDecisions(200);
   });

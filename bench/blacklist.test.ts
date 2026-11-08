@@ -26,80 +26,38 @@ describe("BlacklistService", () => {
 
   describe("isDeployerBlacklisted", () => {
     it("returns true for blacklisted deployer", () => {
-      const api = Effect.runSync(
-        Effect.provide(
-          Effect.gen(function* () {
-            return yield* BlacklistService;
-          }),
-          getLayer(),
-        ),
-      );
+      const api = Effect.runSync(Effect.provide(BlacklistService, getLayer()));
       expect(api.isDeployerBlacklisted("bad_deployer_1")).toBe(true);
       expect(api.isDeployerBlacklisted("bad_deployer_2")).toBe(true);
     });
 
     it("returns false for non-blacklisted deployer", () => {
-      const api = Effect.runSync(
-        Effect.provide(
-          Effect.gen(function* () {
-            return yield* BlacklistService;
-          }),
-          getLayer(),
-        ),
-      );
+      const api = Effect.runSync(Effect.provide(BlacklistService, getLayer()));
       expect(api.isDeployerBlacklisted("good_deployer")).toBe(false);
     });
 
     it("returns false when file does not exist", () => {
       fs.rmSync(deployerPath);
-      const api = Effect.runSync(
-        Effect.provide(
-          Effect.gen(function* () {
-            return yield* BlacklistService;
-          }),
-          getLayer(),
-        ),
-      );
+      const api = Effect.runSync(Effect.provide(BlacklistService, getLayer()));
       expect(api.isDeployerBlacklisted("any")).toBe(false);
     });
   });
 
   describe("isTokenBlacklisted", () => {
     it("returns true for blacklisted token", () => {
-      const api = Effect.runSync(
-        Effect.provide(
-          Effect.gen(function* () {
-            return yield* BlacklistService;
-          }),
-          getLayer(),
-        ),
-      );
+      const api = Effect.runSync(Effect.provide(BlacklistService, getLayer()));
       expect(api.isTokenBlacklisted("bad_token_1")).toBe(true);
     });
 
     it("returns false for non-blacklisted token", () => {
-      const api = Effect.runSync(
-        Effect.provide(
-          Effect.gen(function* () {
-            return yield* BlacklistService;
-          }),
-          getLayer(),
-        ),
-      );
+      const api = Effect.runSync(Effect.provide(BlacklistService, getLayer()));
       expect(api.isTokenBlacklisted("good_token")).toBe(false);
     });
   });
 
   describe("checkPool", () => {
     it("passes for clean pool", () => {
-      const api = Effect.runSync(
-        Effect.provide(
-          Effect.gen(function* () {
-            return yield* BlacklistService;
-          }),
-          getLayer(),
-        ),
-      );
+      const api = Effect.runSync(Effect.provide(BlacklistService, getLayer()));
       const result = Effect.runSync(
         Effect.result(api.checkPool("pool1", "good_token", "also_good")),
       );
@@ -107,14 +65,7 @@ describe("BlacklistService", () => {
     });
 
     it("fails when token X is blacklisted", () => {
-      const api = Effect.runSync(
-        Effect.provide(
-          Effect.gen(function* () {
-            return yield* BlacklistService;
-          }),
-          getLayer(),
-        ),
-      );
+      const api = Effect.runSync(Effect.provide(BlacklistService, getLayer()));
       const result = Effect.runSync(
         Effect.result(api.checkPool("pool1", "bad_token_1", "good_token")),
       );
@@ -122,14 +73,7 @@ describe("BlacklistService", () => {
     });
 
     it("fails when token Y is blacklisted", () => {
-      const api = Effect.runSync(
-        Effect.provide(
-          Effect.gen(function* () {
-            return yield* BlacklistService;
-          }),
-          getLayer(),
-        ),
-      );
+      const api = Effect.runSync(Effect.provide(BlacklistService, getLayer()));
       const result = Effect.runSync(
         Effect.result(api.checkPool("pool1", "good_token", "bad_token_2")),
       );

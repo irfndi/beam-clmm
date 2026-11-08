@@ -329,6 +329,29 @@ describe("HttpStatusServer", () => {
     }
   });
 
+  it("serves the read-only dashboard shell without a token", async () => {
+    const port = 18_794;
+    const server = new HttpStatusServer(
+      baseConfig({ agentHttpPort: port, agentProposalToken: "secret-token" }),
+      mockState(),
+    );
+    await Effect.runPromise(server.start());
+    try {
+      const response = await fetch(`http://127.0.0.1:${port}/`);
+      expect(response.status).toBe(200);
+      expect(response.headers.get("content-type")).toContain("text/html");
+      const html = await response.text();
+      // Static shell only: no state and no credential baked into the page.
+      expect(html).toContain("Beam — local status");
+      expect(html).not.toContain("secret-token");
+      // The data itself stays behind the token gate.
+      const status = await fetch(`http://127.0.0.1:${port}/status`);
+      expect(status.status).toBe(401);
+    } finally {
+      await Effect.runPromise(server.stop());
+    }
+  });
+
   it("returns 404 for unknown paths", async () => {
     const port = 18_796;
     const server = new HttpStatusServer(baseConfig({ agentHttpPort: port }), mockState());

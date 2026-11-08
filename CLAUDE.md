@@ -42,7 +42,7 @@ There are also optional peripheral subprojects:
 
 ## Technology stack
 
-- **Runtime:** Bun `>=1.4.0` for development, tests and engine builds. The repo uses Bun's isolated linker with the global virtual store enabled. Node 22+ is used only by the `mcp-server` subproject.
+- **Runtime:** Bun `>=1.4.4` for development, tests and engine builds. The repo uses Bun's isolated linker with the global virtual store enabled. `mcp-server` is a Bun subproject too (it uses `bun:sqlite`), not a Node one.
 - **Language:** TypeScript with strict settings: `strict`, `noUncheckedIndexedAccess`, `noImplicitOverride`, `exactOptionalPropertyTypes`, `noFallthroughCasesInSwitch`.
 - **Framework / DI:** [Effect-TS](https://effect.website) (`Context.Tag` + `Layer`). All side effects go through services.
 - **On-chain:** `@meteora-ag/dlmm` SDK + Helius RPC (`SOLANA_RPC_URL`).
@@ -66,10 +66,8 @@ There are also optional peripheral subprojects:
 | `.oxlintrc.json`                                      | `oxlint` rules: `correctness: error`, `no-unused-vars` and `require-yield` off.                                                               |
 | `.oxfmtrc.json`                                       | `oxfmt` config (empty `ignorePatterns`).                                                                                                      |
 | `.env.example`                                        | Example env file. **Incomplete** — canonical defaults and full env set live in `engine/config-service.ts`.                                    |
-| `Dockerfile`                                          | Multi-stage Bun-based image; runtime uses `oven/bun:1.4.0-slim`, installs `libsqlite3-0` + `ca-certificates`, runs as non-root `agent` user. |
+| `Dockerfile`                                          | Multi-stage Bun-based image; runtime uses `oven/bun:1.4.4-slim`, installs `libsqlite3-0` + `ca-certificates`, runs as non-root `agent` user. |
 | `scripts/beam.sh`                                    | The `beam` binary wrapper; resolves install root, sets `BEAM_INSTALL_DIR`, then runs `cli/index.ts`.                                        |
-| `cloudflare/package.json`                             | Separate subproject for API + Telegram workers.                                                                                               |
-| `cloudflare/wrangler.toml` / `wrangler.telegram.toml` | Cloudflare Worker configs.                                                                                                                    |
 | `mcp-server/package.json`                             | Node-based MCP server subproject.                                                                                                             |
 | `packages/*/pyproject.toml`                           | Python plugin skeletons (not part of the Bun build).                                                                                          |
 
@@ -81,7 +79,6 @@ beam-clmm/
 ├── cli/               # Commander-based user-facing commands
 ├── ops/               # Operational scripts: setup wizard, backtest, fetch-history
 ├── bench/             # Engine tests (Vitest, Bun-only)
-├── cloudflare/        # Separate subproject: API Worker + Telegram bot
 ├── mcp-server/        # Separate Node subproject: stdio MCP server
 ├── packages/          # Python plugin skeletons (AutoGPT, LangChain)
 ├── scripts/           # install.sh, postinstall.js, build-bundle.ts, generate-vec-embed.ts, etc.
@@ -113,18 +110,11 @@ bun run backtest            # bun run ops/backtest.ts
 bun run dev                 # bun --watch engine/index.ts (see Direct-execution guard below)
 ```
 
-### Cloudflare subproject
+### Runtime profiles (self-hosted pm2)
 
 ```bash
-cd cloudflare
-bun install
-bun run typecheck              # tsc --noEmit
-wrangler dev                   # API worker local dev
-wrangler dev --config wrangler.telegram.toml   # Telegram bot local dev
-wrangler deploy                # deploy API worker
-wrangler deploy --config wrangler.telegram.toml  # deploy Telegram bot
-wrangler d1 migrations apply beam-db --remote
-bunx vitest run                # Cloudflare worker tests
+pm2 start pm2.ecosystem.config.cjs    # beam-base / beam-base-live / beam-robinhood
+pm2 list
 ```
 
 ### MCP server subproject
@@ -342,7 +332,6 @@ Veto-fetch failures log the underlying gateway error (Effect wraps rejections in
 - Coverage is configured in `vitest.config.ts`:
   - Thresholds: `statements 75`, `branches 60`, `functions 75`, `lines 75`.
   - Excluded from coverage: `engine/index.ts`, `engine/types.ts`, `engine/services.ts`, `engine/logger.ts`, `engine/adapter-service.ts`, `engine/program.ts`, `engine/acp-transport.ts`, `engine/agent-detection.ts`, `engine/agent-transport.ts`, `engine/gateway-transport.ts`, `engine/hermes-api-transport.ts`, `engine/openclaw-webhook-transport.ts`, `engine/run-engine.ts`, `engine/load-env.ts`. The transport/entrypoint modules need external processes, WebSockets, or live HTTP; the rationale lives in the comments next to each exclusion in `vitest.config.ts`.
-- Cloudflare tests live in `cloudflare/workers/**/*.test.ts`, run with `@cloudflare/vitest-pool-workers`, and are a required CI check: the `cloudflare-tests` job in `.github/workflows/ci.yml` runs `bunx vitest run` inside `cloudflare/` (no path filter, no secrets — D1/KV/R2 are simulated locally).
 - The `mcp-server` subproject uses Node's built-in test runner with `tsx`.
 
 ## Deployment and release
@@ -357,17 +346,12 @@ Veto-fetch failures log the underlying gateway error (Effect wraps rejections in
 4. `bun run build`
 5. `bun run test`
 
-### Cloudflare deploy
+### Deployment (self-hosted pm2)
 
-`.github/workflows/deploy-cloudflare.yml` runs when `cloudflare/**` changes on `main`:
-
-1. `bun install` inside `cloudflare/`
-2. `bun run typecheck`
-3. Apply D1 migrations (`--remote`)
-4. Deploy API worker
-5. Deploy Telegram bot worker
-
-Required secrets: `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`.
+The engine runs under pm2 on the VPS via `pm2.ecosystem.config.cjs`
+(`beam-base` paper, `beam-base-live`, `beam-robinhood`). State is SQLite under
+`.data/multichain/`. The hosted Cloudflare control plane is disabled
+(`BEAM_CLOUD_ENABLED=false`); the Workers/Alchemy stack was retired.
 
 ### Release
 
@@ -386,7 +370,7 @@ Required secrets: `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`.
 
 ### Docker
 
-The `Dockerfile` builds the engine bundle with `oven/bun:1.4.0-slim`, then copies `dist/`, `node_modules/` and `package.json` into a runtime stage that installs `libsqlite3-0` and `ca-certificates`. The container runs as the `agent` user and executes `bun dist/index.mjs`.
+The `Dockerfile` builds the engine bundle with `oven/bun:1.4.4-slim`, then copies `dist/`, `node_modules/` and `package.json` into a runtime stage that installs `libsqlite3-0` and `ca-certificates`. The container runs as the `agent` user and executes `bun dist/index.mjs`.
 
 ## Security and privacy
 
@@ -398,7 +382,7 @@ The `Dockerfile` builds the engine bundle with `oven/bun:1.4.0-slim`, then copie
 - **Feedback.** `beam feedback` submits authenticated records to Beam Cloud D1 and keeps a local SQLite record for deduplication/outage recovery. Opt out with `BEAM_FEEDBACK_OPT_OUT=true`.
 - **Auto-update integrity.** The updater verifies SHA-256 checksums before applying a release. GPG signatures are generated but **not yet verified client-side**.
 - **Secret sanitization.** `engine/error-reporter.ts` strips sensitive values from telemetry.
-- **Telegram bot ↔ API shared secret.** `BOT_API_SECRET` (wrangler secret, set on BOTH workers with the same value) authenticates the bot to the API via the `X-Bot-Api-Secret` header. `/v1/register-telegram`, `/v1/whoami-telegram`, `/v1/agent-status` and the telegram-binding path of `/v1/register` fail closed (401) when it is missing or unset. Plain CLI `/v1/register` (no `telegram_id`) does not need it.
+- **Telegram bot ↔ API shared secret.** `BOT_API_SECRET` (set on BOTH workers with the same value) authenticates the bot to the API via the `X-Bot-Api-Secret` header. `/v1/register-telegram`, `/v1/whoami-telegram`, `/v1/agent-status` and the telegram-binding path of `/v1/register` fail closed (401) when it is missing or unset. Plain CLI `/v1/register` (no `telegram_id`) does not need it.
 - **Telegram webhook fails closed.** The bot worker rejects every webhook POST unless `TELEGRAM_WEBHOOK_SECRET` is set AND the `X-Telegram-Bot-Api-Secret-Token` header matches it (constant-time comparison). Set the same value in Telegram's `setWebhook?secret_token=...`.
 - **Telegram link codes.** Codes are `LINK-` + 16 hex chars (64-bit CSPRNG), expire after 10 minutes (`expires_at` is unixepoch INTEGER in D1), allow 5 confirm attempts before burning, are limited to 10 confirm attempts/hour/IP, and requesting a new code invalidates the user's outstanding codes.
 - **Group-chat refusals.** The bot only answers `/register`, `/whoami`, `/status`, `/link` and link-code confirmations in private chats, and HTML-escapes user-controlled text in `parse_mode: HTML` replies.
@@ -520,9 +504,7 @@ In test mode (`NODE_ENV=test` or `VITEST=true`), missing `HELIUS_API_KEY` defaul
 - Adding a service: `engine/services.ts` (Tag) + new `engine/x-service.ts` (Layer) + `buildLayer()` in `engine/program.ts`.
 - Adding a risk check: `engine/risk-service.ts` `evaluateRisk()`.
 - Changing decision rules: the `evaluatePool` block inside `engine/program.ts`.
-- Adding a Cloudflare route: `cloudflare/workers/api/index.ts`.
-- Adding a Telegram command: `cloudflare/workers/telegram-bot/index.ts`.
-- Deploying Cloudflare: `cloudflare/README.md`.
+- Deploying the engine: `pm2.ecosystem.config.cjs`, `scripts/beam-pm2.sh`.
 
 # AGENTS.md
 

@@ -56,7 +56,7 @@ export class OpenClawWebhookTransport implements AgentRuntimeTransport {
         } finally {
           clearTimeout(timer);
         }
-      }).pipe(Effect.catch(() => Effect.succeed(null)));
+      }).pipe(Effect.orElseSucceed(() => null));
 
       return response != null && (response.status < 400 || response.status === 404);
     });

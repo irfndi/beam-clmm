@@ -2,6 +2,38 @@
 
 All notable changes to Beam are documented here.
 
+## [0.1.13] — 2026-11-02
+
+### Fixed
+
+- **Release bundles no longer leak bare imports.** `viem/accounts` (a subpath export that
+  `alwaysBundle: ["viem"]` does not cover) shipped unresolved, so an installed binary died
+  with `Cannot find module '@noble/hashes/crypto'` on any machine without a warm Bun module
+  cache — the same class of failure as issue #179. `viem/accounts` plus viem's own runtime
+  deps (`@noble/curves`, `@noble/hashes`, `@scure/bip32`, `@scure/bip39`, `abitype`, `isows`,
+  `ox`, `ws`) are now bundled. Verified by running `dist/` in an isolated `HOME` with an
+  empty `BUN_INSTALL_CACHE_DIR`.
+- **`scripts/install.sh` survives a dead release mirror.** Version detection and the artifact
+  download both fell back to GitHub releases when R2 failed, and now read the version from the
+  `/releases/latest` redirect rather than the REST API, which caps unauthenticated callers at
+  60 requests/hour per IP (a rate-limited client could not install at all).
+
+### Changed
+
+- **Cloudflare control plane removed.** `cloudflare/` (Workers, D1, KV, R2, Vectorize IaC),
+  the deploy workflow, and the alert-flush cron are gone; the two Workers, the D1 database and
+  the Vectorize index were deleted from the account. `pryx.dev` DNS and the `cloudflared`
+  tunnel stay — the zone serves other services.
+- `engine/cloud-switch.ts` is now **opt-in**: `BEAM_CLOUD_ENABLED` defaults to disabled, so a
+  fresh install does not target a retired endpoint. The `beam register`, `beam login`,
+  `beam whoami`, `beam link-telegram`, `beam subscription`, `beam referral`, `beam issue` and
+  `beam support` commands were removed with the API they called; `beam setup` and `beam dev`
+  run standalone without an account.
+- **`mcp-server` migrated from npm to Bun 1.4.4.** `better-sqlite3` (a native addon that fails
+  to compile on Node 26) is replaced by `bun:sqlite`; build/test run under Bun and `tsrs`
+  provides the fast typecheck.
+- Toolchain pinned to **Bun 1.4.4** (CI, Dockerfile, install gate, docs).
+
 ## [0.1.12] — 2026-09-07
 
 ### Fixed

@@ -472,14 +472,7 @@ function makeProgram(opts?: {
 }
 
 async function adapterFor(): Promise<AdapterApi> {
-  return Effect.runPromise(
-    Effect.provide(
-      Effect.gen(function* () {
-        return yield* AdapterService;
-      }),
-      makeProgram(),
-    ),
-  );
+  return Effect.runPromise(Effect.provide(AdapterService, makeProgram()));
 }
 
 let mock: RpcMock;
@@ -665,14 +658,7 @@ describe("simulateWithdraw fail-closed (exitPosition / rebalancePosition)", () =
         // SAFETY: The controlled test fixture establishes the asserted shape at this boundary, and the surrounding test consumes only that documented invariant.
       } as AppConfig),
     );
-    const svc = await Effect.runPromise(
-      Effect.provide(
-        Effect.gen(function* () {
-          return yield* AdapterService;
-        }),
-        program,
-      ),
-    );
+    const svc = await Effect.runPromise(Effect.provide(AdapterService, program));
     const err = await Effect.runPromise(svc.exitPosition(POOL, "42")).catch(
       // oxlint-disable-next-line anti-slop/no-unknown-parameters -- SAFETY: this test uses a controlled protocol fixture and establishes the expected shape at this boundary.
       (e: unknown) => e,

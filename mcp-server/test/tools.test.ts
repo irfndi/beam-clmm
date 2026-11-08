@@ -3,7 +3,7 @@ import { strict as assert } from "node:assert";
 import { mkdtempSync, writeFileSync, rmSync, chmodSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import Database from "better-sqlite3";
+import { Database } from "bun:sqlite";
 import { runBeam } from "../src/exec.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { registerAllTools } from "../src/tools.js";
@@ -359,10 +359,15 @@ describe("DB-backed tools", () => {
 // ─── Tool registration ────────────────────────────────────────────────────────
 
 describe("tool registration", () => {
-  it("registers all 4 tools on the server", () => {
+  it("registers exactly the DB/CLI tools that survive the cloud retirement", () => {
     const server = new McpServer({ name: "test", version: "0.0.0" });
     registerAllTools(server);
-    assert.ok(server);
+    // Assert the exact set: `beam_whoami` was removed with the Cloudflare control
+    // plane, and a stale count would hide that regression in either direction.
+    const registered = Object.keys(
+      (server as unknown as { _registeredTools: Record<string, unknown> })._registeredTools,
+    ).sort();
+    assert.deepEqual(registered, ["beam_backtest", "beam_positions", "beam_status"]);
   });
 });
 

@@ -3,6 +3,7 @@ import * as p from "@clack/prompts";
 import fs from "fs";
 import { pingInstall, requireRegistered, type BeamCredentials } from "./api.js";
 import { ensureBeamConfigDir, getBeamEnvPath, getBeamDbPath } from "../engine/paths.js";
+import { isCloudEnabled } from "../engine/cloud-switch.js";
 import { mergeEnvContent } from "./env-merge.js";
 
 function stringAnswer(value: string | undefined): string {
@@ -218,18 +219,23 @@ export const setupCommand = new Command("setup")
   .option("--paper-trading", "Enable paper trading (default: true)")
   .action(async (options) => {
     const isNonInteractive = options.nonInteractive;
-    let credentials: BeamCredentials;
-    try {
-      credentials = await requireRegistered(true);
-    } catch (err) {
-      console.error(`Error: ${err instanceof Error ? err.message : String(err)}`);
-      process.exit(1);
+    // Cloud registration is opt-in since the control plane was retired; setup
+    // must work standalone rather than hard-exit when no account exists.
+    const cloudEnabled = isCloudEnabled();
+    let credentials: BeamCredentials | null = null;
+    if (cloudEnabled) {
+      try {
+        credentials = await requireRegistered(true);
+      } catch (err) {
+        console.error(`Error: ${err instanceof Error ? err.message : String(err)}`);
+        process.exit(1);
+      }
     }
     const inputs = await collectSetupInputs(isNonInteractive, options);
     const envContent = buildEnvFileContent(inputs);
     ensureBeamConfigDir();
     const envPath = getBeamEnvPath();
     persistEnvFile(envPath, envContent);
-    await pingInstall("setup", { userId: credentials.userId });
+    if (credentials) await pingInstall("setup", { userId: credentials.userId });
     reportSetupCompletion(isNonInteractive);
   });

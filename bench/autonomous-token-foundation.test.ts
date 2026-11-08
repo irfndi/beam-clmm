@@ -16,15 +16,7 @@ import type {
 } from "../engine/types.js";
 
 async function loadConfig() {
-  return Effect.runPromise(
-    Effect.provide(
-      Effect.gen(function* () {
-        return yield* ConfigService;
-      }),
-      ConfigLive,
-      { local: true },
-    ),
-  );
+  return Effect.runPromise(Effect.provide(ConfigService, ConfigLive, { local: true }));
 }
 
 async function useDb<T, E>(dbPath: string, effect: Effect.Effect<T, E, DbService>): Promise<T> {

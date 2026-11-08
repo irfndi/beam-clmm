@@ -157,6 +157,27 @@ export function isCandidateEligible(
   );
 }
 
+/**
+ * Event that advances an `entered` candidate whose position is gone.
+ *
+ * Exits driven by the engine raise `cooldown_started` from the execution tail.
+ * A position that disappears without one (external close, liquidation, a
+ * reconcile delete) raises nothing, and `recordScan` leaves `entered`
+ * untouched — so the candidate's pool silently drops out of the entry set for
+ * the rest of the process lifetime. Starting the ordinary post-exit cooldown
+ * restores entry eligibility, since `cooling_down` is the only path back to
+ * `discovered`. Returns null for any other state.
+ */
+export function positionGoneEvent(
+  candidate: TokenCandidateRecord,
+  now: number,
+  cooldownMs: number,
+): CandidateLifecycleEvent | null {
+  return candidate.state === "entered"
+    ? { kind: "cooldown_started", occurredAt: now, cooldownUntil: now + cooldownMs }
+    : null;
+}
+
 function recordHealthyScan(
   candidate: TokenCandidateRecord,
   observedAt: number,
