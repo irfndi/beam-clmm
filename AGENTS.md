@@ -70,18 +70,25 @@ viem does not ship a built-in chain for 4663 — it is defined with
 
 ```bash
 bun install
-bun run lint        # tsc --noEmit && oxlint (scripts/lint.sh)
-bun run typecheck:fast  # tsrs (Rust TS7 port), ~0.5s local pre-check
+bun run lint        # tsrs --fast, then tsc --noEmit, then effect-tsgo oxlint (scripts/lint.sh)
+bun run typecheck:fast  # tsrs (Rust TS7 port) only, ~1.5s
+bun run lint:tsrs   # type-aware lint on tsrs instead of patched tsgolint (experimental)
 bun run format      # oxfmt --write
 bun run test        # vitest (bench/**, Bun required)
 ```
 
 `.oxlintrc.json` runs Effect's recommended `@effect/tsgo` rule set as errors
-(216 rules), so Effect usage is enforced by `bun run lint`: `catchIf` for
-selective recovery, `orElseSucceed`/`ignore` when the error is discarded,
-`timeoutOrElse` instead of racing a manual sleep, `forEach` instead of
-`all(map)`, no `try`/`catch` inside `Effect.gen`. `lazy-effect` and the two
-`global-error-in-effect-*` rules are off on purpose (see the comment there).
+(92 `effecttsgo/*` rules among the 216 enabled), so Effect usage is enforced by
+`bun run lint`: `catchIf` for selective recovery, `orElseSucceed`/`ignore` when
+the error is discarded, `timeoutOrElse` instead of racing a manual sleep,
+`forEach` instead of `all(map)`, no `try`/`catch` inside `Effect.gen`.
+`lazy-effect` and the two `global-error-in-effect-*` rules are off on purpose
+(see the comment there).
+
+Invoke Oxlint through `effect-tsgo oxlint` — never bare `oxlint`: since
+`@effect/tsgo` 0.67 the rules are injected by the patched binding that
+`effect-tsgo` preloads, and the stock binary rejects every `effecttsgo/*` rule
+as unknown. `scripts/lint.sh` does this for the whole repo.
 
 Runtime profiles (self-hosted pm2 — replaces the retired Cloudflare stack):
 
